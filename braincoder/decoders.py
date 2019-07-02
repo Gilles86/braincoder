@@ -52,7 +52,8 @@ class EncodingModel(object):
                     if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
                         break
 
-                parameters, predictions = session.run([self.parameters, self.predictions])
+                parameters, predictions = session.run(
+                    [self.parameters, self.predictions])
 
             costs = pd.Series(costs[:step + 1])
             parameters = pd.DataFrame(np.squeeze(parameters),
@@ -187,6 +188,127 @@ class GaussianReceptiveFieldModel(EncodingModel):
 
         data = super().simulate(parameters, paradigm, noise)
         return data
+
+
+class WeightedEncodingModel(object):
+
+    def __init__(self, parameters=None):
+        """
+        parameters is a NxD or  NxPxD array, where N is the number
+        of basis functions and P is the number of parameters
+        per basis function and D is the dimensionality
+        of the paradigm.
+        """
+
+        if parameters is None:
+            parameters = np.ones((0, 0, 0))
+
+        if parameters.ndim == 2:
+            parameters = parameters[:, :, np.newaxis]
+
+        self.graph = tf.Graph()
+
+        with self.graph.as_default():
+            self.parameters = tf.constant(parameters)
+
+    def build_graph(self, paradigm, weights):
+
+        # Dimensions are
+        # time x stimulus_dimensions x basis functions x voxels
+        if paradigm.ndim == 1:
+            paradigm = paradigm[:, np.newaxis, np.newaxis, np.newaxis]
+        elif paradigm.ndim == 2:
+            paradigm = paradigm[..., np.newaxis, np.newaxis]
+
+        weights = weights[np.newaxis, np.newaxis, :, :]
+
+        with self.graph.as_default():
+            self.paradigm = tf.constant(paradigm, name='paradigm')
+            self.weights = tf.Variable(weights, name='basis_weights')
+            self.build_basis_function(paradigm)
+
+            # n_timepoints x n_voxels
+            self.predictions = tf.squeeze(tf.tensordot(self.basis_predictions,
+                                                       self.weights, (1, 2)))
+
+    def optimize(self, paradigm, data, min_nsteps=10000, ftol=1e-12):
+
+        data = pd.DataFrame(data)
+
+        with self.graph.as_default():
+
+            cost = tf.reduce_sum((data.values - self.predictions)**2)
+            optimizer = tf.train.AdamOptimizer()
+            train = optimizer.minimize(cost)
+            init = tf.global_variables_initializer()
+
+            ftol_ratio = 1 + ftol
+
+            costs = np.zeros(min_nsteps)
+
+            pbar = tqdm(range(min_nsteps))
+
+            with tf.Session() as session:
+                session.run(init)
+                for step in pbar:
+                    _, c = session.run([train, cost])
+                    costs[step] = c
+                    pbar.set_description(f'Current cost: {c:7g}')
+
+                    if (c == 0) | ((costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio)):
+                        break
+
+                weights, predictions = session.run(
+                    [self.weights, self.predictions])
+
+        costs = pd.Series(costs[:step + 1])
+        weights = pd.DataFrame(np.squeeze(weights),
+                               columns=data.columns)
+
+        predictions = pd.DataFrame(predictions,
+                                   index=data.index,
+                                   columns=data.columns)
+
+        return costs, weights, predictions
+
+    def build_basis_function(self, paradigm):
+        # time x basis_functions
+        with self.graph.as_default():
+            self.basis_predictions = tf.squeeze(self.paradigm)
+
+    def simulate(self, paradigm, weights, noise=1.):
+        """
+        paradigm is a N or NxM matrix, where N is the number
+        of time points and M is the number of stimulus dimensions.
+        weights is a BxV matrix, where B is the number
+        of basis functions and V is the number of
+        features (e.g., voxels, time series).
+
+        """
+
+        paradigm = pd.DataFrame(paradigm)
+        self.build_graph(paradigm.values.astype(np.float32),
+                         weights.astype(np.float32))
+
+        weights = weights[np.newaxis, np.newaxis, :, :]
+
+        with self.graph.as_default():
+            noise = tf.random_normal(shape=(paradigm.shape[0],
+                                            weights.shape[1]),
+                                     mean=0.0,
+                                     stddev=noise,
+                                     dtype=tf.float32)
+
+            noisy_prediction = self.predictions + noise
+
+            with tf.Session() as session:
+                init = tf.global_variables_initializer()
+
+                self.weights.load(weights, session)
+                _, predictions = session.run([init, noisy_prediction])
+
+        return pd.DataFrame(predictions,
+                            index=paradigm.index)
 
 
 def _softplus(x):
