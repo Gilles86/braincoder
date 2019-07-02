@@ -5,7 +5,7 @@ from tqdm import tqdm
 import pandas as pd
 
 
-class EncodingModelFitter(object):
+class EncodingModel(object):
 
     def __init__(self):
         pass
@@ -50,22 +50,19 @@ class EncodingModelFitter(object):
                     pbar.set_description(f'Current cost: {c:7g}')
 
                     if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
-                        print(session.run(self.parameters))
                         break
 
                 parameters, predictions = session.run([self.parameters, self.predictions])
 
-                costs = pd.Series(costs[:step + 1])
-                parameters = pd.DataFrame(np.squeeze(parameters),
-                                          index=self.parameter_labels,
-                                          columns=data.columns)
-                print(parameters)
+            costs = pd.Series(costs[:step + 1])
+            parameters = pd.DataFrame(np.squeeze(parameters),
+                                      index=self.parameter_labels,
+                                      columns=data.columns)
 
-                predictions = pd.DataFrame(predictions,
-                                           index=data.index,
-                                           columns=data.columns)
+            predictions = pd.DataFrame(predictions,
+                                       index=data.index,
+                                       columns=data.columns)
 
-            session.close()
             return costs, parameters, predictions
 
     def simulate(self, parameters, paradigm, noise=1.):
@@ -91,22 +88,17 @@ class EncodingModelFitter(object):
 
         with self.graph.as_default():
 
-            # noise = tf.random_normal(shape=(paradigm.shape[0],
-                                            # parameters.shape[2]),
-                                     # mean=0.0,
-                                     # stddev=noise,
-                                     # dtype=tf.float32)
+            noise = tf.random_normal(shape=(paradigm.shape[0],
+                                            parameters.shape[2]),
+                                     mean=0.0,
+                                     stddev=noise,
+                                     dtype=tf.float32)
 
-            # noisy_prediction = self.predictions + noise
-            noisy_prediction = self.predictions
+            noisy_prediction = self.predictions + noise
 
             with tf.Session() as session:
                 self.parameters.load(parameters, session)
                 predictions_ = session.run(noisy_prediction)
-
-            session.close()
-
-            predictions_ += np.random.randn(*predictions_.shape) * noise
 
         return pd.DataFrame(predictions_)
 
@@ -121,7 +113,7 @@ class EncodingModelFitter(object):
                                         name='paradigm')
 
 
-class GaussianReceptiveFieldFitter(EncodingModelFitter):
+class GaussianReceptiveFieldModel(EncodingModel):
 
     n_parameters = 4
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
@@ -186,8 +178,6 @@ class GaussianReceptiveFieldFitter(EncodingModelFitter):
         pars[:, 2, :] = amplitudes
         pars[:, 3, :] = baselines
 
-        print(pars)
-
         return pars
 
     def simulate(self, parameters, paradigm, noise=1.):
@@ -195,7 +185,6 @@ class GaussianReceptiveFieldFitter(EncodingModelFitter):
         parameters[:, 1] = _inverse_softplus(parameters[:, 1])
         parameters[:, 2] = _inverse_softplus(parameters[:, 2])
 
-        print(parameters)
         data = super().simulate(parameters, paradigm, noise)
         return data
 
