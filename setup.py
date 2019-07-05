@@ -2,7 +2,7 @@ import os
 from setuptools import setup, find_packages
 PACKAGES = find_packages()
 
-# Get version and release info, which is all stored in nideconv/version.py
+# Get version and release info, which is all stored in braincoder/version.py
 ver_file = os.path.join('braincoder', 'version.py')
 with open(ver_file) as f:
     exec(f.read())

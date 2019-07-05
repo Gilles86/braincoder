@@ -30,12 +30,12 @@ description = "braincoder: a package to fit encoding models"
 long_description = """
 """
 
-NAME = "nideconv"
+NAME = "braincoder"
 MAINTAINER = "Gilles de Hollander"
 MAINTAINER_EMAIL = "gilles.de.hollander@gmail.com"
 DESCRIPTION = description
 LONG_DESCRIPTION = long_description
-URL = "https://github.com/VuCogSci/nideconv"
+URL = "https://github.com/Gilles86/braincoder"
 DOWNLOAD_URL = ""
 LICENSE = "MIT"
 AUTHOR = "Gilles de Hollander"
@@ -45,5 +45,5 @@ MAJOR = _version_major
 MINOR = _version_minor
 MICRO = _version_micro
 VERSION = __version__
-PACKAGE_DATA = {'nideconv': [pjoin('data', '*')]}
+PACKAGE_DATA = {'braincoder': [pjoin('data', '*')]}
 REQUIRES = ["numpy","scipy","tensorflow","pandas"]

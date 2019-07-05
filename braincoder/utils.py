@@ -8,4 +8,4 @@ def get_rsq(data, predictions):
 
     residuals = data - predictions
 
-    return 1 - (residuals.var() / data.var())
+    return (1 - (residuals.var() / data.var())).T
