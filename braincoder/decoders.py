@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow_probability import distributions as tfd
-from tqdm import tqdm
+from tqdm.autonotebook import tqdm
 import pandas as pd
 from .utils import get_rsq
 
@@ -208,12 +208,17 @@ class WeightedEncodingModel(object):
         if parameters.ndim == 2:
             parameters = parameters[:, :, np.newaxis]
 
-        self.build_graph(parameters)
-
         self.weights = weights
         self.paradigm = paradigm
+        self.parameters = parameters
 
-    def build_graph(self, parameters):
+    def build_graph(self,
+                    paradigm,
+                    weights,
+                    parameters,
+                    data=None,
+                    rho_init=.5,
+                    lambd=1.):
 
         self.graph = tf.Graph()
 
@@ -221,62 +226,18 @@ class WeightedEncodingModel(object):
             self.parameters_ = tf.constant(parameters)
 
             # n_timepoints x n_stim_dimensions x n_basis functions x n_voxels
-            self.paradigm_ = tf.placeholder(tf.float32,
-                                            shape=(None, None, 1, 1),
-                                            name='paradigm')
+            self.paradigm_ = tf.constant(paradigm.values[..., np.newaxis, np.newaxis],
+                                         dtype=tf.float32,
+                                         name='paradigm')
 
-            self.weights_ = tf.placeholder(tf.float32,
-                                           shape=(1, 1, None, None),
-                                           name='basis_weights')
+            self.weights_ = tf.Variable(weights.values[np.newaxis, np.newaxis, ...],
+                                        dtype=tf.float32,
+                                        name='basis_weights')
             self.build_basis_function()
 
             # n_timepoints x n_voxels
             self.predictions_ = tf.squeeze(tf.tensordot(self.basis_predictions_,
                                                         self.weights_, (1, 2)))
-
-            # Data and residuals
-            self.data_ = tf.placeholder(tf.float32,
-                                        shape=(None, None),
-                                        name='data')
-            self.residuals_ = self.data_ - self.predictions_
-
-            # Residual model
-            self.rho_trans = tf.Variable(0., dtype=tf.float32,
-                                         name='rho_trans')
-            self.rho_ = tf.math.sigmoid(self.rho_trans, name='rho')
-
-            self.tau_trans_init = tf.placeholder(tf.float32, shape=(None,))
-
-            # self.tau_trans = tf.Variable(self.tau_trans_init,
-            # validate_shape=False,
-            # name='tau_trans')
-            self.tau_trans = tf.Variable(np.zeros(4).astype(np.float32), )
-
-            self.tau_ = _softplus_tensor(self.tau_trans, name='tau')
-
-            sigma0 = self.rho_ * tf.tensordot(self.tau_,
-                                              tf.transpose(self.tau_),
-                                              axes=1) + \
-                (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_))
-
-            self.lambd_ = tf.placeholder(tf.float32, shape=1, name='lambda')
-            self.empirical_covariance_matrix_ph = tf.placeholder(tf.float32,
-                                                                 shape=(
-                                                                     None, None),
-                                                                 name='empirical_covariance_matrix')
-
-            self.empirical_covariance_matrix_ = tf.Variable(
-                self.empirical_covariance_matrix_ph, validate_shape=False)
-
-            self.sigma_ = self.lambd_ * sigma0 + \
-                (1 - self.lambd_) * self.empirical_covariance_matrix_
-
-            # self.sigma_ = sigma0
-
-            self.residual_dist = tfd.MultivariateNormalFullCovariance(
-                tf.zeros(tf.shape(self.data_)[1]),
-                self.sigma_)
-            self.likelihood_ = self.residual_dist.log_prob(self.data_)
 
             # Simulation
             self.noise_ = tf.placeholder(tf.float32, shape=(1, None),
@@ -291,6 +252,47 @@ class WeightedEncodingModel(object):
 
             self.noisy_predictions_ = self.predictions_ + noise
 
+            # Data and residuals
+            if data is not None:
+
+                data = pd.DataFrame(data)
+
+                self.data_ = tf.constant(data.values, name='data')
+                self.residuals_ = self.data_ - self.predictions_
+
+                # Residual model
+                self.rho_trans = tf.Variable(rho_init, dtype=tf.float32,
+                                             name='rho_trans')
+                self.rho_ = tf.math.sigmoid(self.rho_trans, name='rho')
+
+                self.tau_trans = tf.Variable(_inverse_softplus(data.std().values[:, np.newaxis]),
+                                             name='tau_trans')
+
+                self.tau_ = _softplus_tensor(self.tau_trans, name='tau')
+
+                self.sigma2_trans = tf.Variable(
+                    0., dtype=tf.float32, name='sigma2_trans')
+                self.sigma2_ = _softplus_tensor(
+                    self.sigma2_trans, name='sigma2')
+
+                sigma0 = self.rho_ * tf.tensordot(self.tau_,
+                                                  tf.transpose(self.tau_),
+                                                  axes=1) + \
+                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_)) + \
+                    self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
+                                                           self.weights_, axes=(-2, -2)))
+
+                self.empirical_covariance_matrix_ = tf.constant(
+                    data.cov().values.astype(np.float32), name='empirical_covariance_matrix')
+
+                self.sigma_ = lambd * sigma0 +  \
+                    (1 - lambd) * self.empirical_covariance_matrix_
+
+                self.residual_dist = tfd.MultivariateNormalFullCovariance(
+                    tf.zeros(data.shape[1]),
+                    self.sigma_)
+                self.likelihood_ = self.residual_dist.log_prob(self.residuals_)
+
     def build_basis_function(self):
         # time x basis_functions
         with self.graph.as_default():
@@ -303,7 +305,7 @@ class WeightedEncodingModel(object):
         with self.graph.as_default():
             with tf.Session() as session:
                 basis_predictions = session.run(self.basis_predictions_, feed_dict={
-                                                self.paradigm_: paradigm.values[..., np.newaxis, np.newaxis]})
+                    self.paradigm_: paradigm.values[..., np.newaxis, np.newaxis]})
 
         return pd.DataFrame(basis_predictions, index=paradigm.index)
 
@@ -340,6 +342,8 @@ class WeightedEncodingModel(object):
 
         paradigm, weights = self._get_paradigm_and_weights(paradigm, weights)
 
+        self.build_graph(paradigm, weights, self.parameters)
+
         with self.graph.as_default(), tf.Session() as session:
             # with tf.Session() as session:
 
@@ -353,6 +357,15 @@ class WeightedEncodingModel(object):
                             columns=weights.columns)
 
     def fit(self, paradigm, data, fit_residual_model=True):
+
+        paradigm = pd.DataFrame(paradigm)
+        data = pd.DataFrame(data)
+
+        init_weights = pd.DataFrame(np.zeros((paradigm.shape[1], data.shape[1]),
+                                             dtype=np.float32))
+
+        self.build_graph(paradigm, init_weights, self.parameters, data)
+
         basis_predictions = self.get_basis_function_activations(paradigm)
         data = pd.DataFrame(data)
 
@@ -361,59 +374,66 @@ class WeightedEncodingModel(object):
         self.weights = pd.DataFrame(weights,
                                     index=basis_predictions.columns,
                                     columns=data.columns)
-        self.paradigm = pd.DataFrame(paradigm)
 
-        self.fit_residual_model(data=data)
+        self.paradigm = paradigm
+
+        if fit_residual_model:
+            costs = self.fit_residual_model(data=data)
+
+            return costs
 
     def fit_residual_model(self,
                            lambd=1.,
                            paradigm=None,
-                           data=None):
+                           data=None,
+                           min_nsteps=100000,
+                           ftol=1e-12,
+                           also_fit_weights=True):
 
         with self.graph.as_default():
             optimizer = tf.train.AdamOptimizer()
             cost = -tf.reduce_sum(self.likelihood_)
-            train = optimizer.minimize(cost,
-                    var_list=(self.tau_trans, self.rho_trans))
+            var_list = [self.tau_trans, self.rho_trans, self.sigma2_trans]
+            if also_fit_weights:
+                var_list.append(self.weights_)
 
-            feed_dict = {self.tau_trans_init: _inverse_softplus(data.std().values),
-                         self.empirical_covariance_matrix_ph: data.cov().values,
-                         self.paradigm_: self.paradigm.values[..., np.newaxis, np.newaxis],
-                         self.weights_: self.weights.values[np.newaxis, np.newaxis],
-                         self.data_: data,
-                         self.lambd_: np.atleast_1d(lambd)}
+            train = optimizer.minimize(cost, var_list=var_list)
 
-            costs, rhos, sigmas = [], [], []
+            costs = []
 
             init = tf.global_variables_initializer()
 
             with tf.Session() as session:
-                session.run(init, feed_dict=feed_dict)
-                c, tau, rho = session.run([cost,
-                                           self.tau_, self.rho_])
-                costs.append(c)
+                session.run(init)
 
-                print(f"Starting at {rho}, {tau}, cost={c})")
+                self.weights_.load(self.weights.values[np.newaxis, np.newaxis, :, :],
+                                   session)
+                costs = np.zeros(min_nsteps)
+                pbar = tqdm(range(min_nsteps))
+                ftol_ratio = 1 + ftol
+                for step in pbar:
+                    _, c, rho_, sigma2, weights = session.run(
+                        [train, cost, self.rho_, self.sigma2_, self.weights_],)
+                    costs[step] = c
+                    pbar.set_description(f'Current cost: {c:7g}')
 
-                feed_dict.pop(self.tau_trans_init)
+                    if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                        break
 
-                for step in range(10000):
-                    # _, c, rho, tau, sigma = session.run(
-                        # [train, cost, self.rho_, self.tau_, self.sigma_],
-                        # feed_dict=feed_dict)
-                    _, c, rho, tau, sigma = session.run(
-                        [train, cost, self.rho_, self.tau_, self.sigma_],
-                        feed_dict=feed_dict)
+                costs = costs[:step+1]
+                self.rho = session.run(self.rho_)
+                self.tau = session.run(self.tau_)
+                self.omega = session.run(self.sigma_)
+                self.sigma2 = session.run(self.sigma2_)
 
-                    if step % 500 == 0:
-                        print(f"{rho}, {tau}, cost={c})")
-                    costs.append(c)
-                    rhos.append(rho)
-                    sigmas.append(sigma)
+                self.ols_weights = self.weights.copy()
 
-            return costs, rhos, sigmas
+                if also_fit_weights:
+                    self.weights = pd.DataFrame(np.squeeze(session.run(self.weights_)),
+                                                index=self.weights.index,
+                                                columns=self.weights.columns)
 
-        # residual_graph =
+        return costs
 
     def _get_paradigm_and_weights(self, paradigm, weights):
         if paradigm is None:
