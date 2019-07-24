@@ -23,6 +23,7 @@ costs = model.fit(paradigm, data)
 
 predictions = model.get_predictions()
 r2 = model.get_rsq(data)
+r = model.get_r(data)
 
 # data2 = model.simulate(paradigm, weights, noise=1.)
 # r22 = model.get_rsq(data2)

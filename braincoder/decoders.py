@@ -3,7 +3,7 @@ import tensorflow as tf
 from tensorflow_probability import distributions as tfd
 from tqdm.autonotebook import tqdm
 import pandas as pd
-from .utils import get_rsq
+from .utils import get_rsq, get_r
 
 
 class EncodingModel(object):
@@ -325,6 +325,11 @@ class WeightedEncodingModel(object):
         predictions = self.get_predictions(paradigm, weights)
         rsq = get_rsq(data, predictions)
         return rsq
+
+    def get_r(self, data, paradigm=None, weights=None):
+        predictions = self.get_predictions(paradigm, weights)
+        r = get_r(data, predictions)
+        return r
 
     def simulate(self, paradigm=None, weights=None, noise=1.):
         """
