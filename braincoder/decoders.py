@@ -4,6 +4,7 @@ from tensorflow_probability import distributions as tfd
 from tqdm.autonotebook import tqdm
 import pandas as pd
 from .utils import get_rsq, get_r
+import scipy.stats as ss
 
 
 class EncodingModel(object):
@@ -19,6 +20,8 @@ class EncodingModel(object):
                  ):
 
         assert(len(data) == len(paradigm))
+
+        self.paradigm_ = paradigm
 
         paradigm = paradigm.astype(np.float32)[:, np.newaxis]
         data = pd.DataFrame(data.astype(np.float32))
@@ -61,13 +64,15 @@ class EncodingModel(object):
                                       index=self.parameter_labels,
                                       columns=data.columns)
 
+            self.parameters_ = parameters
+
             predictions = pd.DataFrame(predictions,
                                        index=data.index,
                                        columns=data.columns)
 
             return costs, parameters, predictions
 
-    def simulate(self, parameters, paradigm, noise=1.):
+    def simulate(self, parameters=None, paradigm=None, noise=1.):
         """
         * Parameters should be an array of size M or (M, N),
         where M is the number of parameters and N the number of
@@ -77,6 +82,7 @@ class EncodingModel(object):
 
         """
 
+        # paradigm, parameters = self._get_paradigm_and_parameters(paradigm, parameters)
         paradigm = pd.DataFrame(paradigm.astype(np.float32))
 
         if parameters.ndim == 1:
@@ -113,6 +119,25 @@ class EncodingModel(object):
                                           name='parameters')
             self.paradigm = tf.constant(paradigm.astype(np.float32),
                                         name='paradigm')
+
+    def _get_paradigm_and_parameters(self, paradigm, parameters):
+
+        if paradigm is None:
+            if self.paradigm_ is None:
+                raise Exception("please provide paradigm.")
+            else:
+                paradigm = self.paradigm_
+
+        if parameters is None:
+            if self.parameters_ is None:
+                raise Exception("please provide parameters.")
+            else:
+                parameters = self.parameters_.values
+
+        paradigm = paradigm
+        parameters = parameters
+
+        return paradigm.copy(), parameters.copy()
 
 
 class GaussianReceptiveFieldModel(EncodingModel):
@@ -182,7 +207,10 @@ class GaussianReceptiveFieldModel(EncodingModel):
 
         return pars
 
-    def simulate(self, parameters, paradigm, noise=1.):
+    def simulate(self, parameters=None, paradigm=None, noise=1.):
+
+        paradigm, parameters = self._get_paradigm_and_parameters(
+            paradigm, parameters)
 
         parameters[:, 1] = _inverse_softplus(parameters[:, 1])
         parameters[:, 2] = _inverse_softplus(parameters[:, 2])
@@ -312,6 +340,7 @@ class WeightedEncodingModel(object):
     def get_predictions(self, paradigm=None, weights=None):
 
         paradigm, weights = self._get_paradigm_and_weights(paradigm, weights)
+        self.build_graph(paradigm, weights, self.parameters)
 
         with self.graph.as_default():
             with tf.Session() as session:
@@ -319,10 +348,11 @@ class WeightedEncodingModel(object):
                     self.paradigm_: paradigm.values[..., np.newaxis, np.newaxis],
                     self.weights_: weights.values[np.newaxis, np.newaxis, ...]})
 
-        return pd.DataFrame(predictions, index=paradigm.index)
+        return pd.DataFrame(predictions, index=paradigm.index, columns=weights.columns)
 
     def get_rsq(self, data, paradigm=None, weights=None):
         predictions = self.get_predictions(paradigm, weights)
+        predictions.index = data.index
         rsq = get_rsq(data, predictions)
         return rsq
 
@@ -361,7 +391,7 @@ class WeightedEncodingModel(object):
                             index=paradigm.index,
                             columns=weights.columns)
 
-    def fit(self, paradigm, data, fit_residual_model=True):
+    def fit(self, paradigm, data, rho_init=1e-9, lambd=1., fit_residual_model=True, refit_weights=False):
 
         paradigm = pd.DataFrame(paradigm)
         data = pd.DataFrame(data)
@@ -369,7 +399,8 @@ class WeightedEncodingModel(object):
         init_weights = pd.DataFrame(np.zeros((paradigm.shape[1], data.shape[1]),
                                              dtype=np.float32))
 
-        self.build_graph(paradigm, init_weights, self.parameters, data)
+        self.build_graph(paradigm, init_weights, self.parameters, data,
+                         lambd=lambd, rho_init=rho_init)
 
         basis_predictions = self.get_basis_function_activations(paradigm)
         data = pd.DataFrame(data)
@@ -383,7 +414,8 @@ class WeightedEncodingModel(object):
         self.paradigm = paradigm
 
         if fit_residual_model:
-            costs = self.fit_residual_model(data=data)
+            costs = self.fit_residual_model(data=data,
+                                            also_fit_weights=refit_weights)
 
             return costs
 
@@ -440,16 +472,49 @@ class WeightedEncodingModel(object):
 
         return costs
 
+    def get_stimulus_posterior(self, data, stimulus_range=None, log_p=True):
+
+        data = pd.DataFrame(data)
+
+        if stimulus_range is None:
+            stimulus = np.linspace(-5, 5, 1000)
+        elif type(stimulus_range) is tuple:
+            stimulus = np.linspace(stimulus_range[0], stimulus_range[1], 1000)
+        else:
+            stimulus = stimulus_range
+
+        # n_stimuli x n_pop x n_vox
+        hypothetical_timeseries = self.weights.values[:, np.newaxis, :] * stimulus[np.newaxis, :, np.newaxis]
+
+        # n_timepoints x n_stimuli x n_populations x n_voxels
+        residuals = data.values[:, np.newaxis, np.newaxis, :] - hypothetical_timeseries[np.newaxis, ...]
+
+        mv_norm = ss.multivariate_normal(mean=np.zeros(self.omega.shape[0]),
+                                         cov=self.omega)
+
+        if log_p:
+            logp_ds = mv_norm.logpdf(residuals)
+            p_ds = np.exp(logp_ds - logp_ds.max(1)[:, np.newaxis, :])
+
+        else:
+            # n_timepoints x n_stimuli x n_stimulus_populations
+            p_ds = mv_norm.pdf(residuals)
+
+        # Normalize
+        p_ds /= p_ds.sum(1)[:, np.newaxis, :]
+
+        return stimulus, p_ds
+
     def _get_paradigm_and_weights(self, paradigm, weights):
         if paradigm is None:
             if self.paradigm is None:
-                raise Exception("Please provide paradigm.")
+                raise Exception("please provide paradigm.")
             else:
                 paradigm = self.paradigm
 
         if weights is None:
             if self.weights is None:
-                raise Exception("Please provide basis function weights.")
+                raise Exception("please provide basis function weights.")
             else:
                 weights = self.weights
 
@@ -457,6 +522,30 @@ class WeightedEncodingModel(object):
         weights = pd.DataFrame(weights)
 
         return paradigm, weights
+
+
+class Discrete1DModel(WeightedEncodingModel):
+
+    def __init__(self,
+                 basis_values=None,
+                 paradigm=None,
+                 weights=None,
+                 parameters=None):
+        """
+        basis_values is a 2d Nx2 array. The first columns are
+        coordinates on the line, the second column contains the
+        intesity of the basis functions at that value.
+        """
+
+        if parameters is None:
+            parameters = np.ones((0, 0, 0))
+
+        if parameters.ndim == 2:
+            parameters = parameters[:, :, np.newaxis]
+
+        self.weights = weights
+        self.paradigm = paradigm
+        self.parameters = parameters
 
 
 def _softplus(x):
