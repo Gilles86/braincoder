@@ -393,8 +393,8 @@ class WeightedEncodingModel(object):
 
     def fit(self, paradigm, data, rho_init=1e-9, lambd=1., fit_residual_model=True, refit_weights=False):
 
-        paradigm = pd.DataFrame(paradigm)
-        data = pd.DataFrame(data)
+        paradigm = pd.DataFrame(paradigm).astype(np.float32)
+        data = pd.DataFrame(data).astype(np.float32)
 
         init_weights = pd.DataFrame(np.zeros((paradigm.shape[1], data.shape[1]),
                                              dtype=np.float32))
@@ -472,7 +472,7 @@ class WeightedEncodingModel(object):
 
         return costs
 
-    def get_stimulus_posterior(self, data, stimulus_range=None, log_p=True):
+    def get_stimulus_posterior(self, data, stimulus_range=None, log_p=True, normalize=False):
 
         data = pd.DataFrame(data)
 
@@ -484,26 +484,55 @@ class WeightedEncodingModel(object):
             stimulus = stimulus_range
 
         # n_stimuli x n_pop x n_vox
-        hypothetical_timeseries = self.weights.values[:, np.newaxis, :] * stimulus[np.newaxis, :, np.newaxis]
+        hypothetical_timeseries = self.weights.values[:, np.newaxis, :] * \
+            stimulus[np.newaxis, :, np.newaxis]
 
         # n_timepoints x n_stimuli x n_populations x n_voxels
-        residuals = data.values[:, np.newaxis, np.newaxis, :] - hypothetical_timeseries[np.newaxis, ...]
+        residuals = data.values[:, np.newaxis, np.newaxis,
+                                :] - hypothetical_timeseries[np.newaxis, ...]
 
         mv_norm = ss.multivariate_normal(mean=np.zeros(self.omega.shape[0]),
                                          cov=self.omega)
 
         if log_p:
             logp_ds = mv_norm.logpdf(residuals)
-            p_ds = np.exp(logp_ds - logp_ds.max(1)[:, np.newaxis, :])
+            p_ds = np.exp(logp_ds - logp_ds.max(-1)[..., np.newaxis])
 
         else:
             # n_timepoints x n_stimuli x n_stimulus_populations
             p_ds = mv_norm.pdf(residuals)
 
         # Normalize
-        p_ds /= p_ds.sum(1)[:, np.newaxis, :]
+        if normalize:
+            p_ds /= (p_ds * np.gradient(s)
+                     [np.newaxis, np.newaxis, :]).sum(-1)[..., np.newaxis]
 
         return stimulus, p_ds
+
+    def get_map_stimulus_timeseries(self, data, stimulus_range=None):
+
+        data = pd.DataFrame(data)
+        s, p_ds = self.get_stimulus_posterior(
+            data, stimulus_range=stimulus_range)
+        map_ = (s[np.newaxis, np.newaxis, :] * p_ds).sum(-1) / p_ds.sum(-1)
+        map_ = pd.DataFrame(map_, index=data.index, columns=self.weights.index)
+
+        return map_
+
+    def get_map_sd_stimulus_timeseries(self, data, stimulus_range=None):
+
+        data = pd.DataFrame(data)
+
+        s, p_ds = self.get_stimulus_posterior(
+            data, stimulus_range=stimulus_range)
+        map_ = (s[np.newaxis, np.newaxis, :] * p_ds).sum(-1) / p_ds.sum(-1)
+        map_ = pd.DataFrame(map_, index=data.index, columns=self.weights.index)
+
+        dev = (s[np.newaxis, np.newaxis, :] - map_.values[..., np.newaxis])**2
+        sd = np.sqrt(((dev * p_ds) / p_ds.sum(-1)[..., np.newaxis]).sum(-1))
+        sd = pd.DataFrame(sd, index=data.index, columns=self.weights.index)
+
+        return map_, sd
 
     def _get_paradigm_and_weights(self, paradigm, weights):
         if paradigm is None:
