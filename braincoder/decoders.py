@@ -17,6 +17,7 @@ class EncodingModel(object):
                  data,
                  min_nsteps=100000,
                  ftol=1e-9,
+                 progressbar=False,
                  ):
 
         assert(len(data) == len(paradigm))
@@ -45,16 +46,25 @@ class EncodingModel(object):
 
                 _ = session.run([init])
 
-                pbar = tqdm(range(min_nsteps))
-
                 ftol_ratio = 1 + ftol
-                for step in pbar:
-                    _, c, p = session.run([train, self.cost, self.parameters])
-                    costs[step] = c
-                    pbar.set_description(f'Current cost: {c:7g}')
+                if progressbar:
+                    with tqdm(range(min_nsteps)) as pbar:
+                        pbar = tqdm(range(min_nsteps))
 
-                    if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
-                        break
+                        for step in pbar:
+                            _, c, p = session.run([train, self.cost, self.parameters])
+                            costs[step] = c
+                            pbar.set_description(f'Current cost: {c:7g}')
+
+                            if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                                break
+                else:
+                    for step in range(min_nsteps):
+                         _, c, p = session.run([train, self.cost, self.parameters])
+                         costs[step] = c
+
+                         if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                             break
 
                 parameters, predictions = session.run(
                     [self.parameters, self.predictions])
@@ -391,7 +401,8 @@ class WeightedEncodingModel(object):
                             index=paradigm.index,
                             columns=weights.columns)
 
-    def fit(self, paradigm, data, rho_init=1e-9, lambd=1., fit_residual_model=True, refit_weights=False):
+    def fit(self, paradigm, data, rho_init=1e-9, lambd=1., fit_residual_model=True, refit_weights=False,
+            progressbar=True):
 
         paradigm = pd.DataFrame(paradigm).astype(np.float32)
         data = pd.DataFrame(data).astype(np.float32)
@@ -415,7 +426,8 @@ class WeightedEncodingModel(object):
 
         if fit_residual_model:
             costs = self.fit_residual_model(data=data,
-                                            also_fit_weights=refit_weights)
+                                            also_fit_weights=refit_weights,
+                                            progressbar=progressbar)
 
             return costs
 
@@ -425,7 +437,8 @@ class WeightedEncodingModel(object):
                            data=None,
                            min_nsteps=100000,
                            ftol=1e-12,
-                           also_fit_weights=True):
+                           also_fit_weights=False,
+                           progressbar=True):
 
         with self.graph.as_default():
             optimizer = tf.train.AdamOptimizer()
@@ -446,16 +459,25 @@ class WeightedEncodingModel(object):
                 self.weights_.load(self.weights.values[np.newaxis, np.newaxis, :, :],
                                    session)
                 costs = np.zeros(min_nsteps)
-                pbar = tqdm(range(min_nsteps))
                 ftol_ratio = 1 + ftol
-                for step in pbar:
-                    _, c, rho_, sigma2, weights = session.run(
-                        [train, cost, self.rho_, self.sigma2_, self.weights_],)
-                    costs[step] = c
-                    pbar.set_description(f'Current cost: {c:7g}')
 
-                    if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
-                        break
+                if progressbar:
+                    with tqdm(range(min_nsteps)) as pbar:
+                        for step in pbar:
+                            _, c, rho_, sigma2, weights = session.run(
+                                [train, cost, self.rho_, self.sigma2_, self.weights_],)
+                            costs[step] = c
+                            pbar.set_description(f'Current cost: {c:7g}')
+
+                            if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                                break
+                else:
+                    for step in range(min_nsteps):
+                        _, c, rho_, sigma2, weights = session.run(
+                            [train, cost, self.rho_, self.sigma2_, self.weights_],)
+                        costs[step] = c
+                        if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                            break
 
                 costs = costs[:step+1]
                 self.rho = session.run(self.rho_)
