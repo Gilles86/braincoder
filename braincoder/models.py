@@ -14,7 +14,7 @@ class EncodingModel(object):
 
     An encoding model uses the following attributes:
 
-     - parameters: (n_populations, n_pars, n_voxels)
+     - parameters: (n_populations, n_pars)
      - weights: (n_populations, n_voxels)
 
     It can also have the following additional properties:
@@ -40,6 +40,8 @@ class EncodingModel(object):
 
     """
 
+    identity_model = False
+
     def __init__(self, verbosity=logging.INFO):
         self.logger = logging.getLogger(name='EncodingModel logger')
         self.logger.setLevel(logging.INFO)
@@ -50,8 +52,8 @@ class EncodingModel(object):
         assert(len(data) == len(paradigm)
                ), "paradigm and data should be same length"
 
-        paradigm = self._check_input(paradigm)
-        data = self._check_input(data)
+        paradigm = self._check_input(paradigm, 'paradigm')
+        data = self._check_input(data, 'data')
         init_pars = self.init_parameters(data, paradigm)
 
         self.build_graph(paradigm, data, init_pars, weights=None)
@@ -66,7 +68,6 @@ class EncodingModel(object):
 
             with tf.Session() as session:
                 costs = np.ones(min_nsteps) * np.inf
-
                 _ = session.run([init])
 
                 ftol_ratio = 1 + ftol
@@ -76,7 +77,7 @@ class EncodingModel(object):
 
                         for step in pbar:
                             _, c = session.run(
-                                [train, self.cost)])
+                                [train, self.cost_])
                             costs[step] = c
                             pbar.set_description(f'Current cost: {c:7g}')
 
@@ -85,20 +86,19 @@ class EncodingModel(object):
                 else:
                     for step in range(min_nsteps):
                         _, c, p = session.run(
-                            [train, self.cost, self.parameters])
+                            [train, self.cost_, self.parameters_])
                         costs[step] = c
                         if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
                             break
 
                 parameters, predictions = session.run(
-                    [self.parameters, self.predictions])
+                    [self.parameters_, self.predictions_])
 
             costs = pd.Series(costs[:step + 1])
-            parameters = pd.DataFrame(np.squeeze(parameters),
-                                      index=self.parameter_labels,
-                                      columns=data.columns)
+            parameters = pd.DataFrame(
+                parameters, columns=self.parameter_labels)
 
-            self.parameters_ = parameters
+            self.parameters = parameters
 
             predictions = pd.DataFrame(predictions,
                                        index=data.index,
@@ -118,47 +118,53 @@ class EncodingModel(object):
 
         paradigm = self._check_input(paradigm, 'paradigm')
         weights = self._check_input(weights, 'weights')
-
-        if parameters.ndim == 1:
-            parameters = parameters[np.newaxis, :, np.newaxis]
-        elif parameters.ndim == 2:
-            parameters = parameters[..., np.newaxis]
-
-        parameters = parameters.astype(np.float32)
+        parameters = self._check_input(parameters, 'parameters')
 
         self.logger.info('Size paradigm: {}'.format(paradigm.shape))
         self.logger.info('Size parameters: {}'.format(parameters.shape))
-        self.logger.info('Size weights: {}'.format(weights.shape))
+
+        if hasattr(weights, 'shape'):
+            self.logger.info('Size weights: {}'.format(weights.shape))
 
         self.build_graph(paradigm=paradigm, data=None,
                          parameters=parameters, weights=weights)
 
-        noise = np.array(noise) 
+        noise = np.array(noise)
 
         if noise.ndim < 2:
-            noise = np.ones((1, weights.shape[-1])) * noise
+            noise = np.ones((1, self.n_voxels)) * noise
 
         with self.graph.as_default():
             init = tf.global_variables_initializer()
             with tf.Session() as session:
                 _ = session.run(init)
                 simulated_data_ = session.run(self.noisy_prediction_,
-                        feed_dict={self.noise_level_:noise})
+                                              feed_dict={self.noise_level_: noise})
+
+        if hasattr(weights, 'columns'):
+            columns = weights.columns
+        else:
+            columns = np.arange(self.n_voxels)
 
         simulated_data = pd.DataFrame(simulated_data_,
-                                      index=paradigm.index, columns=weights.columns)
+                                      index=paradigm.index, columns=columns)
 
         return simulated_data
 
-    def build_graph(self, paradigm, data=None, parameters=None, weights=None):
+    def build_graph(self,
+                    paradigm,
+                    data=None,
+                    parameters=None,
+                    weights=None):
 
         self.graph = tf.Graph()
 
         (n_populations, n_parameters, n_voxels,
          n_timepoints, n_stim_dimensions) = \
             self._get_graph_properties(
-            paradigm, data, parameters, weights)
+            paradigm, data, weights, parameters)
 
+        self.n_voxels = n_voxels
         weights = self._check_input(weights)
         paradigm = self._check_input(paradigm)
         data = self._check_input(data)
@@ -180,15 +186,25 @@ class EncodingModel(object):
             weights_shape = (
                 n_populations, n_voxels) if weights is None else None
 
-            self.weights_ = tf.get_variable(initializer=weights,
-                                            shape=weights_shape,
-                                            name='weights',
-                                            dtype=tf.float32)
+            self.logger.info('N populations {}, N voxels: {}'.format(
+                n_populations, n_voxels))
+
+            if issubclass(self.__class__, IsolatedPopulationsModel):
+                self.weights_ = None
+            else:
+                self.weights_ = tf.get_variable(initializer=weights,
+                                                shape=weights_shape,
+                                                name='weights',
+                                                dtype=tf.float32)
 
             self.logger.info('Size predictions: {}'.format(
                 self.basis_predictions_))
-            self.predictions_ = tf.squeeze(tf.tensordot(self.basis_predictions_,
-                                                        self.weights_, (1, 0)))
+
+            if issubclass(self.__class__, IsolatedPopulationsModel):
+                self.predictions_ = self.basis_predictions_
+            else:
+                self.predictions_ = tf.tensordot(self.basis_predictions_,
+                                                 self.weights_, (1, 0))
 
             # Simulation
             self.noise_level_ = tf.get_variable(
@@ -245,14 +261,25 @@ class EncodingModel(object):
         self.likelihood_ = self.residual_dist.log_prob(self.residuals_)
 
     def _check_input(self, par, name=None):
+
         if par is None:
             if name is not None:
                 if hasattr(self, name):
                     return getattr(self, name)
+                else:
+                    return None
             else:
                 return None
 
-        return pd.DataFrame(par.astype(np.float32))
+        if name == 'parameters':
+            if hasattr(par, 'values'):
+                return par.values
+            else:
+                return par
+        else:
+            if name == 'paradigm':
+                self.paradigm = pd.DataFrame(par).astype(np.float32)
+            return pd.DataFrame(par.astype(np.float32))
 
     def build_basis_function(self):
         # time x basis_functions
@@ -261,13 +288,22 @@ class EncodingModel(object):
 
     def _get_graph_properties(self, paradigm, data, weights, parameters):
 
-        n_populations = self.n_populations
         n_pars = self.n_parameters
 
         if data is not None:
             n_voxels = data.shape[-1]
+        elif issubclass(self.__class__, IsolatedPopulationsModel):
+            n_voxels = parameters.shape[0]
         else:
             n_voxels = weights.shape[-1]
+
+        if issubclass(self.__class__, IsolatedPopulationsModel):
+            n_populations = n_voxels
+        else:
+            if parameters is not None:
+                n_populations = parameters.shape[0]
+            else:
+                n_populations = self.n_populations
 
         n_timepoints = paradigm.shape[0]
         n_stim_dimensions = paradigm.shape[1]
@@ -290,20 +326,33 @@ class EncodingModel(object):
 
         paradigm = self._check_input(paradigm, name='paradigm')
         weights = self._check_input(weights, name='weights')
+        parameters = self._check_input(parameters, name='parameters')
 
         self.build_graph(paradigm=paradigm,
                          parameters=parameters, weights=weights)
 
         with self.graph.as_default():
             with tf.Session() as session:
-                predictions = session.run(self.predictions_, feed_dict={
-                    self.paradigm_: paradigm.values,
-                    self.weights_: weights.values,
-                    self.parameters_: parameters})
+                feed_dict = {self.paradigm_: paradigm.values,
+                             self.parameters_: parameters}
 
-        return pd.DataFrame(predictions, index=paradigm.index, columns=weights.columns)
+                if not issubclass(self.__class__, IsolatedPopulationsModel):
+                    feed_dict[self.weights_] = weights.values
+                    columns = weights.columns
+                else:
+                    columns = None
+
+                predictions = session.run(
+                    self.predictions_, feed_dict=feed_dict)
+
+        return pd.DataFrame(predictions, index=paradigm.index,
+                            columns=columns)
 
     def fit_weights(self, paradigm, data, parameters, l2_cost=0.0):
+
+        if issubclass(self.__class__, IsolatedPopulationsModel):
+            raise Exception('This is a model with exactly one population per feature. This means '
+                            'you can  not meaningfully fit the weights')
 
         paradigm = self._check_input(paradigm, name='paradigm')
         weights = self._check_input(data, name='weights')
@@ -322,9 +371,29 @@ class EncodingModel(object):
                 weights = session.run(ols_solver)
 
         self.weights = pd.DataFrame(weights)
-        self.paradigm = pd.DataFrame(paradigm)
 
         return self.weights
+
+    def get_rsq(self, data, paradigm=None, parameters=None, weights=None):
+        predictions = self.get_predictions(
+            paradigm=paradigm, parameters=parameters, weights=weights)
+        predictions.index = data.index
+        rsq = get_rsq(data, predictions)
+        return rsq
+
+    def get_r(self, data, paradigm=None, parameters=None, weights=None):
+        predictions = self.get_predictions(
+            paradigm=paradigm, parameters=parameters, weights=weights)
+        r = get_r(data, predictions)
+        return r
+
+
+class IsolatedPopulationsModel(object):
+    """
+    This subclass of EncodingModel assumes every population maps onto
+    exactly one voxel.
+    """
+    pass
 
 
 class IdentityModel(EncodingModel):
@@ -347,25 +416,8 @@ class IdentityModel(EncodingModel):
                     rho_init=.5,
                     lambd=1.):
 
-        (n_populations, n_pars, n_voxels,
-         n_timepoints, n_stim_dimensions) = \
-            self._get_graph_properties(
-            paradigm, data, parameters, weights)
-
-        parameters = np.zeros((n_populations, n_pars, n_voxels))
-
+        parameters = self._get_dummy_parameters(paradigm=paradigm, data=data, weights=weights)
         super().build_graph(paradigm, data, parameters, weights)
-
-    def get_rsq(self, data, paradigm=None, weights=None):
-        predictions = self.get_predictions(paradigm, weights)
-        predictions.index = data.index
-        rsq = get_rsq(data, predictions)
-        return rsq
-
-    def get_r(self, data, paradigm=None, weights=None):
-        predictions = self.get_predictions(paradigm, weights)
-        r = get_r(data, predictions)
-        return r
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
         """
@@ -379,18 +431,16 @@ class IdentityModel(EncodingModel):
 
         """
 
-        n_populations, n_parameters, n_voxels, n_timepoints, n_stim_dimensions = self._get_graph_properties(
-            paradigm, None, weights, parameters)
+        if parameters is not None:
+            raise Exception('IdentityModel has no meaningful parameters')
 
-        parameters = np.zeros((n_populations, n_parameters, weights.shape[1]))
+        parameters = self._get_dummy_parameters(paradigm, None, weights)
 
         return super().simulate(paradigm=paradigm,
                                 parameters=parameters, weights=weights, noise=noise)
 
     def fit_weights(self, paradigm, data, l2_cost=0.0):
-        parameters = np.zeros((paradigm.shape[1],
-                               0,
-                               data.shape[1]))
+        parameters = np.zeros((paradigm.shape[1], 0,))
 
         return super().fit_weights(paradigm=paradigm,
                                    data=data,
@@ -469,8 +519,7 @@ class IdentityModel(EncodingModel):
         paradigm = self._check_input(paradigm, name='paradigm')
         weights = self._check_input(weights, name='weights')
 
-        parameters = self._get_dummy_parameters(
-            paradigm=paradigm, data=None, weights=weights)
+        parameters = self._get_dummy_parameters( paradigm=paradigm, data=None, weights=weights)
         return super().get_predictions(paradigm, parameters, weights)
 
     def get_stimulus_posterior(self, data, stimulus_range=None, log_p=True, normalize=False):
@@ -568,10 +617,7 @@ class IdentityModel(EncodingModel):
             return super()._check_input(par, name)
 
     def _get_dummy_parameters(self, paradigm, data, weights):
-        if weights is None:
-            return np.zeros((paradigm.shape[1], 0, data.shape[1]))
-        else:
-            return np.zeros((paradigm.shape[1], 0, weights.shape[1]))
+        return np.zeros((paradigm.shape[1], 0))
 
 
 class Discrete1DModel(EncodingModel):
@@ -608,72 +654,115 @@ class GaussianReceptiveFieldModel(EncodingModel):
         super().__init__()
         self.positive_amplitudes = positive_amplitudes
 
-    def optimize(self,
-                 paradigm,
-                 data,
-                 min_nsteps=100000,
-                 ftol=1e-6):
+    def build_graph(self,
+                    paradigm,
+                    data=None,
+                    parameters=None,
+                    weights=None):
 
-        costs, parameters, predictions = super().optimize(paradigm,
-                                                          data,
-                                                          min_nsteps,
-                                                          ftol)
+        super().build_graph(paradigm=paradigm,
+                            data=data,
+                            parameters=parameters,
+                            weights=weights)
 
-        parameters.loc['sd'] = _softplus(parameters.loc['sd'])
+    def fit_parameters(self,
+                       paradigm,
+                       data,
+                       min_nsteps=100000,
+                       ftol=1e-6,
+                       progressbar=False):
+
+        costs, parameters, predictions = super().fit_parameters(paradigm,
+                                                                data,
+                                                                min_nsteps,
+                                                                ftol,
+                                                                progressbar=progressbar)
+
+        parameters['sd'] = _softplus(parameters['sd'])
 
         if self.positive_amplitudes:
-            parameters.loc['amplitude'] = _softplus(
-                parameters.loc['amplitude'])
+            parameters['amplitude'] = _softplus(
+                parameters['amplitude'])
+
+            self.parameters = parameters
 
         return costs, parameters, predictions
 
-    def build_graph(self, paradigm, parameters=None):
-
-        super().build_graph(paradigm, parameters)
-
+    def build_basis_function(self):
         with self.graph.as_default():
-            self.mu = self.parameters[:, 0, :]
-            self.sd = tf.math.softplus(self.parameters[:, 1, :])
+            self.mu_ = self.parameters_[:, 0]
+            self.sd_ = tf.math.softplus(self.parameters_[:, 1])
 
             if self.positive_amplitudes:
-                self.amplitude_ = self.parameters[:, 2, :]
-                self.amplitude = tf.math.softplus(self.amplitude_)
+                self.amplitude__ = self.parameters_[:, 2]
+                self.amplitude_ = tf.math.softplus(self.amplitude__)
             else:
-                self.amplitude = self.parameters[:, 2, :]
-            self.baseline = self.parameters[:, 3, :]
+                self.amplitude_ = self.parameters_[:, 2]
+            self.baseline_ = self.parameters_[:, 3]
 
-            self.predictions = self.baseline + \
-                norm(self.paradigm, self.mu, self.sd) * self.amplitude
+            self.basis_predictions_ = self.baseline_[tf.newaxis, :] + \
+                norm(self.paradigm_, self.mu_[tf.newaxis, :],
+                     self.sd_[tf.newaxis, :]) *  \
+                self.amplitude_[tf.newaxis, :]
 
     def init_parameters(self, data, paradigm):
         baselines = data.min(0)
         data_ = data - baselines
-        mus = (data_ * paradigm[:, np.newaxis]).sum(0) / data_.sum(0)
-        sds = (data_ * (paradigm[:, np.newaxis] -
-                        mus[np.newaxis, :])**2).sum(0) / data_.sum(0)
+        mus = (data_.values * paradigm.values).sum(0) / data_.values.sum(0)
+        sds = (data_.values * (paradigm.values - mus)
+               ** 2).sum(0) / data_.values.sum(0)
         sds = np.sqrt(sds)
         amplitudes = data_.max(0)
 
-        pars = np.zeros(
-            (1, self.n_parameters, data.shape[1]), dtype=np.float32)
+        (n_populations, n_parameters, n_voxels,
+         n_timepoints, n_stim_dimensions) = \
+            self._get_graph_properties(
+            paradigm, data, None, None)
 
-        pars[:, 0, :] = mus
-        pars[:, 1, :] = sds
-        pars[:, 2, :] = amplitudes
-        pars[:, 3, :] = baselines
+        pars = np.zeros(
+            (n_populations, self.n_parameters), dtype=np.float32)
+
+        pars[:, 0] = mus
+        pars[:, 1] = sds
+        pars[:, 2] = amplitudes
+        pars[:, 3] = baselines
 
         return pars
 
-    def simulate(self, parameters=None, paradigm=None, noise=1.):
+    def simulate(self, paradigm=None, parameters=None, noise=1.):
 
-        paradigm, parameters = self._get_paradigm_and_parameters(
-            paradigm, parameters)
+        paradigm = self._check_input(paradigm, 'paradigm')
+        parameters = self._check_input(parameters, 'parameters')
 
         parameters[:, 1] = _inverse_softplus(parameters[:, 1])
-        parameters[:, 2] = _inverse_softplus(parameters[:, 2])
 
-        data = super().simulate(parameters, paradigm, noise)
+        if self.positive_amplitudes:
+            parameters[:, 2] = _inverse_softplus(parameters[:, 2])
+
+        data = super().simulate(paradigm, parameters, noise=noise)
         return data
+
+    def _get_graph_properties(self, paradigm, data, weights, parameters):
+
+        if data is not None:
+            self.n_populations = data.shape[-1]
+
+        if parameters is not None:
+            self.n_populations = parameters.shape[0]
+
+        n_populations = self.n_populations
+        n_pars = self.n_parameters
+
+        n_voxels = n_populations
+
+        n_timepoints = paradigm.shape[0]
+        n_stim_dimensions = paradigm.shape[1]
+
+        return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
+
+
+class VoxelwiseGaussianReceptiveFieldModel(GaussianReceptiveFieldModel, IsolatedPopulationsModel):
+    pass
 
 
 def _softplus(x):

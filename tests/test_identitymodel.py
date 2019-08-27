@@ -1,4 +1,4 @@
-from braincoder.decoders import EncodingModel, IdentityModel
+from braincoder.models import EncodingModel, IdentityModel
 
 # from braincoder.decoders import WeightedEncodingModel
 import numpy as np
