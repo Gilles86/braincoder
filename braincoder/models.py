@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
 from tqdm.autonotebook import tqdm
 import pandas as pd
@@ -181,7 +182,8 @@ class EncodingModel(object):
             self.parameters_ = tf.get_variable(initializer=parameters.astype(np.float32),
                                                name='parameters',
                                                dtype=tf.float32)
-            self.build_basis_function()
+            self.basis_predictions_ = self.build_basis_function(
+                self.graph, self.paradigm_)
 
             weights_shape = (
                 n_populations, n_voxels) if weights is None else None
@@ -228,37 +230,41 @@ class EncodingModel(object):
 
     def build_residuals_graph(self):
 
-        self.rho_trans = tf.Variable(rho_init, dtype=tf.float32,
-                                     name='rho_trans')
-        self.rho_ = tf.math.sigmoid(self.rho_trans, name='rho')
+        with self.graph.as_default():
+            self.rho_trans_ = tf.get_variable(
+                'rho_trans', shape=(), dtype=tf.float32)
+            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho')
 
-        self.tau_trans = tf.Variable(_inverse_softplus(data.std().values[:, np.newaxis]),
-                                     name='tau_trans')
+            self.tau_trans_ = tf.get_variable('tau_trans',
+                                              initializer=_inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis]))
 
-        self.tau_ = _softplus_tensor(self.tau_trans, name='tau')
+            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau')
 
-        self.sigma2_trans = tf.Variable(
-            0., dtype=tf.float32, name='sigma2_trans')
-        self.sigma2_ = _softplus_tensor(
-            self.sigma2_trans, name='sigma2')
+            self.sigma2_trans_ = tf.Variable(
+                _inverse_softplus(0.), dtype=tf.float32, name='sigma2_trans')
+            self.sigma2_ = _softplus_tensor(
+                self.sigma2_trans_, name='sigma2')
 
-        sigma0 = self.rho_ * tf.tensordot(self.tau_,
-                                          tf.transpose(self.tau_),
-                                          axes=1) + \
-            (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
-            self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
-                                                   self.weights_, axes=(-2, -2)))
+            self.sigma0_ = self.rho_ * tf.tensordot(self.tau_,
+                                                    tf.transpose(self.tau_),
+                                                    axes=1) + \
+                (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
+                                                       self.weights_, axes=(-2, -2)))
 
-        self.empirical_covariance_matrix_ = tf.constant(
-            data.cov().values.astype(np.float32), name='empirical_covariance_matrix')
+            self.empirical_covariance_matrix_ = tfp.stats.covariance(
+                self.data_)
 
-        self.sigma_ = lambd * sigma0 +  \
-            (1 - lambd) * self.empirical_covariance_matrix_
+            self.lambd_ = tf.get_variable(name='lambda',
+                                          shape=())
 
-        self.residual_dist = tfd.MultivariateNormalFullCovariance(
-            tf.zeros(data.shape[1]),
-            self.sigma_)
-        self.likelihood_ = self.residual_dist.log_prob(self.residuals_)
+            self.sigma_ = self.lambd_ * self.sigma0_ +  \
+                (1 - self.lambd_) * self.empirical_covariance_matrix_
+
+            self.residual_dist = tfd.MultivariateNormalFullCovariance(
+                tf.zeros(self.data_.shape[1]),
+                self.sigma_)
+            self.likelihood_ = self.residual_dist.log_prob(self.residuals_)
 
     def _check_input(self, par, name=None):
 
@@ -280,11 +286,6 @@ class EncodingModel(object):
             if name == 'paradigm':
                 self.paradigm = pd.DataFrame(par).astype(np.float32)
             return pd.DataFrame(par.astype(np.float32))
-
-    def build_basis_function(self):
-        # time x basis_functions
-        with self.graph.as_default():
-            self.basis_predictions_ = self.paradigm_
 
     def _get_graph_properties(self, paradigm, data, weights, parameters):
 
@@ -310,9 +311,10 @@ class EncodingModel(object):
 
         return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
 
-    def get_basis_function_activations(self, paradigm, parameters):
+    def get_basis_function_activations(self, paradigm=None, parameters=None):
 
-        paradigm = pd.DataFrame(paradigm)
+        paradigm = self._check_input(paradigm, 'paradigm')
+        parameters = self._check_input(parameters, 'parameters')
 
         with self.graph.as_default():
             with tf.Session() as session:
@@ -388,78 +390,26 @@ class EncodingModel(object):
         return r
 
 
-class IsolatedPopulationsModel(object):
-    """
-    This subclass of EncodingModel assumes every population maps onto
-    exactly one voxel.
-    """
-    pass
+    def fit_residuals(self,
+                      paradigm=None,
+                      data=None,
+                      lambd=1.,
+                      rho_init=1e-9,
+                      min_nsteps=100000,
+                      ftol=1e-12,
+                      also_fit_weights=False,
+                      progressbar=True):
 
+        paradigm = self._check_input(paradigm, 'paradigm')
+        data = self._check_input(data, 'data')
 
-class IdentityModel(EncodingModel):
-
-    n_parameters = 0
-    n_populations = None
-
-    def __init__(self):
-        """
-        parameters is a NxD or  array, where N is the number
-        of basis functions and P is the number of parameters
-        """
-        return super().__init__()
-
-    def build_graph(self,
-                    paradigm,
-                    data=None,
-                    weights=None,
-                    parameters=None,
-                    rho_init=.5,
-                    lambd=1.):
-
-        parameters = self._get_dummy_parameters(paradigm=paradigm, data=data, weights=weights)
-        super().build_graph(paradigm, data, parameters, weights)
-
-    def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
-        """
-        paradigm is a N or NxM matrix, where N is the number
-        of time points and M is the number of stimulus dimensions.
-        weights is a BxV matrix, where B is the number
-        of basis functions and V is the number of
-        features (e.g., voxels, time series).
-        Noise is either a scalar for equal noise across voxels
-        or a V-array with the amount of noise for every voxel.
-
-        """
-
-        if parameters is not None:
-            raise Exception('IdentityModel has no meaningful parameters')
-
-        parameters = self._get_dummy_parameters(paradigm, None, weights)
-
-        return super().simulate(paradigm=paradigm,
-                                parameters=parameters, weights=weights, noise=noise)
-
-    def fit_weights(self, paradigm, data, l2_cost=0.0):
-        parameters = np.zeros((paradigm.shape[1], 0,))
-
-        return super().fit_weights(paradigm=paradigm,
-                                   data=data,
-                                   parameters=parameters,
-                                   l2_cost=l2_cost)
-
-    def fit_residual_model(self,
-                           paradigm=None,
-                           data=None,
-                           lambd=1.,
-                           min_nsteps=100000,
-                           ftol=1e-12,
-                           also_fit_weights=False,
-                           progressbar=True):
+        self.build_graph(paradigm, data)
+        self.build_residuals_graph()
 
         with self.graph.as_default():
             optimizer = tf.train.AdamOptimizer()
             cost = -tf.reduce_sum(self.likelihood_)
-            var_list = [self.tau_trans, self.rho_trans, self.sigma2_trans]
+            var_list = [self.tau_trans_, self.rho_trans_, self.sigma2_trans_]
             if also_fit_weights:
                 var_list.append(self.weights_)
 
@@ -472,8 +422,10 @@ class IdentityModel(EncodingModel):
             with tf.Session() as session:
                 session.run(init)
 
-                self.weights_.load(self.weights.values[np.newaxis, np.newaxis, :, :],
-                                   session)
+                self.weights_.load(self.weights.values, session)
+                self.rho_trans_.load(rho_init, session)
+                self.lambd_.load(lambd, session)
+
                 costs = np.zeros(min_nsteps)
                 ftol_ratio = 1 + ftol
 
@@ -508,99 +460,166 @@ class IdentityModel(EncodingModel):
                 self.ols_weights = self.weights.copy()
 
                 if also_fit_weights:
-                    self.weights = pd.DataFrame(np.squeeze(session.run(self.weights_)),
+                    self.weights = pd.DataFrame(session.run(self.weights_),
                                                 index=self.weights.index,
                                                 columns=self.weights.columns)
 
-        return costs, predictions, self.weights
+        return costs, (self.rho, self.sigma2, self.tau, self.omega), predictions
 
-    def get_predictions(self, paradigm=None, parameters=None, weights=None):
+    def build_decoding_graph(self, data, stimulus_range, normalize=False):
+        """
+        data is (n_timepoints, n_voxels)
+        stimulus_range is (n_stim_dimensions, n_potential_stimuli)
 
-        paradigm = self._check_input(paradigm, name='paradigm')
-        weights = self._check_input(weights, name='weights')
+        """
 
-        parameters = self._get_dummy_parameters( paradigm=paradigm, data=None, weights=weights)
-        return super().get_predictions(paradigm, parameters, weights)
+        decode_graph = tf.Graph()
 
-    def get_stimulus_posterior(self, data, stimulus_range=None, log_p=True, normalize=False):
+        if not hasattr(self, 'weights') or not hasattr(self, 'omega'):
+            raise Exception('Please firs fit weights and/or residuals')
 
-        data = pd.DataFrame(data)
+        self.decode_nodes = {}
+        with decode_graph.as_default():
 
+            data_to_decode = tf.constant(data, name='data',)
+
+            # n_dimensions x n_stimuli
+            stimulus = tf.get_variable(
+                name='stimulus', initializer=stimulus_range, dtype=tf.float32)
+
+            # n_dimensions x n_voxels
+            weights = tf.get_variable(
+                name='weights', initializer=self.weights.values)
+
+
+            # n_dimensions x n_stimuli
+            basis_functions = self.build_basis_function(decode_graph, stimulus)
+
+            #  n_stimuli x n_voxels
+            hypothetical_timeseries = tf.tensordot(
+                basis_functions, weights, (1, 0), name='hypothetical_timeseries')
+
+            # # n_timepoints x n_stimuli x n_vox
+            residuals = data_to_decode[:, tf.newaxis, :] - \
+                hypothetical_timeseries[tf.newaxis, ...]
+
+            mvn = tfd.MultivariateNormalFullCovariance(
+                loc=tf.zeros(data.shape[1]), covariance_matrix=self.omega)
+
+            # n_timepoints x n_stimuli
+            if normalize:
+                decode_pdf_unnormed = mvn.prob(residuals, name='pdf')
+                self.decode_pdf_ = decode_pdf_unnormed / \
+                    tf.reduce_sum(decode_pdf_unnormed, 1)
+            else:
+                self.decode_pdf_ = mvn.prob(residuals, name='pdf')
+
+            self.decode_map_ = tf.gather(
+                stimulus, tf.math.argmax(self.decode_pdf_, 1), axis=0)
+
+        return decode_graph
+
+
+    def _check_stimulus_range(self, stimulus_range=None):
         if stimulus_range is None:
             stimulus = np.linspace(-5, 5, 1000)
         elif type(stimulus_range) is tuple:
             stimulus = np.linspace(stimulus_range[0], stimulus_range[1], 1000)
         else:
             stimulus = stimulus_range
+        
+        if stimulus.ndim == 1:
+            stimulus = stimulus[:, np.newaxis]
 
-        # n_stimuli x n_pop x n_vox
-        hypothetical_timeseries = self.weights.values[:, np.newaxis, :] * \
-            stimulus[np.newaxis, :, np.newaxis]
+        return stimulus.astype(np.float32)
 
-        # n_timepoints x n_stimuli x n_populations x n_voxels
-        residuals = data.values[:, np.newaxis, np.newaxis,
-                                :] - hypothetical_timeseries[np.newaxis, ...]
+    def get_stimulus_posterior(self, data,
+                               stimulus_range=None,
+                               normalize=False):
 
-        mv_norm = ss.multivariate_normal(mean=np.zeros(self.omega.shape[0]),
-                                         cov=self.omega)
+        stimulus_range = self._check_stimulus_range(stimulus_range)
+        data = self._check_input(data, 'data')
 
-        if log_p:
-            logp_ds = mv_norm.logpdf(residuals)
-            p_ds = np.exp(logp_ds - logp_ds.max(-1)[..., np.newaxis])
+        decode_graph = self.build_decoding_graph(data, stimulus_range, normalize)
 
-        else:
-            # n_timepoints x n_stimuli x n_stimulus_populations
-            p_ds = mv_norm.pdf(residuals)
+        with decode_graph.as_default():
+            init = tf.global_variables_initializer()
+            with tf.Session() as session:
+                session.run(init)
+                pdf = session.run(self.decode_pdf_)
+                map_ = session.run(self.decode_map_)
 
-        # Normalize
-        if normalize:
-            p_ds /= (p_ds * np.gradient(s)
-                     [np.newaxis, np.newaxis, :]).sum(-1)[..., np.newaxis]
+        return pdf, map_
 
-        return stimulus, p_ds
+class IsolatedPopulationsModel(object):
+    """
+    This subclass of EncodingModel assumes every population maps onto
+    exactly one voxel.
+    """
+    pass
 
-    def get_map_stimulus_timeseries(self, data, stimulus_range=None):
 
-        data = pd.DataFrame(data)
-        s, p_ds = self.get_stimulus_posterior(
-            data, stimulus_range=stimulus_range)
-        map_ = (s[np.newaxis, np.newaxis, :] * p_ds).sum(-1) / p_ds.sum(-1)
-        map_ = pd.DataFrame(map_, index=data.index, columns=self.weights.index)
+class GLMModel(EncodingModel):
 
-        return map_
+    n_parameters = 0
+    n_populations = None
 
-    def get_map_sd_stimulus_timeseries(self, data, stimulus_range=None):
+    def __init__(self):
+        """
+        parameters is a NxD or  array, where N is the number
+        of basis functions and P is the number of parameters
+        """
+        return super().__init__()
 
-        data = pd.DataFrame(data)
+    def build_graph(self,
+                    paradigm,
+                    data=None,
+                    weights=None,
+                    parameters=None):
 
-        s, p_ds = self.get_stimulus_posterior(
-            data, stimulus_range=stimulus_range)
-        map_ = (s[np.newaxis, np.newaxis, :] * p_ds).sum(-1) / p_ds.sum(-1)
-        map_ = pd.DataFrame(map_, index=data.index, columns=self.weights.index)
+        parameters = self._get_dummy_parameters(
+            paradigm=paradigm)
+        super().build_graph(paradigm, data, parameters, weights)
 
-        dev = (s[np.newaxis, np.newaxis, :] - map_.values[..., np.newaxis])**2
-        sd = np.sqrt(((dev * p_ds) / p_ds.sum(-1)[..., np.newaxis]).sum(-1))
-        sd = pd.DataFrame(sd, index=data.index, columns=self.weights.index)
+    def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
+        """
+        paradigm is a N or NxM matrix, where N is the number
+        of time points and M is the number of stimulus dimensions.
+        weights is a BxV matrix, where B is the number
+        of basis functions and V is the number of
+        features (e.g., voxels, time series).
+        Noise is either a scalar for equal noise across voxels
+        or a V-array with the amount of noise for every voxel.
 
-        return map_, sd
+        """
 
-    def _get_paradigm_and_weights(self, paradigm, weights):
-        if paradigm is None:
-            if self.paradigm is None:
-                raise Exception("please provide paradigm.")
-            else:
-                paradigm = self.paradigm
+        if parameters is not None:
+            raise Exception('GLMModel has no meaningful parameters (only weights)')
 
-        if weights is None:
-            if self.weights is None:
-                raise Exception("please provide basis function weights.")
-            else:
-                weights = self.weights
+        parameters = self._get_dummy_parameters(paradigm)
 
-        paradigm = pd.DataFrame(paradigm)
-        weights = pd.DataFrame(weights)
+        return super().simulate(paradigm=paradigm,
+                                parameters=parameters, weights=weights, noise=noise)
 
-        return paradigm, weights
+    def fit_weights(self, paradigm, data, l2_cost=0.0):
+        parameters = self._get_dummy_parameters(paradigm)
+
+        return super().fit_weights(paradigm=paradigm,
+                                   data=data,
+                                   parameters=parameters,
+                                   l2_cost=l2_cost)
+
+    def get_predictions(self, paradigm=None, parameters=None, weights=None):
+        parameters = self._get_dummy_parameters( paradigm=paradigm)
+
+        return super().get_predictions(paradigm, parameters, weights)
+
+    def build_basis_function(self, graph, x):
+        # time x basis_functions
+        with graph.as_default():
+            basis_predictions_ = x
+
+        return basis_predictions_
 
     def _get_graph_properties(self, paradigm, data, weights, parameters):
         _, n_pars, n_voxels, n_timepoints, n_stim_dimensions = super(
@@ -616,8 +635,17 @@ class IdentityModel(EncodingModel):
         else:
             return super()._check_input(par, name)
 
-    def _get_dummy_parameters(self, paradigm, data, weights):
+    def _get_dummy_parameters(self, paradigm=None):
+        paradigm = self._check_input(paradigm, 'paradigm')
         return np.zeros((paradigm.shape[1], 0))
+
+
+class StickModel(EncodingModel):
+    n_populations = None
+    n_parameters = 1
+
+
+
 
 
 class Discrete1DModel(EncodingModel):
@@ -688,8 +716,8 @@ class GaussianReceptiveFieldModel(EncodingModel):
 
         return costs, parameters, predictions
 
-    def build_basis_function(self):
-        with self.graph.as_default():
+    def build_basis_function(self, graph, x):
+        with graph.as_default():
             self.mu_ = self.parameters_[:, 0]
             self.sd_ = tf.math.softplus(self.parameters_[:, 1])
 
@@ -700,10 +728,12 @@ class GaussianReceptiveFieldModel(EncodingModel):
                 self.amplitude_ = self.parameters_[:, 2]
             self.baseline_ = self.parameters_[:, 3]
 
-            self.basis_predictions_ = self.baseline_[tf.newaxis, :] + \
-                norm(self.paradigm_, self.mu_[tf.newaxis, :],
+            basis_predictions_ = self.baseline_[tf.newaxis, :] + \
+                norm(x, self.mu_[tf.newaxis, :],
                      self.sd_[tf.newaxis, :]) *  \
                 self.amplitude_[tf.newaxis, :]
+
+            return basis_predictions_
 
     def init_parameters(self, data, paradigm):
         baselines = data.min(0)
@@ -771,6 +801,20 @@ def _softplus(x):
 
 def _softplus_tensor(x, name=None):
     return tf.log(1 + tf.exp(x), name=name)
+
+
+def _logit(x):
+    """ Computes the logit function, i.e. the logistic sigmoid inverse. """
+    return - np.log(1. / x - 1.)
+
+
+def _logit_tensor(x):
+    """ Computes the logit function, i.e. the logistic sigmoid inverse. """
+    return - tf.log(1. / x - 1.)
+
+
+def _inverse_softplus_tensor(x):
+    return tf.log(tf.exp(x) - 1)
 
 
 def _inverse_softplus(x):
