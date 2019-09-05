@@ -43,7 +43,10 @@ class EncodingModel(object):
 
     identity_model = False
 
-    def __init__(self, verbosity=logging.INFO):
+    def __init__(self, parameters=None, verbosity=logging.INFO):
+        if parameters is not None:
+            self.parameters = parameters
+
         self.logger = logging.getLogger(name='EncodingModel logger')
         self.logger.setLevel(logging.INFO)
 
@@ -166,10 +169,10 @@ class EncodingModel(object):
             paradigm, data, weights, parameters)
 
         self.n_voxels = n_voxels
-        weights = self._check_input(weights)
-        paradigm = self._check_input(paradigm)
-        data = self._check_input(data)
-        parameters = parameters.astype(np.float32)
+        weights = self._check_input(weights, 'weights')
+        paradigm = self._check_input(paradigm, 'paradigm')
+        data = self._check_input(data, 'data')
+        parameters = self._check_input(parameters, 'parameters')
 
         self.logger.info((n_populations, n_parameters,
                           n_voxels, n_timepoints, n_stim_dimensions))
@@ -350,7 +353,7 @@ class EncodingModel(object):
         return pd.DataFrame(predictions, index=paradigm.index,
                             columns=columns)
 
-    def fit_weights(self, paradigm, data, parameters, l2_cost=0.0):
+    def fit_weights(self, paradigm, data, parameters=None, l2_cost=0.0):
 
         if issubclass(self.__class__, IsolatedPopulationsModel):
             raise Exception('This is a model with exactly one population per feature. This means '
@@ -358,6 +361,7 @@ class EncodingModel(object):
 
         paradigm = self._check_input(paradigm, name='paradigm')
         weights = self._check_input(data, name='weights')
+        parameters = self._check_input(parameters, name='parameters')
 
         self.build_graph(paradigm=paradigm, data=data,
                          parameters=parameters, weights=None)
@@ -388,7 +392,6 @@ class EncodingModel(object):
             paradigm=paradigm, parameters=parameters, weights=weights)
         r = get_r(data, predictions)
         return r
-
 
     def fit_residuals(self,
                       paradigm=None,
@@ -491,7 +494,6 @@ class EncodingModel(object):
             weights = tf.get_variable(
                 name='weights', initializer=self.weights.values)
 
-
             # n_dimensions x n_stimuli
             basis_functions = self.build_basis_function(decode_graph, stimulus)
 
@@ -519,7 +521,6 @@ class EncodingModel(object):
 
         return decode_graph
 
-
     def _check_stimulus_range(self, stimulus_range=None):
         if stimulus_range is None:
             stimulus = np.linspace(-5, 5, 1000)
@@ -527,7 +528,7 @@ class EncodingModel(object):
             stimulus = np.linspace(stimulus_range[0], stimulus_range[1], 1000)
         else:
             stimulus = stimulus_range
-        
+
         if stimulus.ndim == 1:
             stimulus = stimulus[:, np.newaxis]
 
@@ -540,7 +541,8 @@ class EncodingModel(object):
         stimulus_range = self._check_stimulus_range(stimulus_range)
         data = self._check_input(data, 'data')
 
-        decode_graph = self.build_decoding_graph(data, stimulus_range, normalize)
+        decode_graph = self.build_decoding_graph(
+            data, stimulus_range, normalize)
 
         with decode_graph.as_default():
             init = tf.global_variables_initializer()
@@ -550,6 +552,7 @@ class EncodingModel(object):
                 map_ = session.run(self.decode_map_)
 
         return pdf, map_
+
 
 class IsolatedPopulationsModel(object):
     """
@@ -564,7 +567,7 @@ class GLMModel(EncodingModel):
     n_parameters = 0
     n_populations = None
 
-    def __init__(self):
+    def __init__(self, parameters=None, verbosity=logging.INFO):
         """
         parameters is a NxD or  array, where N is the number
         of basis functions and P is the number of parameters
@@ -594,7 +597,8 @@ class GLMModel(EncodingModel):
         """
 
         if parameters is not None:
-            raise Exception('GLMModel has no meaningful parameters (only weights)')
+            raise Exception(
+                'GLMModel has no meaningful parameters (only weights)')
 
         parameters = self._get_dummy_parameters(paradigm)
 
@@ -610,7 +614,7 @@ class GLMModel(EncodingModel):
                                    l2_cost=l2_cost)
 
     def get_predictions(self, paradigm=None, parameters=None, weights=None):
-        parameters = self._get_dummy_parameters( paradigm=paradigm)
+        parameters = self._get_dummy_parameters(paradigm=paradigm)
 
         return super().get_predictions(paradigm, parameters, weights)
 
@@ -644,8 +648,11 @@ class StickModel(EncodingModel):
     n_populations = None
     n_parameters = 1
 
-
-
+    def build_basis_function(self, graph, x):
+        with graph.as_default():
+            basis_predictions_ = tf.cast(
+                tf.equal(x, self.parameters_[tf.newaxis, :, 0]), tf.float32)
+            return basis_predictions_
 
 
 class Discrete1DModel(EncodingModel):
