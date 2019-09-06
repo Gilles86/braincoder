@@ -651,7 +651,10 @@ class StickModel(EncodingModel):
     def build_basis_function(self, graph, x):
         with graph.as_default():
             basis_predictions_ = tf.cast(
-                tf.equal(x, self.parameters_[tf.newaxis, :, 0]), tf.float32)
+                tf.equal(x, self.parameters_[tf.newaxis, 1:, 0]), tf.float32)
+            intercept = tf.ones((basis_predictions_.shape[0], 1))
+            basis_predictions_ = tf.concat((intercept, basis_predictions_), 1)
+
             return basis_predictions_
 
 
