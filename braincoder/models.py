@@ -649,6 +649,10 @@ class StickModel(EncodingModel):
     n_parameters = 1
 
     def build_basis_function(self, graph, x):
+        self.logger.warning('Note that first parameter of StickModel '
+                            'corresponds to the Intercept (baseline) and'
+                            'is NOT used.')
+
         with graph.as_default():
             basis_predictions_ = tf.cast(
                 tf.equal(x, self.parameters_[tf.newaxis, 1:, 0]), tf.float32)
