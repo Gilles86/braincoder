@@ -43,9 +43,28 @@ class EncodingModel(object):
 
     identity_model = False
 
-    def __init__(self, parameters=None, verbosity=logging.INFO):
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, verbosity=logging.INFO):
+
+        if paradigm is not None:
+            self.paradigm = self._check_input(paradigm, 'paradigm')
+        else:
+            self.paradigm = None
+
+        if data is not None:
+            self.data = self._check_input(data, 'data')
+        else:
+            self.data = None
+
         if parameters is not None:
-            self.parameters = parameters
+            self.parameters = self._check_input(parameters, 'parameters')
+        else:
+            self.parameters = None
+
+        if weights is not None:
+            self.weights = self._check_input(weights, 'weights')
+        else:
+            self.weights = None
 
         self.logger = logging.getLogger(name='EncodingModel logger')
         self.logger.setLevel(logging.INFO)
@@ -74,7 +93,7 @@ class EncodingModel(object):
                 costs = np.ones(min_nsteps) * np.inf
                 _ = session.run([init])
 
-                ftol_ratio = 1 + ftol
+                # ftol_ratio = 1 + ftol
                 if progressbar:
                     with tqdm(range(min_nsteps)) as pbar:
                         pbar = tqdm(range(min_nsteps))
@@ -85,14 +104,14 @@ class EncodingModel(object):
                             costs[step] = c
                             pbar.set_description(f'Current cost: {c:7g}')
 
-                            if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                            if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
                                 break
                 else:
                     for step in range(min_nsteps):
                         _, c, p = session.run(
                             [train, self.cost_, self.parameters_])
                         costs[step] = c
-                        if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                        if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
                             break
 
                 parameters, predictions = session.run(
@@ -186,7 +205,7 @@ class EncodingModel(object):
                                                name='parameters',
                                                dtype=tf.float32)
             self.basis_predictions_ = self.build_basis_function(
-                self.graph, self.paradigm_)
+                self.graph, self.parameters_, self.paradigm_)
 
             weights_shape = (
                 n_populations, n_voxels) if weights is None else None
@@ -244,7 +263,7 @@ class EncodingModel(object):
             self.tau_ = _softplus_tensor(self.tau_trans_, name='tau')
 
             self.sigma2_trans_ = tf.Variable(
-                _inverse_softplus(0.), dtype=tf.float32, name='sigma2_trans')
+                _inverse_softplus(1e-9), dtype=tf.float32, name='sigma2_trans')
             self.sigma2_ = _softplus_tensor(
                 self.sigma2_trans_, name='sigma2')
 
@@ -429,7 +448,7 @@ class EncodingModel(object):
                 self.rho_trans_.load(rho_init, session)
                 self.lambd_.load(lambd, session)
 
-                costs = np.zeros(min_nsteps)
+                costs = np.ones(min_nsteps) * -np.inf
                 ftol_ratio = 1 + ftol
 
                 if progressbar:
@@ -440,14 +459,14 @@ class EncodingModel(object):
                             costs[step] = c
                             pbar.set_description(f'Current cost: {c:7g}')
 
-                            if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                            if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
                                 break
                 else:
                     for step in range(min_nsteps):
                         _, c, rho_, sigma2, weights = session.run(
                             [train, cost, self.rho_, self.sigma2_, self.weights_],)
                         costs[step] = c
-                        if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
+                        if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
                             break
 
                 costs = costs[:step+1]
@@ -494,8 +513,13 @@ class EncodingModel(object):
             weights = tf.get_variable(
                 name='weights', initializer=self.weights.values)
 
+            # n_populations x stim_dimension
+            parameters = tf.get_variable(
+                name='parameters', initializer=self.parameters)
+
             # n_dimensions x n_stimuli
-            basis_functions = self.build_basis_function(decode_graph, stimulus)
+            basis_functions = self.build_basis_function(
+                decode_graph, parameters, stimulus)
 
             #  n_stimuli x n_voxels
             hypothetical_timeseries = tf.tensordot(
@@ -506,31 +530,48 @@ class EncodingModel(object):
                 hypothetical_timeseries[tf.newaxis, ...]
 
             mvn = tfd.MultivariateNormalFullCovariance(
-                loc=tf.zeros(data.shape[1]), covariance_matrix=self.omega)
+                loc=tf.zeros(data.shape[1], dtype=tf.float64), covariance_matrix=tf.cast(self.omega, tf.float64))
 
             # n_timepoints x n_stimuli
             if normalize:
-                decode_pdf_unnormed = mvn.prob(residuals, name='pdf')
+                decode_pdf_unnormed = mvn.prob(
+                    tf.cast(residuals, tf.float64), name='pdf')
                 self.decode_pdf_ = decode_pdf_unnormed / \
-                    tf.reduce_sum(decode_pdf_unnormed, 1)
+                    tf.reduce_sum(decode_pdf_unnormed, 1)[:, tf.newaxis]
             else:
-                self.decode_pdf_ = mvn.prob(residuals, name='pdf')
+                self.decode_pdf_ = mvn.prob(
+                    tf.cast(residuals, tf.float64), name='pdf')
 
             self.decode_map_ = tf.gather(
                 stimulus, tf.math.argmax(self.decode_pdf_, 1), axis=0)
 
+            normer = 1. / tf.reduce_sum(self.decode_pdf_, 1)
+
+            print('Normer: {} - {}'.format(normer.shape, normer.dtype))
+            print('decode_map: {} - {}'.format(self.decode_map_.shape, self.decode_map_.dtype))
+            print('stimulus: {} - {}'.format(stimulus.shape, stimulus.dtype))
+            print('decode_pdf: {}'.format(self.decode_pdf_.shape, self.decode_pdf_.dtype))
+
+            # n_timepoints x n_stim_dimensions x n_stimuli
+            summed_hist = (tf.cast(self.decode_map_, tf.float64)[..., tf.newaxis] - tf.transpose(tf.cast(stimulus, tf.float64))[tf.newaxis, ...])**2 * self.decode_pdf_[:, tf.newaxis, :]
+
+            print('summed_hist: {}'.format(summed_hist.shape, summed_hist.dtype))
+
+            self.decode_sd_ = tf.sqrt(tf.reduce_sum(tf.squeeze(summed_hist), -1) * 1./tf.reduce_sum(self.decode_pdf_, -1))
+            print('decode_sd: {}'.format(summed_hist.shape, summed_hist.dtype))
+
         return decode_graph
 
-    def _check_stimulus_range(self, stimulus_range=None):
+    def _check_stimulus_range(self, stimulus_range = None):
         if stimulus_range is None:
-            stimulus = np.linspace(-5, 5, 1000)
+            stimulus=np.linspace(-5, 5, 1000)
         elif type(stimulus_range) is tuple:
-            stimulus = np.linspace(stimulus_range[0], stimulus_range[1], 1000)
+            stimulus=np.linspace(stimulus_range[0], stimulus_range[1], 1000)
         else:
-            stimulus = stimulus_range
+            stimulus=stimulus_range
 
         if stimulus.ndim == 1:
-            stimulus = stimulus[:, np.newaxis]
+            stimulus=stimulus[:, np.newaxis]
 
         return stimulus.astype(np.float32)
 
@@ -550,8 +591,9 @@ class EncodingModel(object):
                 session.run(init)
                 pdf = session.run(self.decode_pdf_)
                 map_ = session.run(self.decode_map_)
+                sd = session.run(self.decode_sd_)
 
-        return pdf, map_
+        return pdf, map_, sd
 
 
 class IsolatedPopulationsModel(object):
@@ -618,7 +660,7 @@ class GLMModel(EncodingModel):
 
         return super().get_predictions(paradigm, parameters, weights)
 
-    def build_basis_function(self, graph, x):
+    def build_basis_function(self, graph, parameters, x):
         # time x basis_functions
         with graph.as_default():
             basis_predictions_ = x
@@ -648,14 +690,14 @@ class StickModel(EncodingModel):
     n_populations = None
     n_parameters = 1
 
-    def build_basis_function(self, graph, x):
+    def build_basis_function(self, graph, parameters, x):
         self.logger.warning('Note that first parameter of StickModel '
-                            'corresponds to the Intercept (baseline) and'
+                            'corresponds to the Intercept (baseline) and '
                             'is NOT used.')
 
         with graph.as_default():
             basis_predictions_ = tf.cast(
-                tf.equal(x, self.parameters_[tf.newaxis, 1:, 0]), tf.float32)
+                tf.equal(x, parameters[tf.newaxis, 1:, 0]), tf.float32)
             intercept = tf.ones((basis_predictions_.shape[0], 1))
             basis_predictions_ = tf.concat((intercept, basis_predictions_), 1)
 
@@ -730,17 +772,17 @@ class GaussianReceptiveFieldModel(EncodingModel):
 
         return costs, parameters, predictions
 
-    def build_basis_function(self, graph, x):
+    def build_basis_function(self, graph, parameters, x):
         with graph.as_default():
             self.mu_ = self.parameters_[:, 0]
-            self.sd_ = tf.math.softplus(self.parameters_[:, 1])
+            self.sd_ = tf.math.softplus(parameters[:, 1])
 
             if self.positive_amplitudes:
-                self.amplitude__ = self.parameters_[:, 2]
+                self.amplitude__ = parameters[:, 2]
                 self.amplitude_ = tf.math.softplus(self.amplitude__)
             else:
-                self.amplitude_ = self.parameters_[:, 2]
-            self.baseline_ = self.parameters_[:, 3]
+                self.amplitude_ = parameters[:, 2]
+            self.baseline_ = parameters[:, 3]
 
             basis_predictions_ = self.baseline_[tf.newaxis, :] + \
                 norm(x, self.mu_[tf.newaxis, :],
@@ -776,7 +818,7 @@ class GaussianReceptiveFieldModel(EncodingModel):
     def simulate(self, paradigm=None, parameters=None, noise=1.):
 
         paradigm = self._check_input(paradigm, 'paradigm')
-        parameters = self._check_input(parameters, 'parameters')
+        parameters = self._check_input(parameters, 'parameters').copy()
 
         parameters[:, 1] = _inverse_softplus(parameters[:, 1])
 
@@ -803,6 +845,38 @@ class GaussianReceptiveFieldModel(EncodingModel):
         n_stim_dimensions = paradigm.shape[1]
 
         return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
+
+    def to_stickmodel(self, basis_stimuli=None):
+
+        if basis_stimuli is None:
+            basis_stimuli = np.unique(self.paradigm.values)
+
+        basis_stimuli = np.hstack(([0], basis_stimuli)).astype(np.float32)
+
+        weights = np.zeros((len(basis_stimuli), self.parameters.shape[0]))
+        weights[0, :] = self.parameters['baseline']
+
+        conversion_graph = tf.Graph()
+
+        mu = self.parameters['mu'].values[np.newaxis, :]
+        sd = self.parameters['sd'].values[np.newaxis, :]
+        x = basis_stimuli[1:, np.newaxis]
+        amplitude = self.parameters['amplitude'].values[np.newaxis, :]
+
+        with conversion_graph.as_default():
+            w_tf = amplitude * norm(x, mu, sd)
+
+            with tf.Session() as session:
+                weights[1:, :] = session.run(w_tf)
+
+        sm = StickModel(self.paradigm,
+                        self.data,
+                        basis_stimuli[:, np.newaxis],
+                        weights)
+        sm.build_graph(paradigm=sm.paradigm, parameters=sm.parameters,
+                       data=sm.data, weights=sm.weights)
+
+        return sm
 
 
 class VoxelwiseGaussianReceptiveFieldModel(GaussianReceptiveFieldModel, IsolatedPopulationsModel):
