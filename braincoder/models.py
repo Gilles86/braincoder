@@ -449,7 +449,6 @@ class EncodingModel(object):
                 self.lambd_.load(lambd, session)
 
                 costs = np.ones(min_nsteps) * -np.inf
-                ftol_ratio = 1 + ftol
 
                 if progressbar:
                     with tqdm(range(min_nsteps)) as pbar:
@@ -488,7 +487,7 @@ class EncodingModel(object):
 
         return costs, (self.rho, self.sigma2, self.tau, self.omega), predictions
 
-    def build_decoding_graph(self, data, stimulus_range, normalize=False):
+    def build_decoding_graph(self, data, stimulus_range, normalize=False, precision=1e-6):
         """
         data is (n_timepoints, n_voxels)
         stimulus_range is (n_stim_dimensions, n_potential_stimuli)
@@ -530,35 +529,27 @@ class EncodingModel(object):
                 hypothetical_timeseries[tf.newaxis, ...]
 
             mvn = tfd.MultivariateNormalFullCovariance(
-                loc=tf.zeros(data.shape[1], dtype=tf.float64), covariance_matrix=tf.cast(self.omega, tf.float64))
+                loc=tf.zeros(data.shape[1]), covariance_matrix=self.omega)
 
             # n_timepoints x n_stimuli
+            self.decode_pdf_log_ = mvn.log_prob(residuals, name='pdf')
+
             if normalize:
-                decode_pdf_unnormed = mvn.prob(
-                    tf.cast(residuals, tf.float64), name='pdf')
-                self.decode_pdf_ = decode_pdf_unnormed / \
-                    tf.reduce_sum(decode_pdf_unnormed, 1)[:, tf.newaxis]
+                max_ll = tf.reduce_max(self.decode_pdf_log_, 1)
+                thr0 = tf.log(precision) - tf.log(tf.cast(self.decode_pdf_log_.shape[1], tf.float32))
+                nonzeromask = self.decode_pdf_log_ - max_ll[:, tf.newaxis] > thr0
+                self.decode_pdf_ = tf.cast(nonzeromask, tf.float32) * tf.exp(self.decode_pdf_log_ - max_ll[:, tf.newaxis])
+
             else:
-                self.decode_pdf_ = mvn.prob(
-                    tf.cast(residuals, tf.float64), name='pdf')
+                self.decode_pdf_ = tf.exp(self.decode_pdf_log_)
 
             self.decode_map_ = tf.gather(
-                stimulus, tf.math.argmax(self.decode_pdf_, 1), axis=0)
-
-            normer = 1. / tf.reduce_sum(self.decode_pdf_, 1)
-
-            print('Normer: {} - {}'.format(normer.shape, normer.dtype))
-            print('decode_map: {} - {}'.format(self.decode_map_.shape, self.decode_map_.dtype))
-            print('stimulus: {} - {}'.format(stimulus.shape, stimulus.dtype))
-            print('decode_pdf: {}'.format(self.decode_pdf_.shape, self.decode_pdf_.dtype))
+                stimulus, tf.math.argmax(self.decode_pdf_log_, 1), axis=0)
 
             # n_timepoints x n_stim_dimensions x n_stimuli
-            summed_hist = (tf.cast(self.decode_map_, tf.float64)[..., tf.newaxis] - tf.transpose(tf.cast(stimulus, tf.float64))[tf.newaxis, ...])**2 * self.decode_pdf_[:, tf.newaxis, :]
-
-            print('summed_hist: {}'.format(summed_hist.shape, summed_hist.dtype))
+            summed_hist = (self.decode_map_[..., tf.newaxis] - tf.transpose(stimulus)[tf.newaxis, ...])**2 * self.decode_pdf_[:, tf.newaxis, :]
 
             self.decode_sd_ = tf.sqrt(tf.reduce_sum(tf.squeeze(summed_hist), -1) * 1./tf.reduce_sum(self.decode_pdf_, -1))
-            print('decode_sd: {}'.format(summed_hist.shape, summed_hist.dtype))
 
         return decode_graph
 
