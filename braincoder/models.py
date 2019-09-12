@@ -250,7 +250,7 @@ class EncodingModel(object):
                     (self.data_ - tf.expand_dims(self.mean_data_, 0))**2, 0)
                 self.rsq_ = 1 - (self.cost_ / self.ssq_data_)
 
-    def build_residuals_graph(self):
+    def build_residuals_graph(self, distance_matrix=None):
 
         with self.graph.as_default():
             self.rho_trans_ = tf.get_variable(
@@ -267,12 +267,36 @@ class EncodingModel(object):
             self.sigma2_ = _softplus_tensor(
                 self.sigma2_trans_, name='sigma2')
 
-            self.sigma0_ = self.rho_ * tf.tensordot(self.tau_,
-                                                    tf.transpose(self.tau_),
-                                                    axes=1) + \
-                (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
-                self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
-                                                       self.weights_, axes=(-2, -2)))
+            if distance_matrix is not None:
+                self.alpha_trans_ = tf.get_variable(
+                    name='alpha_trans', shape=(), dtype=tf.float32)
+                self.alpha_ = tf.math.sigmoid(self.alpha_trans_, name='alpha')
+
+                self.beta_ = tf.get_variable(
+                    name='beta', shape=(), dtype=tf.float32)
+                D = tf.constant(distance_matrix.astype(np.float32))
+
+                self.sigma_D = self.alpha_ * tf.exp(-self.beta_ * D) * tf.tensordot(self.tau_,
+                                                                                    tf.transpose(
+                                                                                        self.tau_),
+                                                                                    axes=1)
+
+                self.sigma0_ = self.sigma_D + \
+                    self.rho_ * tf.tensordot(self.tau_,
+                                             tf.transpose(self.tau_),
+                                             axes=1) + \
+                    (1 - self.rho_ - self.alpha_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                    self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
+                                                           self.weights_, axes=(-2, -2)))
+
+            else:
+                self.sigma0_ = self.rho_ * tf.tensordot(self.tau_,
+                                                        tf.transpose(
+                                                            self.tau_),
+                                                        axes=1) + \
+                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                    self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
+                                                           self.weights_, axes=(-2, -2)))
 
             self.empirical_covariance_matrix_ = tfp.stats.covariance(
                 self.data_)
@@ -416,6 +440,7 @@ class EncodingModel(object):
                       paradigm=None,
                       data=None,
                       lambd=1.,
+                      distance_matrix=None,
                       rho_init=1e-9,
                       min_nsteps=100000,
                       ftol=1e-12,
@@ -426,7 +451,7 @@ class EncodingModel(object):
         data = self._check_input(data, 'data')
 
         self.build_graph(paradigm, data)
-        self.build_residuals_graph()
+        self.build_residuals_graph(distance_matrix=distance_matrix)
 
         with self.graph.as_default():
             optimizer = tf.train.AdamOptimizer()
@@ -434,6 +459,10 @@ class EncodingModel(object):
             var_list = [self.tau_trans_, self.rho_trans_, self.sigma2_trans_]
             if also_fit_weights:
                 var_list.append(self.weights_)
+
+            if distance_matrix is not None:
+                var_list.append(self.alpha_trans_)
+                var_list.append(self.beta_)
 
             train = optimizer.minimize(cost, var_list=var_list)
 
@@ -447,6 +476,10 @@ class EncodingModel(object):
                 self.weights_.load(self.weights.values, session)
                 self.rho_trans_.load(rho_init, session)
                 self.lambd_.load(lambd, session)
+
+                if distance_matrix is not None:
+                    self.alpha_trans_.load(-1, session)
+                    self.beta_.load(1., session)
 
                 costs = np.ones(min_nsteps) * -np.inf
 
@@ -474,6 +507,10 @@ class EncodingModel(object):
                 self.omega = session.run(self.sigma_)
                 self.sigma2 = session.run(self.sigma2_)
                 predictions = session.run(self.predictions_)
+
+                if distance_matrix is not None:
+                    self.alpha = session.run(self.alpha_)
+                    self.beta = session.run(self.beta_)
 
                 predictions = pd.DataFrame(
                     predictions, index=data.index, columns=data.columns)
@@ -536,33 +573,50 @@ class EncodingModel(object):
 
             if normalize:
                 max_ll = tf.reduce_max(self.decode_pdf_log_, 1)
-                thr0 = tf.log(precision) - tf.log(tf.cast(self.decode_pdf_log_.shape[1], tf.float32))
-                nonzeromask = self.decode_pdf_log_ - max_ll[:, tf.newaxis] > thr0
-                self.decode_pdf_ = tf.cast(nonzeromask, tf.float32) * tf.exp(self.decode_pdf_log_ - max_ll[:, tf.newaxis])
+                thr0 = tf.log(
+                    precision) - tf.log(tf.cast(self.decode_pdf_log_.shape[1], tf.float32))
+                nonzeromask = self.decode_pdf_log_ - \
+                    max_ll[:, tf.newaxis] > thr0
+                self.decode_pdf_ = tf.cast(
+                    nonzeromask, tf.float32) * tf.exp(self.decode_pdf_log_ - max_ll[:, tf.newaxis])
 
             else:
                 self.decode_pdf_ = tf.exp(self.decode_pdf_log_)
 
+            # n_timepoints x n_stim_dimensions
             self.decode_map_ = tf.gather(
                 stimulus, tf.math.argmax(self.decode_pdf_log_, 1), axis=0)
 
             # n_timepoints x n_stim_dimensions x n_stimuli
-            summed_hist = (self.decode_map_[..., tf.newaxis] - tf.transpose(stimulus)[tf.newaxis, ...])**2 * self.decode_pdf_[:, tf.newaxis, :]
+            summed_hist = (self.decode_map_[..., tf.newaxis] - tf.transpose(stimulus)[
+                           tf.newaxis, ...])**2 * self.decode_pdf_[:, tf.newaxis, :]
 
-            self.decode_sd_ = tf.sqrt(tf.reduce_sum(tf.squeeze(summed_hist), -1) * 1./tf.reduce_sum(self.decode_pdf_, -1))
+            self.decode_sd_ = tf.sqrt(tf.reduce_sum(
+                summed_hist, -1) * tf.reduce_sum(self.decode_pdf_, -1))
+
+            cdf = tf.cumsum(self.decode_pdf_, 1) / \
+                tf.reduce_sum(self.decode_pdf_, 1)[:, tf.newaxis]
+            tmp_ix = tf.where(cdf >= 0.025)
+            lower_ix = tf.segment_min(tmp_ix[:, 1], tmp_ix[:, 0])
+
+            tmp_ix = tf.where(cdf >= 0.975)
+            upper_ix = tf.segment_min(tmp_ix[:, 1], tmp_ix[:, 0])
+
+            self.lower_ci_ = tf.gather(stimulus, lower_ix, axis=0)
+            self.upper_ci_ = tf.gather(stimulus, upper_ix, axis=0)
 
         return decode_graph
 
-    def _check_stimulus_range(self, stimulus_range = None):
+    def _check_stimulus_range(self, stimulus_range=None):
         if stimulus_range is None:
-            stimulus=np.linspace(-5, 5, 1000)
+            stimulus = np.linspace(-5, 5, 1000)
         elif type(stimulus_range) is tuple:
-            stimulus=np.linspace(stimulus_range[0], stimulus_range[1], 1000)
+            stimulus = np.linspace(stimulus_range[0], stimulus_range[1], 1000)
         else:
-            stimulus=stimulus_range
+            stimulus = stimulus_range
 
         if stimulus.ndim == 1:
-            stimulus=stimulus[:, np.newaxis]
+            stimulus = stimulus[:, np.newaxis]
 
         return stimulus.astype(np.float32)
 
@@ -583,8 +637,10 @@ class EncodingModel(object):
                 pdf = session.run(self.decode_pdf_)
                 map_ = session.run(self.decode_map_)
                 sd = session.run(self.decode_sd_)
+                lower_ci, higher_ci = session.run(
+                    [self.lower_ci_, self.upper_ci_])
 
-        return pdf, map_, sd
+        return pdf, map_, sd, (lower_ci, higher_ci)
 
 
 class IsolatedPopulationsModel(object):

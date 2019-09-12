@@ -10,29 +10,31 @@ palette = sns.color_palette()
 n_voxels = 25
 n_timepoints =  150
 
+noise = 1.0
+
 paradigm = np.tile(np.arange(0, 20), int(n_timepoints / 20 + 1))
 paradigm = paradigm[:n_timepoints]
 
 parameters = np.ones((n_voxels, 4))
 parameters[:, 0] = np.linspace(0, 20, n_voxels)
-parameters[:, 1] = np.abs(np.random.randn(n_voxels))
+parameters[:, 1] = np.abs(np.random.randn(n_voxels)) * 3
 # parameters[:, 3] = np.random.randn(n_voxels)
 
-data = model.simulate(paradigm, parameters, noise=.2)
+data = model.simulate(paradigm, parameters, noise=noise)
 
 
 costs, pars_, pred_ =  model.fit_parameters(paradigm, data, progressbar=True)
-stimuli = np.linspace(0, 20, 1000)
+stimuli = np.linspace(-20, 40, 1000)
 sm = model.to_stickmodel(basis_stimuli=stimuli)
+
 sm.fit_residuals(data=data)
 
-data2 = model.simulate(paradigm, parameters, noise=0.)
-data2 += np.random.randn(*data2.shape) * np.linspace(.1, .3, len(data2))[:, np.newaxis]
-s, map, sd = sm.get_stimulus_posterior(data2, stimulus_range=stimuli, normalize=True)
+data2 = model.simulate(paradigm, parameters, noise=noise)
+s, map, sd, ci = sm.get_stimulus_posterior(data2, stimulus_range=stimuli, normalize=True)
 plt.plot(paradigm, color=palette[0])
 plt.plot(map, ls='--', color=palette[1])
 plt.title('r = {:.2f}'.format(ss.pearsonr(map.ravel(), paradigm)[0]))
-plt.fill_between(range(len(map)), map[:, 0] - 1.96*sd, map[:, 0] + 1.96*sd,
+plt.fill_between(range(len(map)), ci[0][:, 0], ci[1][:, 0],
         alpha=0.2, color=palette[1])
 
 plt.figure()
