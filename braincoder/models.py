@@ -57,7 +57,8 @@ class EncodingModel(object):
             self.data = None
 
         if parameters is not None:
-            self.parameters = self._check_input(parameters, 'parameters')
+            self.parameters = pd.DataFrame(parameters,
+                                           columns=self.get_parameter_labels(parameters))
         else:
             self.parameters = None
 
@@ -255,7 +256,7 @@ class EncodingModel(object):
         with self.graph.as_default():
             self.rho_trans_ = tf.get_variable(
                 'rho_trans', shape=(), dtype=tf.float32)
-            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho')
+            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * 0.95
 
             self.tau_trans_ = tf.get_variable('tau_trans',
                                               initializer=_inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis]))
@@ -270,22 +271,24 @@ class EncodingModel(object):
             if distance_matrix is not None:
                 self.alpha_trans_ = tf.get_variable(
                     name='alpha_trans', shape=(), dtype=tf.float32)
-                self.alpha_ = tf.math.sigmoid(self.alpha_trans_, name='alpha')
+                self.alpha_ = tf.math.sigmoid(
+                    self.alpha_trans_, name='alpha') * 0.95
 
                 self.beta_ = tf.get_variable(
                     name='beta', shape=(), dtype=tf.float32)
                 D = tf.constant(distance_matrix.astype(np.float32))
 
-                self.sigma_D = self.alpha_ * tf.exp(-self.beta_ * D) * tf.tensordot(self.tau_,
-                                                                                    tf.transpose(
-                                                                                        self.tau_),
-                                                                                    axes=1)
+                self.sigma_D = self.rho_ * self.alpha_ * tf.exp(-self.beta_ * D) * tf.tensordot(self.tau_,
+                                                                                                tf.transpose(
+                                                                                                    self.tau_),
+                                                                                                axes=1)
 
                 self.sigma0_ = self.sigma_D + \
-                    self.rho_ * tf.tensordot(self.tau_,
-                                             tf.transpose(self.tau_),
-                                             axes=1) + \
-                    (1 - self.rho_ - self.alpha_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                    self.rho_ * (1 - self.alpha_) * tf.tensordot(self.tau_,
+                                                                 tf.transpose(
+                                                                     self.tau_),
+                                                                 axes=1) + \
+                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
                     self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
                                                            self.weights_, axes=(-2, -2)))
 
@@ -587,12 +590,15 @@ class EncodingModel(object):
             self.decode_map_ = tf.gather(
                 stimulus, tf.math.argmax(self.decode_pdf_log_, 1), axis=0)
 
-            # n_timepoints x n_stim_dimensions x n_stimuli
-            summed_hist = (self.decode_map_[..., tf.newaxis] - tf.transpose(stimulus)[
-                           tf.newaxis, ...])**2 * self.decode_pdf_[:, tf.newaxis, :]
+            # n_timepoints x  n_stimuli x n_stim_dimensions
+            summed_hist = (self.decode_map_[:, tf.newaxis, :] - \
+                           stimulus[tf.newaxis, ...])**2 \
+                * self.decode_pdf_[..., tf.newaxis]
+
+            print('SUMMED HIST: {}'.format(summed_hist.shape))
 
             self.decode_sd_ = tf.sqrt(tf.reduce_sum(
-                summed_hist, -1) * tf.reduce_sum(self.decode_pdf_, -1))
+                summed_hist, 1) / tf.reduce_sum(self.decode_pdf_, 1)[..., tf.newaxis])
 
             cdf = tf.cumsum(self.decode_pdf_, 1) / \
                 tf.reduce_sum(self.decode_pdf_, 1)[:, tf.newaxis]
@@ -641,6 +647,12 @@ class EncodingModel(object):
                     [self.lower_ci_, self.upper_ci_])
 
         return pdf, map_, sd, (lower_ci, higher_ci)
+
+    def get_parameter_labels(self, parameters):
+        if hasattr(self, 'parameter_labels'):
+            return self.parameter_labels
+        else:
+            return ['par_{}'.format(d+1) for d in range(parameters.shape[1])]
 
 
 class IsolatedPopulationsModel(object):
@@ -780,9 +792,12 @@ class GaussianReceptiveFieldModel(EncodingModel):
     n_parameters = 4
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
-    def __init__(self, positive_amplitudes=True):
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 positive_amplitudes=True):
 
-        super().__init__()
+        super().__init__(paradigm=paradigm,
+                         data=data,
+                         parameters=parameters)
         self.positive_amplitudes = positive_amplitudes
 
     def build_graph(self,
