@@ -606,6 +606,7 @@ class EncodingModel(object):
                 residual_dist = tfd.MultivariateNormalFullCovariance(
                     loc=tf.zeros(data.shape[1]), covariance_matrix=self.omega)
             elif residual_dist == 't':
+                print('USING RESIDUAL T in decoding')
                 sigma_t_ = (self.dof - 2) * self.omega / self.dof
                 chol = tf.cholesky(sigma_t_)
                 residual_dist = tfd.MultivariateStudentTLinearOperator(df=self.dof,
@@ -695,7 +696,7 @@ class EncodingModel(object):
             columns = pd.MultiIndex.from_arrays(
                 list(stimulus_range.T), names=levels)
         else:
-            columns = pd.Index(stimulus_range, name='stimulus')
+            columns = pd.Index(stimulus_range.ravel(), name='stimulus')
 
         pdf = pd.DataFrame(pdf, index=data.index, columns=columns)
         map_ = pd.DataFrame(map_, index=data.index)
