@@ -20,8 +20,8 @@ model = GLMModel()
 data = model.simulate(paradigm, weights=weights, noise=0.0)
 data2 = model.simulate(paradigm, weights=weights, noise=0.0)
 
-data += ss.t(3).rvs(data.shape)
-data2 += ss.t(3).rvs(data2.shape)
+data += ss.t(3).rvs(data.shape) * .5 
+data2 += ss.t(3).rvs(data2.shape) * .5
 
 test = model.fit_weights(paradigm, data, l2_cost=0.0)
 

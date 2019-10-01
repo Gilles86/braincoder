@@ -251,7 +251,9 @@ class EncodingModel(object):
                     (self.data_ - tf.expand_dims(self.mean_data_, 0))**2, 0)
                 self.rsq_ = 1 - (self.cost_ / self.ssq_data_)
 
-    def build_residuals_graph(self, distance_matrix=None):
+    def build_residuals_graph(self, distance_matrix=None, residual_dist='gaussian'):
+
+        self.residual_dist_type = residual_dist
 
         with self.graph.as_default():
             self.rho_trans_ = tf.get_variable(
@@ -310,9 +312,26 @@ class EncodingModel(object):
             self.sigma_ = self.lambd_ * self.sigma0_ +  \
                 (1 - self.lambd_) * self.empirical_covariance_matrix_
 
-            self.residual_dist = tfd.MultivariateNormalFullCovariance(
-                tf.zeros(self.data_.shape[1]),
-                self.sigma_)
+            if residual_dist == 'gaussian':
+                self.residual_dist = tfd.MultivariateNormalFullCovariance(
+                    tf.zeros(self.data_.shape[1]),
+                    self.sigma_)
+            elif residual_dist == 't':
+                self.dof_trans_ = tf.get_variable(
+                    'dof_trans', dtype=tf.float32, initializer=_inverse_softplus(8.).astype(np.float32))
+                self.dof_ = _softplus_tensor(
+                    self.dof_trans_, name='dof') + 2. + 1e-6
+
+                self.sigma_t_ = (self.dof_ - 2) * self.sigma_ / self.dof_
+                chol = tf.cholesky(self.sigma_t_)
+                self.residual_dist = tfd.MultivariateStudentTLinearOperator(df=self.dof_,
+                                                                            loc=tf.zeros(
+                                                                                self.data_.shape[1]),
+                                                                            scale=tf.linalg.LinearOperatorLowerTriangular(chol))
+
+            else:
+                raise NotImplementedError(
+                    f'{residual_dist} is not implemented as a residual distribution')
             self.likelihood_ = self.residual_dist.log_prob(self.residuals_)
 
     def _check_input(self, par, name=None):
@@ -442,6 +461,7 @@ class EncodingModel(object):
     def fit_residuals(self,
                       paradigm=None,
                       data=None,
+                      residual_dist='gaussian',
                       lambd=1.,
                       distance_matrix=None,
                       rho_init=1e-9,
@@ -454,7 +474,8 @@ class EncodingModel(object):
         data = self._check_input(data, 'data')
 
         self.build_graph(paradigm, data)
-        self.build_residuals_graph(distance_matrix=distance_matrix)
+        self.build_residuals_graph(
+            distance_matrix=distance_matrix, residual_dist=residual_dist)
 
         with self.graph.as_default():
             optimizer = tf.train.AdamOptimizer()
@@ -466,6 +487,8 @@ class EncodingModel(object):
             if distance_matrix is not None:
                 var_list.append(self.alpha_trans_)
                 var_list.append(self.beta_)
+            if residual_dist == 't':
+                var_list.append(self.dof_trans_)
 
             train = optimizer.minimize(cost, var_list=var_list)
 
@@ -515,6 +538,9 @@ class EncodingModel(object):
                     self.alpha = session.run(self.alpha_)
                     self.beta = session.run(self.beta_)
 
+                if residual_dist == 't':
+                    self.dof = session.run(self.dof_)
+
                 predictions = pd.DataFrame(
                     predictions, index=data.index, columns=data.columns)
 
@@ -527,7 +553,8 @@ class EncodingModel(object):
 
         return costs, (self.rho, self.sigma2, self.tau, self.omega), predictions
 
-    def build_decoding_graph(self, data, stimulus_range, normalize=False, precision=1e-6):
+    def build_decoding_graph(self, data, stimulus_range, normalize=False, precision=1e-6,
+                             residual_dist=None):
         """
         data is (n_timepoints, n_voxels)
         stimulus_range is (n_stim_dimensions, n_potential_stimuli)
@@ -535,6 +562,9 @@ class EncodingModel(object):
         """
 
         decode_graph = tf.Graph()
+
+        if residual_dist is None:
+            residual_dist = self.residual_dist_type
 
         if not hasattr(self, 'weights') or not hasattr(self, 'omega'):
             raise Exception('Please firs fit weights and/or residuals')
@@ -553,8 +583,12 @@ class EncodingModel(object):
                 name='weights', initializer=self.weights.values)
 
             # n_populations x stim_dimension
-            parameters = tf.get_variable(
-                name='parameters', initializer=self.parameters)
+            if self.parameters is None:
+                parameters = tf.get_variable(
+                    name='parameters', initializer=self._get_dummy_parameters())
+            else:
+                parameters = tf.get_variable(
+                    name='parameters', initializer=self.parameters)
 
             # n_dimensions x n_stimuli
             basis_functions = self.build_basis_function(
@@ -568,11 +602,20 @@ class EncodingModel(object):
             residuals = data_to_decode[:, tf.newaxis, :] - \
                 hypothetical_timeseries[tf.newaxis, ...]
 
-            mvn = tfd.MultivariateNormalFullCovariance(
-                loc=tf.zeros(data.shape[1]), covariance_matrix=self.omega)
+            if residual_dist == 'gaussian':
+                residual_dist = tfd.MultivariateNormalFullCovariance(
+                    loc=tf.zeros(data.shape[1]), covariance_matrix=self.omega)
+            elif residual_dist == 't':
+                sigma_t_ = (self.dof - 2) * self.omega / self.dof
+                chol = tf.cholesky(sigma_t_)
+                residual_dist = tfd.MultivariateStudentTLinearOperator(df=self.dof,
+                                                                       loc=tf.zeros(
+                                                                           data.shape[1]),
+                                                                       scale=tf.linalg.LinearOperatorLowerTriangular(chol))
 
             # n_timepoints x n_stimuli
-            self.decode_pdf_log_ = mvn.log_prob(residuals, name='pdf')
+            self.decode_pdf_log_ = residual_dist.log_prob(
+                residuals, name='pdf')
 
             if normalize:
                 max_ll = tf.reduce_max(self.decode_pdf_log_, 1)
@@ -591,11 +634,9 @@ class EncodingModel(object):
                 stimulus, tf.math.argmax(self.decode_pdf_log_, 1), axis=0)
 
             # n_timepoints x  n_stimuli x n_stim_dimensions
-            summed_hist = (self.decode_map_[:, tf.newaxis, :] - \
+            summed_hist = (self.decode_map_[:, tf.newaxis, :] -
                            stimulus[tf.newaxis, ...])**2 \
                 * self.decode_pdf_[..., tf.newaxis]
-
-            print('SUMMED HIST: {}'.format(summed_hist.shape))
 
             self.decode_sd_ = tf.sqrt(tf.reduce_sum(
                 summed_hist, 1) / tf.reduce_sum(self.decode_pdf_, 1)[..., tf.newaxis])
@@ -646,11 +687,21 @@ class EncodingModel(object):
                 lower_ci, higher_ci = session.run(
                     [self.lower_ci_, self.upper_ci_])
 
-        pdf = pd.DataFrame(index=data.index,
-                columns=pd.Index(stimulus_range, name='stimulus'))
+        print(pdf)
 
-        map_ = pd.DataFrame(index=data.index)
-        sd = pd.DataFrame(index=data.index)
+        if stimulus_range.shape[1] > 1:
+            levels = [f'stim_dim{i}' for i in range(
+                1, stimulus_range.shape[1]+1)]
+            columns = pd.MultiIndex.from_arrays(
+                list(stimulus_range.T), names=levels)
+        else:
+            columns = pd.Index(stimulus_range, name='stimulus')
+
+        pdf = pd.DataFrame(pdf, index=data.index, columns=columns)
+        map_ = pd.DataFrame(map_, index=data.index)
+        sd = pd.DataFrame(sd, index=data.index)
+        lower_ci = pd.DataFrame(lower_ci, index=data.index)
+        higher_ci = pd.DataFrame(higher_ci, index=data.index)
 
         return pdf, map_, sd, (lower_ci, higher_ci)
 
