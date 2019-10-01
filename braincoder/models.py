@@ -646,6 +646,12 @@ class EncodingModel(object):
                 lower_ci, higher_ci = session.run(
                     [self.lower_ci_, self.upper_ci_])
 
+        pdf = pd.DataFrame(index=data.index,
+                columns=pd.Index(stimulus_range, name='stimulus'))
+
+        map_ = pd.DataFrame(index=data.index)
+        sd = pd.DataFrame(index=data.index)
+
         return pdf, map_, sd, (lower_ci, higher_ci)
 
     def get_parameter_labels(self, parameters):
