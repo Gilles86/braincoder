@@ -251,7 +251,7 @@ class EncodingModel(object):
                     (self.data_ - tf.expand_dims(self.mean_data_, 0))**2, 0)
                 self.rsq_ = 1 - (self.cost_ / self.ssq_data_)
 
-    def build_residuals_graph(self, distance_matrix=None, residual_dist='gaussian'):
+    def build_residuals_graph(self, tau_init=None, distance_matrix=None, residual_dist='gaussian'):
 
         self.residual_dist_type = residual_dist
 
@@ -260,8 +260,12 @@ class EncodingModel(object):
                 'rho_trans', shape=(), dtype=tf.float32)
             self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * 0.95
 
-            self.tau_trans_ = tf.get_variable('tau_trans',
-                                              initializer=_inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis]))
+            if tau_init is None:
+                self.tau_trans_ = tf.get_variable('tau_trans',
+                                                  initializer=_inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis]))
+            else:
+                self.tau_trans_ = tf.get_variable('tau_trans',
+                                              initializer=_inverse_softplus_tensor(tau_init))
 
             self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') + 1e-6
 
@@ -315,7 +319,8 @@ class EncodingModel(object):
             if residual_dist == 'gaussian':
                 self.residual_dist = tfd.MultivariateNormalFullCovariance(
                     tf.zeros(self.data_.shape[1]),
-                    self.sigma_)
+                    self.sigma_,
+                    allow_nan_stats=False)
             elif residual_dist == 't':
                 self.dof_trans_ = tf.get_variable(
                     'dof_trans', dtype=tf.float32, initializer=_inverse_softplus(8.).astype(np.float32))
@@ -465,6 +470,7 @@ class EncodingModel(object):
                       lambd=1.,
                       distance_matrix=None,
                       rho_init=1e-9,
+                      tau_init=None,
                       min_nsteps=100000,
                       ftol=1e-12,
                       also_fit_weights=False,
@@ -475,7 +481,8 @@ class EncodingModel(object):
 
         self.build_graph(paradigm, data)
         self.build_residuals_graph(
-            distance_matrix=distance_matrix, residual_dist=residual_dist)
+            distance_matrix=distance_matrix, residual_dist=residual_dist,
+        tau_init=tau_init)
 
         with self.graph.as_default():
             optimizer = tf.train.AdamOptimizer()
