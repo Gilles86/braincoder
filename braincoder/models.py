@@ -263,7 +263,7 @@ class EncodingModel(object):
             self.tau_trans_ = tf.get_variable('tau_trans',
                                               initializer=_inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis]))
 
-            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau')
+            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') + 1e-6
 
             self.sigma2_trans_ = tf.Variable(
                 _inverse_softplus(1e-9), dtype=tf.float32, name='sigma2_trans')
