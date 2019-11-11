@@ -7,6 +7,7 @@ import pandas as pd
 from .utils import get_rsq, get_r
 import scipy.stats as ss
 import logging
+from tensorflow.math import softplus as _softplus_tensor
 
 
 class EncodingModel(object):
@@ -917,6 +918,8 @@ class GaussianReceptiveFieldModel(EncodingModel):
         mus = (data_.values * paradigm.values).sum(0) / data_.values.sum(0)
         sds = (data_.values * (paradigm.values - mus)
                ** 2).sum(0) / data_.values.sum(0)
+        sds[np.isnan(sds)] = 1
+        mus[np.isnan(mus)] = 0
         sds = np.sqrt(sds)
         amplitudes = data_.max(0)
 
@@ -940,10 +943,138 @@ class GaussianReceptiveFieldModel(EncodingModel):
         paradigm = self._check_input(paradigm, 'paradigm')
         parameters = self._check_input(parameters, 'parameters').copy()
 
-        parameters[:, 1] = _inverse_softplus(parameters[:, 1])
+        # parameters[:, 1] = _inverse_softplus(parameters[:, 1])
 
-        if self.positive_amplitudes:
-            parameters[:, 2] = _inverse_softplus(parameters[:, 2])
+        # if self.positive_amplitudes:
+            # parameters[:, 2] = _inverse_softplus(parameters[:, 2])
+
+        data = super().simulate(paradigm, parameters, noise=noise)
+        return data
+
+    def _get_graph_properties(self, paradigm, data, weights, parameters):
+
+        if data is not None:
+            self.n_populations = data.shape[-1]
+
+        if parameters is not None:
+            self.n_populations = parameters.shape[0]
+
+        n_populations = self.n_populations
+        n_pars = self.n_parameters
+
+        n_voxels = n_populations
+
+        n_timepoints = paradigm.shape[0]
+        n_stim_dimensions = paradigm.shape[1]
+
+        return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
+
+    def to_stickmodel(self, basis_stimuli=None):
+
+        if basis_stimuli is None:
+            basis_stimuli = np.unique(self.paradigm.values)
+
+        basis_stimuli = np.hstack(([0], basis_stimuli)).astype(np.float32)
+
+        weights = np.zeros((len(basis_stimuli), self.parameters.shape[0]))
+        weights[0, :] = self.parameters['baseline']
+
+        conversion_graph = tf.Graph()
+
+        mu = self.parameters['mu'].values[np.newaxis, :]
+        sd = self.parameters['sd'].values[np.newaxis, :]
+        x = basis_stimuli[1:, np.newaxis]
+        amplitude = self.parameters['amplitude'].values[np.newaxis, :]
+
+        with conversion_graph.as_default():
+            w_tf = amplitude * norm(x, mu, sd)
+
+            with tf.Session() as session:
+                weights[1:, :] = session.run(w_tf)
+
+        sm = StickModel(self.paradigm,
+                        self.data,
+                        basis_stimuli[:, np.newaxis],
+                        weights)
+        sm.build_graph(paradigm=sm.paradigm, parameters=sm.parameters,
+                       data=sm.data, weights=sm.weights)
+
+        return sm
+
+class MexicanHatReceptiveFieldModel(GaussianReceptiveFieldModel):
+
+    n_parameters = 6
+    parameter_labels = ['mu', 'sd', 'amplitude', 'baseline', 'supression_sd_frac',
+            'supression_amplitude_frac']
+
+    parameter_labels_to_fit = ['mu', 'softplus(sd)',
+            'softplus(amplitude)', 'baseline', 'inverse_softplus(supression_sd_frac - 1)',
+            'logit(supression_amplitude_frac)']
+
+    def __init__(self, paradigm=None, data=None, parameters=None):
+
+        # parameters = self._check_input(parameters, 'parameters')
+        if parameters is not None:
+            parameters['supression_sd (frac)'] = _inverse_softplus(parameters['supression_sd (frac)'])
+            parameters['supression_amplitude (frac)'] = _logit(parameters['supression_amplitude (frac)'])
+
+
+        super().__init__(paradigm=paradigm,
+                         data=data,
+                         parameters=parameters)
+        self.positive_amplitudes = True
+
+    def build_basis_function(self, graph, parameters, x):
+        with graph.as_default():
+            self.mu_ = parameters[:, 0]
+            self.sd_ = tf.math.softplus(parameters[:, 1])
+
+            if self.positive_amplitudes:
+                self.amplitude__ = parameters[:, 2]
+                self.amplitude_ = tf.math.softplus(self.amplitude__)
+            else:
+                self.amplitude_ = parameters[:, 2]
+            self.baseline_ = parameters[:, 3]
+
+            self.supression_sd_ = (tf.math.softplus(parameters[:, 4])) * self.sd_
+            self.supression_amplitude_ = tf.math.sigmoid(parameters[:, 5]) * self.amplitude_
+
+            basis_predictions_ = self.baseline_[tf.newaxis, :] + \
+                norm(x, self.mu_[tf.newaxis, :],
+                     self.sd_[tf.newaxis, :]) *  \
+                self.amplitude_[tf.newaxis, :] - \
+                (norm(x, self.mu_[tf.newaxis, :], self.supression_sd_[tf.newaxis, :]) *  self.supression_amplitude_)
+
+            return basis_predictions_
+
+    def init_parameters(self, data, paradigm):
+        baselines = data.min(0)
+        data_ = data - baselines
+        mus = (data_.values * paradigm.values).sum(0) / data_.values.sum(0)
+        sds = (data_.values * (paradigm.values - mus)
+               ** 2).sum(0) / data_.values.sum(0)
+        sds = np.sqrt(sds)
+        amplitudes = data_.max(0)
+
+        (n_populations, n_parameters, n_voxels,
+         n_timepoints, n_stim_dimensions) = \
+            self._get_graph_properties(
+            paradigm, data, None, None)
+
+        pars = np.zeros(
+            (n_populations, self.n_parameters), dtype=np.float32)
+
+        pars[:, 0] = mus
+        pars[:, 1] = sds
+        pars[:, 2] = amplitudes
+        pars[:, 3] = baselines
+
+        return pars
+
+    def simulate(self, paradigm=None, parameters=None, noise=1.):
+
+        paradigm = self._check_input(paradigm, 'paradigm')
+        parameters = self._check_input(parameters, 'parameters').copy()
 
         data = super().simulate(paradigm, parameters, noise=noise)
         return data
@@ -1004,11 +1135,10 @@ class VoxelwiseGaussianReceptiveFieldModel(GaussianReceptiveFieldModel, Isolated
 
 
 def _softplus(x):
-    return np.log(1 + np.exp(x))
+    return x * (x >= 0) + np.log1p(np.exp(-np.abs(x)))
 
-
-def _softplus_tensor(x, name=None):
-    return tf.log(1 + tf.exp(x), name=name)
+# def _softplus_tensor(x, name=None):
+    # return tf.log(1 + tf.exp(x), name=name)
 
 
 def _logit(x):
@@ -1026,8 +1156,7 @@ def _inverse_softplus_tensor(x):
 
 
 def _inverse_softplus(x):
-    return np.log(np.exp(x) - 1)
-
+    return np.min((np.log(np.exp(x) - 1), x), 0)
 
 def norm(x, mu, sigma):
     # Z = (2. * np.pi * sigma**2.)**0.5
