@@ -17,7 +17,7 @@ class EncodingModel(object):
     An encoding model uses the following attributes:
 
      - parameters: (n_populations, n_pars)
-     - weights: (n_populations, n_voxels)
+     - w) & (x < right_bins)eights: (n_populations, n_voxels)
 
     It can also have the following additional properties:
      - paradigm: (n_timepoints, n_stim_dimensions)
@@ -31,6 +31,8 @@ class EncodingModel(object):
           * simulation
           * fitting
           * predicting
+          NOTE: build_graph already assumes _parameters_ has been transformed
+          when necessary
 
       Paradigm should _always be provided. All the others are optional.
 
@@ -71,15 +73,19 @@ class EncodingModel(object):
         self.logger = logging.getLogger(name='EncodingModel logger')
         self.logger.setLevel(logging.INFO)
 
-    def fit_parameters(self, paradigm, data, min_nsteps=100000,
-                       ftol=1e-9, progressbar=False,):
+    def fit_parameters(self, paradigm, data, init_pars=None, min_nsteps=100000,
+                       ftol=1e-9, learning_rate=0.001, patience=10, progressbar=False,):
 
         assert(len(data) == len(paradigm)
                ), "paradigm and data should be same length"
 
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
-        init_pars = self.init_parameters(data, paradigm)
+
+        if init_pars is None:
+            init_pars = self.init_parameters(data, paradigm)
+
+        init_pars = self.inverse_transform_parameters(init_pars)
 
         self.build_graph(paradigm, data, init_pars, weights=None)
 
@@ -87,7 +93,9 @@ class EncodingModel(object):
 
             self.cost_ = tf.reduce_sum((self.data_ - self.predictions_)**2)
 
-            optimizer = tf.train.AdamOptimizer()
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+            # optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate)
+            # optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
             train = optimizer.minimize(self.cost_)
             init = tf.global_variables_initializer()
 
@@ -95,7 +103,9 @@ class EncodingModel(object):
                 costs = np.ones(min_nsteps) * np.inf
                 _ = session.run([init])
 
-                # ftol_ratio = 1 + ftol
+                ftol_ratio = 1 + ftol
+                print(f'ftol ratio: {ftol_ratio}')
+                patience_counter = 0
                 if progressbar:
                     with tqdm(range(min_nsteps)) as pbar:
                         pbar = tqdm(range(min_nsteps))
@@ -106,22 +116,24 @@ class EncodingModel(object):
                             costs[step] = c
                             pbar.set_description(f'Current cost: {c:7g}')
 
-                            if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
+                            if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio):
+                                patience_counter += 1
+                            if patience_counter == patience:
                                 break
                 else:
                     for step in range(min_nsteps):
                         _, c, p = session.run(
                             [train, self.cost_, self.parameters_])
                         costs[step] = c
-                        if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
+                        if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
                             break
 
                 parameters, predictions = session.run(
                     [self.parameters_, self.predictions_])
 
             costs = pd.Series(costs[:step + 1])
-            parameters = pd.DataFrame(
-                parameters, columns=self.parameter_labels)
+
+            parameters = self.transform_parameters(parameters)
 
             self.parameters = parameters
 
@@ -143,13 +155,18 @@ class EncodingModel(object):
 
         paradigm = self._check_input(paradigm, 'paradigm')
         weights = self._check_input(weights, 'weights')
-        parameters = self._check_input(parameters, 'parameters')
 
         self.logger.info('Size paradigm: {}'.format(paradigm.shape))
+
+        if parameters is None:
+            parameters = self.parameters
+
+        parameters = self.inverse_transform_parameters(parameters.copy())
         self.logger.info('Size parameters: {}'.format(parameters.shape))
 
         if hasattr(weights, 'shape'):
             self.logger.info('Size weights: {}'.format(weights.shape))
+
 
         self.build_graph(paradigm=paradigm, data=None,
                          parameters=parameters, weights=weights)
@@ -193,7 +210,6 @@ class EncodingModel(object):
         weights = self._check_input(weights, 'weights')
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
-        parameters = self._check_input(parameters, 'parameters')
 
         self.logger.info((n_populations, n_parameters,
                           n_voxels, n_timepoints, n_stim_dimensions))
@@ -206,6 +222,7 @@ class EncodingModel(object):
             self.parameters_ = tf.get_variable(initializer=parameters.astype(np.float32),
                                                name='parameters',
                                                dtype=tf.float32)
+            
             self.basis_predictions_ = self.build_basis_function(
                 self.graph, self.parameters_, self.paradigm_)
 
@@ -352,14 +369,11 @@ class EncodingModel(object):
                 return None
 
         if name == 'parameters':
-            if hasattr(par, 'values'):
-                return par.values
-            else:
-                return par
-        else:
-            if name == 'paradigm':
-                self.paradigm = pd.DataFrame(par).astype(np.float32)
-            return pd.DataFrame(par.astype(np.float32))
+            raise Exception('Use self.transform_parameters')
+
+        if name == 'paradigm':
+            self.paradigm = pd.DataFrame(par).astype(np.float32)
+        return pd.DataFrame(par.astype(np.float32))
 
     def _get_graph_properties(self, paradigm, data, weights, parameters):
 
@@ -388,7 +402,11 @@ class EncodingModel(object):
     def get_basis_function_activations(self, paradigm=None, parameters=None):
 
         paradigm = self._check_input(paradigm, 'paradigm')
-        parameters = self._check_input(parameters, 'parameters')
+
+        if parameters is None:
+            parameters = self.parameters
+
+        parameters = self.inverse_transform_parameters(parameters)
 
         with self.graph.as_default():
             with tf.Session() as session:
@@ -402,7 +420,11 @@ class EncodingModel(object):
 
         paradigm = self._check_input(paradigm, name='paradigm')
         weights = self._check_input(weights, name='weights')
-        parameters = self._check_input(parameters, name='parameters')
+
+        if parameters is None:
+            parameters = self.parameters
+
+        parameters = self.inverse_transform_parameters(parameters)
 
         self.build_graph(paradigm=paradigm,
                          parameters=parameters, weights=weights)
@@ -432,7 +454,11 @@ class EncodingModel(object):
 
         paradigm = self._check_input(paradigm, name='paradigm')
         weights = self._check_input(data, name='weights')
-        parameters = self._check_input(parameters, name='parameters')
+
+        if parameters is None:
+            parameters = self.parameters
+
+        parameters = self.inverse_transform_parameters(parameters)
 
         self.build_graph(paradigm=paradigm, data=data,
                          parameters=parameters, weights=None)
@@ -480,7 +506,9 @@ class EncodingModel(object):
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
 
-        self.build_graph(paradigm, data)
+        parameters = self.transform_parameters(self.parameters.copy())
+
+        self.build_graph(paradigm, data, parameters=parameters)
         self.build_residuals_graph(
             distance_matrix=distance_matrix, residual_dist=residual_dist,
         tau_init=tau_init)
@@ -596,7 +624,8 @@ class EncodingModel(object):
                     name='parameters', initializer=self._get_dummy_parameters())
             else:
                 parameters = tf.get_variable(
-                    name='parameters', initializer=self.parameters)
+                    name='parameters',
+                    initializer=self.inverse_transform_parameters(self.parameters))
 
             # n_dimensions x n_stimuli
             basis_functions = self.build_basis_function(
@@ -709,8 +738,8 @@ class EncodingModel(object):
         pdf = pd.DataFrame(pdf, index=data.index, columns=columns)
         map_ = pd.DataFrame(map_, index=data.index)
         sd = pd.DataFrame(sd, index=data.index)
-        lower_ci = pd.DataFrame(lower_ci, index=data.index)
-        higher_ci = pd.DataFrame(higher_ci, index=data.index)
+        # lower_ci = pd.DataFrame(lower_ci, index=data.index)
+        # higher_ci = pd.DataFrame(higher_ci, index=data.index)
 
         return pdf, map_, sd, (lower_ci, higher_ci)
 
@@ -719,6 +748,18 @@ class EncodingModel(object):
             return self.parameter_labels
         else:
             return ['par_{}'.format(d+1) for d in range(parameters.shape[1])]
+
+    def inverse_transform_parameters(self, parameters):
+        # base case: just get rid of Dataframe
+        if hasattr(parameters, 'values'):
+            return parameters.values
+        else:
+            return parameters
+
+    def transform_parameters(self, parameters):
+        #base case: make dataframe
+        labels = self.get_parameter_labels(parameters)
+        return pd.DataFrame(parameters, columns=labels)
 
 
 class IsolatedPopulationsModel(object):
@@ -828,6 +869,25 @@ class StickModel(EncodingModel):
 
             return basis_predictions_
 
+class BinModel(EncodingModel):
+    n_populations = None
+    n_parameters = 1
+
+    def build_basis_function(self, graph, parameters, x):
+        self.logger.warning('Note that first parameter of BinModel '
+                            'corresponds to the Intercept (baseline) and '
+                            'is NOT used.')
+
+        with graph.as_default():
+            left_bins = parameters[tf.newaxis, 1:-1, 0]
+            right_bins = parameters[tf.newaxis, 2:, 0]
+            basis_predictions_ = tf.cast((left_bins <= x) & (x < right_bins), tf.float32)
+            intercept = tf.ones((basis_predictions_.shape[0], 1))
+            basis_predictions_ = tf.concat((intercept, basis_predictions_), 1)
+
+            return basis_predictions_
+
+
 
 class Discrete1DModel(EncodingModel):
 
@@ -877,28 +937,28 @@ class GaussianReceptiveFieldModel(EncodingModel):
                             parameters=parameters,
                             weights=weights)
 
-    def fit_parameters(self,
-                       paradigm,
-                       data,
-                       min_nsteps=100000,
-                       ftol=1e-6,
-                       progressbar=False):
+    def transform_parameters(self, parameters):
 
-        costs, parameters, predictions = super().fit_parameters(paradigm,
-                                                                data,
-                                                                min_nsteps,
-                                                                ftol,
-                                                                progressbar=progressbar)
+        parameters = super().transform_parameters(parameters)
 
         parameters['sd'] = _softplus(parameters['sd'])
 
         if self.positive_amplitudes:
-            parameters['amplitude'] = _softplus(
-                parameters['amplitude'])
+            parameters['amplitude'] = _softplus(parameters['amplitude'])
 
-            self.parameters = parameters
+        return parameters
 
-        return costs, parameters, predictions
+    def inverse_transform_parameters(self, parameters):
+
+        parameters = super().inverse_transform_parameters(parameters)
+
+        parameters[:, 1] = _inverse_softplus(parameters[:, 1])
+
+        if self.positive_amplitudes:
+            parameters[:, 2] = _inverse_softplus(
+                    parameters[:, 2])
+
+        return parameters
 
     def build_basis_function(self, graph, parameters, x):
         with graph.as_default():
@@ -943,20 +1003,9 @@ class GaussianReceptiveFieldModel(EncodingModel):
         pars[:, 2] = amplitudes
         pars[:, 3] = baselines
 
+        pars = pd.DataFrame(pars, columns=self.get_parameter_labels(pars))
+
         return pars
-
-    def simulate(self, paradigm=None, parameters=None, noise=1.):
-
-        paradigm = self._check_input(paradigm, 'paradigm')
-        parameters = self._check_input(parameters, 'parameters').copy()
-
-        # parameters[:, 1] = _inverse_softplus(parameters[:, 1])
-
-        # if self.positive_amplitudes:
-            # parameters[:, 2] = _inverse_softplus(parameters[:, 2])
-
-        data = super().simulate(paradigm, parameters, noise=noise)
-        return data
 
     def _get_graph_properties(self, paradigm, data, weights, parameters):
 
@@ -1007,6 +1056,36 @@ class GaussianReceptiveFieldModel(EncodingModel):
                        data=sm.data, weights=sm.weights)
 
         return sm
+
+    def to_bin_model(self, bins):
+
+        bins = np.hstack(([0], bins)).astype(np.float32)
+
+        weights = np.zeros((len(bins)-1, self.parameters.shape[0]))
+        weights[0, :] = self.parameters['baseline']
+
+        conversion_graph = tf.Graph()
+
+        mu = self.parameters['mu'].values[np.newaxis, :]
+        sd = self.parameters['sd'].values[np.newaxis, :]
+        x = (bins[1:-1, np.newaxis] + bins[2:, np.newaxis]) / 2
+        amplitude = self.parameters['amplitude'].values[np.newaxis, :]
+
+        with conversion_graph.as_default():
+            w_tf = amplitude * norm(x, mu, sd)
+
+            with tf.Session() as session:
+                weights[1:, :] = session.run(w_tf)
+
+        bm = BinModel(self.paradigm,
+                      self.data,
+                      bins[:, np.newaxis],
+                      weights)
+
+        bm.build_graph(paradigm=bm.paradigm, parameters=bm.parameters,
+                       data=bm.data, weights=bm.weights)
+
+        return bm
 
 class MexicanHatReceptiveFieldModel(GaussianReceptiveFieldModel):
 
@@ -1081,7 +1160,6 @@ class MexicanHatReceptiveFieldModel(GaussianReceptiveFieldModel):
     def simulate(self, paradigm=None, parameters=None, noise=1.):
 
         paradigm = self._check_input(paradigm, 'paradigm')
-        parameters = self._check_input(parameters, 'parameters').copy()
 
         data = super().simulate(paradigm, parameters, noise=noise)
         return data
