@@ -796,11 +796,13 @@ class GLMModel(EncodingModel):
     n_parameters = 0
     n_populations = None
 
-    def __init__(self, parameters=None, verbosity=logging.INFO):
+    def __init__(self, parameters=None, verbosity=logging.INFO,
+                 intercept=True):
         """
         parameters is a NxD or  array, where N is the number
         of basis functions and P is the number of parameters
         """
+        self.include_intercept=True
         return super().__init__()
 
     def build_graph(self,
@@ -850,7 +852,12 @@ class GLMModel(EncodingModel):
     def build_basis_function(self, graph, parameters, x):
         # time x basis_functions
         with graph.as_default():
-            basis_predictions_ = x
+            if self.include_intercept:
+                basis_predictions_ = tf.concat((tf.ones((x.shape[0], 1)),
+                                               x), axis=1)
+            else:
+                basis_predictions = x
+
 
         return basis_predictions_
 
@@ -859,6 +866,8 @@ class GLMModel(EncodingModel):
         )._get_graph_properties(paradigm, data, weights, parameters)
 
         n_populations = paradigm.shape[1]
+        if self.include_intercept:
+            n_populations += 1
 
         return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
 
