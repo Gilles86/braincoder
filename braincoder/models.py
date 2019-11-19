@@ -455,6 +455,9 @@ class EncodingModel(object):
 
         parameters = self.inverse_transform_parameters(parameters)
 
+        # n_populations, n_pars, n_voxels, n_timepoints,  \
+        # n_stim_dimensions = self._get_graph_properties(paradigm
+
         self.build_graph(paradigm=paradigm, data=data,
                          parameters=parameters, weights=None)
 
@@ -621,11 +624,13 @@ class EncodingModel(object):
             # n_populations x stim_dimension
             if self.parameters is None:
                 parameters = tf.get_variable(
-                    name='parameters', initializer=self._get_dummy_parameters())
+                    name='parameters', initializer=self._get_dummy_parameters(),
+                    dtype=tf.float32)
             else:
                 parameters = tf.get_variable(
                     name='parameters',
-                    initializer=self.inverse_transform_parameters(self.parameters))
+                    initializer=self.inverse_transform_parameters(self.parameters),
+                    dtype=tf.float32)
 
             # n_dimensions x n_stimuli
             basis_functions = self.build_basis_function(
@@ -750,9 +755,9 @@ class EncodingModel(object):
     def inverse_transform_parameters(self, parameters):
         # base case: just get rid of Dataframe
         if hasattr(parameters, 'values'):
-            return parameters.values
+            return parameters.values.astype(np.float32)
         else:
-            return parameters
+            return parameters.astype(np.float32)
 
     def transform_parameters(self, parameters):
         #base case: make dataframe
@@ -766,11 +771,6 @@ class EncodingModel(object):
         else:
             self.weights = None
 
-        if hasattr(self, 'parameters') and (self.parameters is not None):
-            self.parameters = self.parameters.loc[mask]
-        else:
-            self.parameters = None
-
         if hasattr(self, 'data') and (self.data is not None):
             self.data = self.data.loc[:, mask]
         else:
@@ -779,14 +779,36 @@ class EncodingModel(object):
         
         self.build_graph(self.paradigm, self.data, self.parameters, self.weights)
 
-
-
 class IsolatedPopulationsModel(object):
     """
     This subclass of EncodingModel assumes every population maps onto
     exactly one voxel.
     """
-    pass
+    def _get_graph_properties(self, paradigm, data, weights, parameters):
+
+        if data is not None:
+            self.n_populations = data.shape[-1]
+
+        if parameters is not None:
+            self.n_populations = parameters.shape[0]
+
+        n_populations = self.n_populations
+        n_pars = self.n_parameters
+
+        n_voxels = n_populations
+
+        n_timepoints = paradigm.shape[0]
+        n_stim_dimensions = paradigm.shape[1]
+
+        return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
+
+    def apply_mask(self, mask):
+        super().apply_mask(mask)
+
+        if hasattr(self, 'parameters') and (self.parameters is not None):
+            self.parameters = self.parameters.loc[mask]
+        else:
+            self.parameters = None
 
 
 class GLMModel(EncodingModel):
@@ -811,7 +833,19 @@ class GLMModel(EncodingModel):
 
         parameters = self._get_dummy_parameters(
             paradigm=paradigm)
-        super().build_graph(paradigm, data, parameters, weights)
+
+        if hasattr(self, 'weights') and (self.weights is not None):
+            self.weights = self.weights.loc[:, mask]
+        else:
+            self.weights = None
+
+        if hasattr(self, 'data') and (self.data is not None):
+            self.data = self.data.loc[:, mask]
+        else:
+            self.data = None
+
+        
+        self.build_graph(self.paradigm, self.data, self.weights, self.parameters)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
         """
@@ -990,20 +1024,20 @@ class GaussianReceptiveFieldModel(EncodingModel):
 
     def build_basis_function(self, graph, parameters, x):
         with graph.as_default():
-            self.mu_ = self.parameters_[:, 0]
-            self.sd_ = tf.math.softplus(parameters[:, 1])
+            mu_ = parameters[:, 0]
+            sd_ = tf.math.softplus(parameters[:, 1])
 
             if self.positive_amplitudes:
-                self.amplitude__ = parameters[:, 2]
-                self.amplitude_ = tf.math.softplus(self.amplitude__)
+                amplitude__ = parameters[:, 2]
+                amplitude_ = tf.math.softplus(amplitude__)
             else:
-                self.amplitude_ = parameters[:, 2]
-            self.baseline_ = parameters[:, 3]
+                amplitude_ = parameters[:, 2]
+            baseline_ = parameters[:, 3]
 
-            basis_predictions_ = self.baseline_[tf.newaxis, :] + \
-                norm(x, self.mu_[tf.newaxis, :],
-                     self.sd_[tf.newaxis, :]) *  \
-                self.amplitude_[tf.newaxis, :]
+            basis_predictions_ = baseline_[tf.newaxis, :] + \
+                norm(x, mu_[tf.newaxis, :],
+                     sd_[tf.newaxis, :]) *  \
+                amplitude_[tf.newaxis, :]
 
             return basis_predictions_
 
@@ -1034,24 +1068,6 @@ class GaussianReceptiveFieldModel(EncodingModel):
         pars = pd.DataFrame(pars, columns=self.get_parameter_labels(pars))
 
         return pars
-
-    def _get_graph_properties(self, paradigm, data, weights, parameters):
-
-        if data is not None:
-            self.n_populations = data.shape[-1]
-
-        if parameters is not None:
-            self.n_populations = parameters.shape[0]
-
-        n_populations = self.n_populations
-        n_pars = self.n_parameters
-
-        n_voxels = n_populations
-
-        n_timepoints = paradigm.shape[0]
-        n_stim_dimensions = paradigm.shape[1]
-
-        return n_populations, n_pars, n_voxels, n_timepoints, n_stim_dimensions
 
     def to_stickmodel(self, basis_stimuli=None):
 
@@ -1243,9 +1259,8 @@ class MexicanHatReceptiveFieldModel(GaussianReceptiveFieldModel):
         return sm
 
 
-class VoxelwiseGaussianReceptiveFieldModel(GaussianReceptiveFieldModel, IsolatedPopulationsModel):
+class VoxelwiseGaussianReceptiveFieldModel(IsolatedPopulationsModel, GaussianReceptiveFieldModel):
     pass
-
 
 def _softplus(x):
     return x * (x >= 0) + np.log1p(np.exp(-np.abs(x)))
