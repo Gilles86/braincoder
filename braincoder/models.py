@@ -506,7 +506,8 @@ class EncodingModel(object):
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
 
-        parameters = self.transform_parameters(self.parameters.copy())
+        if self.parameters is not None:
+            parameters = self.transform_parameters(self.parameters.copy())
 
         self.build_graph(paradigm, data, parameters=parameters)
         self.build_residuals_graph(
@@ -724,8 +725,6 @@ class EncodingModel(object):
                 sd = session.run(self.decode_sd_)
                 lower_ci, higher_ci = session.run(
                     [self.lower_ci_, self.upper_ci_])
-
-        print(pdf)
 
         if stimulus_range.shape[1] > 1:
             levels = [f'stim_dim{i}' for i in range(
