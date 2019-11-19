@@ -506,7 +506,8 @@ class EncodingModel(object):
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
 
-        if self.parameters is not None:
+        parameters = self.parameters
+        if parameters is not None:
             parameters = self.transform_parameters(self.parameters.copy())
 
         self.build_graph(paradigm, data, parameters=parameters)
@@ -778,7 +779,7 @@ class EncodingModel(object):
             self.data = None
 
         
-        self.build_graph(self.paradigm, self.data, self.parameters, self.weights)
+        self.build_graph(self.paradigm, self.data, self.weights, self.parameters)
 
 
 
