@@ -107,26 +107,21 @@ class EncodingModel(object):
                 print(f'ftol ratio: {ftol_ratio}')
                 patience_counter = 0
                 if progressbar:
-                    with tqdm(range(max_n_iterations)) as pbar:
-                        pbar = tqdm(range(max_n_iterations))
+                    pbar = tqdm(total=max_n_iterations)
+                for step in range(max_n_iterations):
+                    _, c = session.run(
+                        [train, self.cost_])
+                    costs[step] = c
+                    if progressbar:
+                        pbar.update(1)
+                        pbar.set_description(f'Current cost: {c:7g}')
 
-                        for step in pbar:
-                            _, c = session.run(
-                                [train, self.cost_])
-                            costs[step] = c
-                            pbar.set_description(f'Current cost: {c:7g}')
-
-                            if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio):
-                                patience_counter += 1
-                            if patience_counter == patience:
-                                break
-                else:
-                    for step in range(max_n_iterations):
-                        _, c, p = session.run(
-                            [train, self.cost_, self.parameters_])
-                        costs[step] = c
-                        if (costs[step - 1] >= c) & (costs[step - 1] / c < ftol_ratio):
-                            break
+                    if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio):
+                        patience_counter += 1
+                    if patience_counter == patience:
+                        if progressbar:
+                            pbar.close()
+                        break
 
                 parameters, predictions = session.run(
                     [self.parameters_, self.predictions_])
@@ -499,6 +494,7 @@ class EncodingModel(object):
                       rho_init=1e-9,
                       tau_init=None,
                       max_n_iterations=100000,
+                      patience=10,
                       ftol=1e-12,
                       also_fit_weights=False,
                       progressbar=True):
@@ -547,23 +543,25 @@ class EncodingModel(object):
 
                 costs = np.ones(max_n_iterations) * -np.inf
 
-                if progressbar:
-                    with tqdm(range(max_n_iterations)) as pbar:
-                        for step in pbar:
-                            _, c, rho_, sigma2, weights = session.run(
-                                [train, cost, self.rho_, self.sigma2_, self.weights_],)
-                            costs[step] = c
-                            pbar.set_description(f'Current cost: {c:7g}')
+                ftol_ratio = 1 + ftol
+                patience_counter = 0
 
-                            if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
-                                break
-                else:
-                    for step in range(max_n_iterations):
-                        _, c, rho_, sigma2, weights = session.run(
-                            [train, cost, self.rho_, self.sigma2_, self.weights_],)
-                        costs[step] = c
-                        if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
-                            break
+                if progressbar:
+                    pbar = tqdm(total=max_n_iterations)
+                for step in range(max_n_iterations):
+                    _, c, rho_, sigma2, weights = session.run(
+                        [train, cost, self.rho_, self.sigma2_, self.weights_],)
+                    costs[step] = c
+                    if progressbar:
+                        pbar.update(1)
+                        pbar.set_description(f'Current cost: {c:7g}')
+
+                    if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio):
+                        patience_counter += 1
+                    if patience_counter == patience:
+                        if progressbar:
+                            pbar.close()
+                        break
 
                 costs = costs[:step+1]
                 self.rho = session.run(self.rho_)
@@ -779,7 +777,7 @@ class EncodingModel(object):
             self.data = None
 
         
-        self.build_graph(self.paradigm, self.data, self.weights, self.parameters)
+        self.build_graph(self.paradigm, self.data, self.parameters, self.weights)
 
 
 
@@ -808,8 +806,8 @@ class GLMModel(EncodingModel):
     def build_graph(self,
                     paradigm,
                     data=None,
-                    weights=None,
-                    parameters=None):
+                    parameters=None,
+                    weights=None):
 
         parameters = self._get_dummy_parameters(
             paradigm=paradigm)
