@@ -73,7 +73,7 @@ class EncodingModel(object):
         self.logger = logging.getLogger(name='EncodingModel logger')
         self.logger.setLevel(logging.INFO)
 
-    def fit_parameters(self, paradigm, data, init_pars=None, min_nsteps=100000,
+    def fit_parameters(self, paradigm, data, init_pars=None, max_n_iterations=100000,
                        ftol=1e-9, learning_rate=0.001, patience=10, progressbar=False,):
 
         assert(len(data) == len(paradigm)
@@ -100,15 +100,15 @@ class EncodingModel(object):
             init = tf.global_variables_initializer()
 
             with tf.Session() as session:
-                costs = np.ones(min_nsteps) * np.inf
+                costs = np.ones(max_n_iterations) * np.inf
                 _ = session.run([init])
 
                 ftol_ratio = 1 + ftol
                 print(f'ftol ratio: {ftol_ratio}')
                 patience_counter = 0
                 if progressbar:
-                    with tqdm(range(min_nsteps)) as pbar:
-                        pbar = tqdm(range(min_nsteps))
+                    with tqdm(range(max_n_iterations)) as pbar:
+                        pbar = tqdm(range(max_n_iterations))
 
                         for step in pbar:
                             _, c = session.run(
@@ -121,7 +121,7 @@ class EncodingModel(object):
                             if patience_counter == patience:
                                 break
                 else:
-                    for step in range(min_nsteps):
+                    for step in range(max_n_iterations):
                         _, c, p = session.run(
                             [train, self.cost_, self.parameters_])
                         costs[step] = c
@@ -498,7 +498,7 @@ class EncodingModel(object):
                       distance_matrix=None,
                       rho_init=1e-9,
                       tau_init=None,
-                      min_nsteps=100000,
+                      max_n_iterations=100000,
                       ftol=1e-12,
                       also_fit_weights=False,
                       progressbar=True):
@@ -543,10 +543,10 @@ class EncodingModel(object):
                     self.alpha_trans_.load(-1, session)
                     self.beta_.load(1., session)
 
-                costs = np.ones(min_nsteps) * -np.inf
+                costs = np.ones(max_n_iterations) * -np.inf
 
                 if progressbar:
-                    with tqdm(range(min_nsteps)) as pbar:
+                    with tqdm(range(max_n_iterations)) as pbar:
                         for step in pbar:
                             _, c, rho_, sigma2, weights = session.run(
                                 [train, cost, self.rho_, self.sigma2_, self.weights_],)
@@ -556,7 +556,7 @@ class EncodingModel(object):
                             if (costs[step - 1] >= c) & (costs[step - 1] - c < ftol):
                                 break
                 else:
-                    for step in range(min_nsteps):
+                    for step in range(max_n_iterations):
                         _, c, rho_, sigma2, weights = session.run(
                             [train, cost, self.rho_, self.sigma2_, self.weights_],)
                         costs[step] = c
@@ -760,6 +760,27 @@ class EncodingModel(object):
         #base case: make dataframe
         labels = self.get_parameter_labels(parameters)
         return pd.DataFrame(parameters, columns=labels)
+
+    def apply_mask(self, mask):
+
+        if hasattr(self, 'weights') and (self.weights is not None):
+            self.weights = self.weights.loc[:, mask]
+        else:
+            self.weights = None
+
+        if hasattr(self, 'parameters') and (self.parameters is not None):
+            self.parameters = self.parameters.loc[mask]
+        else:
+            self.parameters = None
+
+        if hasattr(self, 'data') and (self.data is not None):
+            self.data = self.data.loc[:, mask]
+        else:
+            self.data = None
+
+        
+        self.build_graph(self.paradigm, self.data, self.parameters, self.weights)
+
 
 
 class IsolatedPopulationsModel(object):
