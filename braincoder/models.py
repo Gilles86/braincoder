@@ -831,19 +831,8 @@ class GLMModel(EncodingModel):
 
         parameters = self._get_dummy_parameters(
             paradigm=paradigm)
-
-        if hasattr(self, 'weights') and (self.weights is not None):
-            self.weights = self.weights.loc[:, mask]
-        else:
-            self.weights = None
-
-        if hasattr(self, 'data') and (self.data is not None):
-            self.data = self.data.loc[:, mask]
-        else:
-            self.data = None
-
         
-        self.build_graph(self.paradigm, self.data, self.weights, self.parameters)
+        return super().build_graph(self.paradigm, self.data, self.weights, parameters)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
         """
