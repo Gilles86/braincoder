@@ -94,8 +94,6 @@ class EncodingModel(object):
             self.cost_ = tf.reduce_sum((self.data_ - self.predictions_)**2)
 
             optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-            # optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate)
-            # optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
             train = optimizer.minimize(self.cost_)
             init = tf.global_variables_initializer()
 
