@@ -716,6 +716,7 @@ class EncodingModel(object):
 
         stimulus_range = self._check_stimulus_range(stimulus_range)
         data = self._check_input(data, 'data')
+        data = data.astype(np.float32)
 
         decode_graph = self.build_decoding_graph(
             data, stimulus_range, normalize)
@@ -833,19 +834,8 @@ class GLMModel(EncodingModel):
 
         parameters = self._get_dummy_parameters(
             paradigm=paradigm)
-
-        if hasattr(self, 'weights') and (self.weights is not None):
-            self.weights = self.weights.loc[:, mask]
-        else:
-            self.weights = None
-
-        if hasattr(self, 'data') and (self.data is not None):
-            self.data = self.data.loc[:, mask]
-        else:
-            self.data = None
-
         
-        self.build_graph(self.paradigm, self.data, self.weights, self.parameters)
+        return super().build_graph(paradigm, data, parameters, weights)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
         """
@@ -870,6 +860,8 @@ class GLMModel(EncodingModel):
 
     def fit_weights(self, paradigm, data, l2_cost=0.0):
         parameters = self._get_dummy_parameters(paradigm)
+
+        data = data.astype(np.float32)
 
         return super().fit_weights(paradigm=paradigm,
                                    data=data,
@@ -911,7 +903,7 @@ class GLMModel(EncodingModel):
 
     def _get_dummy_parameters(self, paradigm=None):
         paradigm = self._check_input(paradigm, 'paradigm')
-        return np.zeros((paradigm.shape[1], 0))
+        return np.zeros((paradigm.shape[1], 0), dtype=np.float32)
 
 
 class StickModel(EncodingModel):
