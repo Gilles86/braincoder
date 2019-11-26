@@ -74,16 +74,22 @@ class EncodingModel(object):
         self.logger.setLevel(logging.INFO)
 
     def fit_parameters(self, paradigm, data, init_pars=None, max_n_iterations=100000,
-                       ftol=1e-9, learning_rate=0.001, patience=10, progressbar=False,):
+                       ftol=1e-9, learning_rate=0.001, patience=10, progressbar=False,
+                       also_fit_weights=False, l2_cost=0.0):
 
         assert(len(data) == len(paradigm)
                ), "paradigm and data should be same length"
+
+        data_cols = pd.DataFrame(data).columns
 
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
 
         if init_pars is None:
             init_pars = self.init_parameters(data, paradigm)
+
+        if not issubclass(self.__class__, IsolatedPopulationsModel):
+            self.fit_weights(paradigm, data, parameters=init_pars, l2_cost=l2_cost)
 
         init_pars = self.inverse_transform_parameters(init_pars)
 
@@ -93,11 +99,17 @@ class EncodingModel(object):
 
             self.cost_ = tf.reduce_sum((self.data_ - self.predictions_)**2)
 
+            if l2_cost > 0:
+                self.cost_ += l2_cost * tf.reduce_sum(self.weights_**2)
+
             optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-            # optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate)
-            # optimizer = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
             train = optimizer.minimize(self.cost_)
             init = tf.global_variables_initializer()
+
+            var_list = [self.parameters_]
+
+            if also_fit_weights:
+                var_list += [self.weights]
 
             with tf.Session() as session:
                 costs = np.ones(max_n_iterations) * np.inf
@@ -126,11 +138,19 @@ class EncodingModel(object):
                 parameters, predictions = session.run(
                     [self.parameters_, self.predictions_])
 
+                if also_fit_weights:
+                    weights = session.run(self.weights_)
+
             costs = pd.Series(costs[:step + 1])
 
             parameters = self.transform_parameters(parameters)
 
             self.parameters = parameters
+
+            if also_fit_weights:
+                self.weights = pd.DataFrame(weights,
+                        index=self.parameters.index,
+                        columns=data.columns)
 
             predictions = pd.DataFrame(predictions,
                                        index=data.index,
