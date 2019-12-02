@@ -88,7 +88,7 @@ class EncodingModel(object):
         if init_pars is None:
             init_pars = self.init_parameters(data, paradigm)
 
-        if not issubclass(self.__class__, IsolatedPopulationsModel):
+        if not issubclass(self.__class__, IsolatedPopulationsModel) and not hasattr(self, 'weights'):
             self.fit_weights(paradigm, data, parameters=init_pars, l2_cost=l2_cost)
 
         init_pars = self.inverse_transform_parameters(init_pars)
@@ -102,17 +102,13 @@ class EncodingModel(object):
             if l2_cost > 0:
                 self.cost_ += l2_cost * tf.reduce_sum(self.weights_**2)
 
-            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-            train = optimizer.minimize(self.cost_)
-            init = tf.global_variables_initializer()
-
             var_list = [self.parameters_]
-
             if also_fit_weights:
-                var_list += [self.weights]
-                #ols_solver = tf.linalg.lstsq(self.basis_predictions_,
-                                             #self.data_,
-                                             #l2_regularizer=l2_cost)
+                var_list += [self.weights_]
+
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+            train = optimizer.minimize(self.cost_, var_list=var_list)
+            init = tf.global_variables_initializer()
 
             with tf.Session() as session:
                 costs = np.ones(max_n_iterations) * np.inf
