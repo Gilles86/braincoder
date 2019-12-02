@@ -929,6 +929,80 @@ class GLMModel(EncodingModel):
         paradigm = self._check_input(paradigm, 'paradigm')
         return np.zeros((paradigm.shape[1], 0), dtype=np.float32)
 
+class SigmoidModel(EncodingModel):
+    n_parameters = 4
+    parameter_labels = ['baseline', 'range', 'middle', 'slope']
+
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+            weights=None,
+                 monotonitcaly_increasing=True):
+
+        super().__init__(paradigm=paradigm,
+                         data=data,
+                         weights=weights,
+                         parameters=parameters)
+        self.monotonitcaly_increasing = monotonitcaly_increasing
+
+    def build_basis_function(self, graph, parameters, x):
+        with graph.as_default():
+            if self.monotonitcaly_increasing:
+                slope = tf.math.softplus(parameters[:, 3])
+            else:
+                slope = parameters[:, 3]
+
+            sigmoid_range = tf.math.softplus(parameters[:, 1])
+
+            basis_predictions_ = parameters[:, 0] + \
+                    sigmoid_range * tf.math.sigmoid(slope * (x - parameters[:, 2]))
+
+            return basis_predictions_
+
+
+    def transform_parameters(self, parameters):
+
+        parameters = super().transform_parameters(parameters)
+
+        if self.monotonitcaly_increasing:
+            parameters['slope'] = _softplus(parameters['slope'])
+
+        parameters['range'] = _softplus(parameters['range'])
+
+
+        return parameters
+
+    def inverse_transform_parameters(self, parameters):
+
+        parameters = super().inverse_transform_parameters(parameters)
+        parameters[:, 1] = _inverse_softplus(parameters[:, 1])
+
+        if self.monotonitcaly_increasing:
+            parameters[:, 3] = _inverse_softplus(parameters[:, 3])
+
+        return parameters
+
+    def init_parameters(self, data, paradigm):
+        baselines = data.min(0)
+        data_ = data - baselines
+        range_ = data_.max()
+        slopes = np.ones(data.shape[1])
+        middle = np.ones(data.shape[1]) * paradigm.mean().mean()
+        
+        n_populations = data.shape[1]
+        pars = np.zeros(
+            (n_populations, self.n_parameters), dtype=np.float32)
+
+        pars[:, 0] = baselines
+        pars[:, 1] = range_
+        pars[:, 2] = middle
+        pars[:, 3] = slopes
+
+        pars = pd.DataFrame(pars, columns=self.get_parameter_labels(pars))
+
+        return pars
+
+class VoxelwiseSigmoidModel(SigmoidModel, IsolatedPopulationsModel):
+    pass
 
 class StickModel(EncodingModel):
     n_populations = None
