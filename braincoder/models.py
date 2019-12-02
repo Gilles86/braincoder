@@ -110,10 +110,15 @@ class EncodingModel(object):
 
             if also_fit_weights:
                 var_list += [self.weights]
+                #ols_solver = tf.linalg.lstsq(self.basis_predictions_,
+                                             #self.data_,
+                                             #l2_regularizer=l2_cost)
 
             with tf.Session() as session:
                 costs = np.ones(max_n_iterations) * np.inf
                 _ = session.run([init])
+
+
 
                 ftol_ratio = 1 + ftol
                 print(f'ftol ratio: {ftol_ratio}')
@@ -123,6 +128,9 @@ class EncodingModel(object):
                 for step in range(max_n_iterations):
                     _, c = session.run(
                         [train, self.cost_])
+                    #if also_fit_weights:
+                        #_ = session.run(ols_solver)
+
                     costs[step] = c
                     if progressbar:
                         pbar.update(1)
@@ -579,7 +587,7 @@ class EncodingModel(object):
                         pbar.update(1)
                         pbar.set_description(f'Current cost: {c:7g}')
 
-                    if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio):
+                    if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio) & (np.sign(costs[step - 1]) == np.sign(c)):
                         patience_counter += 1
                     if patience_counter == patience:
                         if progressbar:
