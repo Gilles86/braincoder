@@ -74,7 +74,7 @@ class EncodingModel(object):
         self.logger.setLevel(logging.INFO)
 
     def fit_parameters(self, paradigm, data, init_pars=None, max_n_iterations=100000,
-                       ftol=1e-9, learning_rate=0.001, patience=10, progressbar=False,
+                       atol=1e-9, learning_rate=0.001, patience=10, progressbar=False,
                        also_fit_weights=False, l2_cost=0.0):
 
         assert(len(data) == len(paradigm)
@@ -115,9 +115,6 @@ class EncodingModel(object):
                 _ = session.run([init])
 
 
-
-                ftol_ratio = 1 + ftol
-                print(f'ftol ratio: {ftol_ratio}')
                 patience_counter = 0
                 if progressbar:
                     pbar = tqdm(total=max_n_iterations)
@@ -132,7 +129,7 @@ class EncodingModel(object):
                         pbar.update(1)
                         pbar.set_description(f'Current cost: {c:7g}')
 
-                    if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio):
+                    if costs[step - 1] - c < atol:
                         patience_counter += 1
                     if patience_counter == patience:
                         if progressbar:
@@ -521,7 +518,7 @@ class EncodingModel(object):
                       tau_init=None,
                       max_n_iterations=100000,
                       patience=10,
-                      ftol=1e-12,
+                      atol=1e-12,
                       also_fit_weights=False,
                       progressbar=True):
 
@@ -569,7 +566,6 @@ class EncodingModel(object):
 
                 costs = np.ones(max_n_iterations) * -np.inf
 
-                ftol_ratio = 1 + ftol
                 patience_counter = 0
 
                 if progressbar:
@@ -582,7 +578,7 @@ class EncodingModel(object):
                         pbar.update(1)
                         pbar.set_description(f'Current cost: {c:7g}')
 
-                    if (costs[step - 1] >= c) & ((costs[step - 1] / c) < ftol_ratio) & (np.sign(costs[step - 1]) == np.sign(c)):
+                    if (costs[step - 1] - c < atol):
                         patience_counter += 1
                     if patience_counter == patience:
                         if progressbar:
