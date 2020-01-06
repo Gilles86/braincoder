@@ -450,7 +450,7 @@ class EncodingModel(object):
 
         with self.graph.as_default():
             with tf.Session() as session:
-                feed_dict = {self.paradigm_: paradigm.values,
+                feed_dict = {self.paradigm_: paradigm,
                              self.parameters_: parameters}
 
                 if not issubclass(self.__class__, IsolatedPopulationsModel):
@@ -462,8 +462,7 @@ class EncodingModel(object):
                 predictions = session.run(
                     self.predictions_, feed_dict=feed_dict)
 
-        return pd.DataFrame(predictions, index=paradigm.index,
-                            columns=columns)
+        return pd.DataFrame(predictions, columns=columns)
 
     def fit_weights(self, paradigm, data, parameters=None, l2_cost=0.0):
 
@@ -761,13 +760,14 @@ class EncodingModel(object):
             columns = pd.MultiIndex.from_arrays(
                 list(stimulus_range.T), names=levels)
         else:
-            columns = pd.Index(stimulus_range.ravel(), name='stimulus')
+            levels = ['stimulus']
+            columns = pd.Index(stimulus_range.ravel(), name=[levels])
 
         pdf = pd.DataFrame(pdf, index=data.index, columns=columns)
-        map_ = pd.DataFrame(map_, index=data.index)
+        map_ = pd.DataFrame(map_, index=data.index, columns=levels)
         sd = pd.DataFrame(sd, index=data.index)
-        # lower_ci = pd.DataFrame(lower_ci, index=data.index)
-        # higher_ci = pd.DataFrame(higher_ci, index=data.index)
+        lower_ci = pd.DataFrame(lower_ci, index=data.index, columns=levels)
+        higher_ci = pd.DataFrame(higher_ci, index=data.index, columns=levels)
 
         return pdf, map_, sd, (lower_ci, higher_ci)
 
@@ -1078,6 +1078,10 @@ class GaussianReceptiveFieldModel(EncodingModel):
                          parameters=parameters)
         self.positive_amplitudes = positive_amplitudes
 
+
+        if parameters is not None:
+            self.n_populations = parameters.shape[0]
+
     def build_graph(self,
                     paradigm,
                     data=None,
@@ -1352,11 +1356,88 @@ class MexicanHatReceptiveFieldModel(GaussianReceptiveFieldModel):
 class VoxelwiseGaussianReceptiveFieldModel(IsolatedPopulationsModel, GaussianReceptiveFieldModel):
     pass
 
+class GaussianReceptiveFieldModel2D(EncodingModel):
+    """
+
+    Paradigm x has shape (n_timepoints, n, m), where n is the number of pixels
+    in the x and m the number of pixels in the z-direction.
+    """
+
+    n_parameters = 5
+    parameter_labels = ['mu_x', 'mu_y', 'sd', 'baseline', 'amplitude']
+
+    def __init__(self,
+            paradigm=None,
+            data=None,
+            extent=[-1, 1, -1, 1],
+            parameters=None):
+
+        self.extent = np.array(extent, dtype=np.float32)
+
+        super().__init__(paradigm=paradigm,
+                         data=data,
+                         parameters=parameters)
+
+
+    def build_basis_function(self, graph, parameters, x):
+        with graph.as_default():
+            self.mu_ = parameters[:, :2]
+            self.sd_ = tf.math.softplus(parameters[:, 2])
+            self.amplitude_ = tf.math.softplus(parameters[:, 3])
+            self.baseline_ = tf.math.softplus(parameters[:, 4])
+
+
+            size = x.shape[1:]
+
+            extent = self.extent
+            coords_x, coords_y = tf.meshgrid(tf.linspace(extent[0], extent[1], size[0]), 
+                                             tf.linspace(extent[2], extent[3], size[1]))
+
+            coords = tf.stack((tf.reshape(coords_x, (size[0]*size[1],)),
+                tf.reshape(coords_y, (size[0]*size[1], ))), 1)
+
+            gauss = tfd.MultivariateNormalDiag(loc=self.mu_,
+                    scale_identity_multiplier=self.sd_)
+            peak_height = gauss.prob(self.mu_)
+
+            kernel = tf.reshape(gauss.prob(coords[:, tf.newaxis, :]) / peak_height,
+                    tf.concat((size, [self.parameters.shape[0]]), axis=0))
+
+            basis_predictions_ = tf.reduce_sum((kernel[tf.newaxis, ...] * x[..., tf.newaxis]), [1, 2])
+
+            return basis_predictions_
+
+    
+
+    def _check_input(self, par, name=None):
+
+        if par is None:
+            if name is not None:
+                if hasattr(self, name):
+                    return getattr(self, name)
+                else:
+                    return None
+            else:
+                return None
+
+        if name == 'parameters':
+            raise Exception('Use self.transform_parameters')
+
+        if name == 'paradigm':
+            self.paradigm = pd.concat([pd.DataFrame(x) for x in par],
+                    axis=0,
+                    keys=[(e,) for e in range(1, len(par))],
+                    names=['frame'])
+            return par
+
+        return pd.DataFrame(par.astype(np.float32))
+
+
+class VoxelwiseGaussianReceptiveFieldModel2D(GaussianReceptiveFieldModel2D, IsolatedPopulationsModel):
+    pass
+
 def _softplus(x):
     return x * (x >= 0) + np.log1p(np.exp(-np.abs(x)))
-
-# def _softplus_tensor(x, name=None):
-    # return tf.log(1 + tf.exp(x), name=name)
 
 
 def _logit(x):
