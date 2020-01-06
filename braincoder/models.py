@@ -761,7 +761,7 @@ class EncodingModel(object):
                 list(stimulus_range.T), names=levels)
         else:
             levels = ['stimulus']
-            columns = pd.Index(stimulus_range.ravel(), name=[levels])
+            columns = pd.Index(stimulus_range.ravel(), name=levels[0])
 
         pdf = pd.DataFrame(pdf, index=data.index, columns=columns)
         map_ = pd.DataFrame(map_, index=data.index, columns=levels)
