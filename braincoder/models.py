@@ -74,7 +74,7 @@ class EncodingModel(object):
         self.logger.setLevel(logging.INFO)
 
     def fit_parameters(self, paradigm, data, init_pars=None, max_n_iterations=100000,
-                       atol=1e-9, learning_rate=0.001, patience=10, progressbar=False,
+                       atol=1e-9, learning_rate=0.001, patience=1000, progressbar=False,
                        also_fit_weights=False, l2_cost=0.0):
 
         assert(len(data) == len(paradigm)
@@ -292,7 +292,7 @@ class EncodingModel(object):
         with self.graph.as_default():
             self.rho_trans_ = tf.get_variable(
                 'rho_trans', shape=(), dtype=tf.float32)
-            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * 0.95
+            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * 0.9
 
             if tau_init is None:
                 self.tau_trans_ = tf.get_variable('tau_trans',
@@ -312,10 +312,12 @@ class EncodingModel(object):
                 self.alpha_trans_ = tf.get_variable(
                     name='alpha_trans', shape=(), dtype=tf.float32)
                 self.alpha_ = tf.math.sigmoid(
-                    self.alpha_trans_, name='alpha') * 0.95
+                    self.alpha_trans_, name='alpha') * 0.99
 
-                self.beta_ = tf.get_variable(
-                    name='beta', shape=(), dtype=tf.float32)
+                self.beta_trans_ = tf.get_variable(
+                    name='beta_trans', shape=(), dtype=tf.float32)
+                self.beta_ = _softplus_tensor(self.beta_trans_, name='beta') + 1e-1
+
                 D = tf.constant(distance_matrix.astype(np.float32))
 
                 self.sigma_D = self.rho_ * self.alpha_ * tf.exp(-self.beta_ * D) * tf.tensordot(self.tau_,
@@ -491,7 +493,7 @@ class EncodingModel(object):
                 _ = session.run(init)
                 weights = session.run(ols_solver)
 
-        self.weights = pd.DataFrame(weights)
+        self.weights = pd.DataFrame(weights, index=self.parameters.index, columns=data.columns)
 
         return self.weights
 
@@ -514,10 +516,12 @@ class EncodingModel(object):
                       residual_dist='gaussian',
                       lambd=1.,
                       distance_matrix=None,
-                      rho_init=1e-9,
+                      rho_init=0.1,
                       tau_init=None,
+                      alpha_init=.5,
+                      beta_init=.5,
                       max_n_iterations=100000,
-                      patience=10,
+                      patience=1000,
                       atol=1e-12,
                       also_fit_weights=False,
                       progressbar=True):
@@ -543,7 +547,7 @@ class EncodingModel(object):
 
             if distance_matrix is not None:
                 var_list.append(self.alpha_trans_)
-                var_list.append(self.beta_)
+                var_list.append(self.beta_trans_)
             if residual_dist == 't':
                 var_list.append(self.dof_trans_)
 
@@ -557,12 +561,12 @@ class EncodingModel(object):
                 session.run(init)
 
                 self.weights_.load(self.weights.values, session)
-                self.rho_trans_.load(rho_init, session)
+                self.rho_trans_.load(_logit(rho_init / 0.9), session)
                 self.lambd_.load(lambd, session)
 
                 if distance_matrix is not None:
-                    self.alpha_trans_.load(-1, session)
-                    self.beta_.load(1., session)
+                    self.alpha_trans_.load(_logit(alpha_init / 0.99), session)
+                    self.beta_trans_.load(_inverse_softplus(beta_init - 0.1), session)
 
                 costs = np.ones(max_n_iterations) * -np.inf
 
@@ -573,10 +577,17 @@ class EncodingModel(object):
                 for step in range(max_n_iterations):
                     _, c, rho_, sigma2, weights = session.run(
                         [train, cost, self.rho_, self.sigma2_, self.weights_],)
+                    if distance_matrix is not None:
+                        alpha, beta = session.run([self.alpha_, self.beta_])
+
                     costs[step] = c
                     if progressbar:
                         pbar.update(1)
-                        pbar.set_description(f'Current cost: {c:7g}')
+                        if distance_matrix is None:
+                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:.3f}')
+                        else:
+                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:0.3f}, alpha: {alpha:0.3f}, beta: {beta:0.3f}')
+
 
                     if (costs[step - 1] - c < atol):
                         patience_counter += 1
