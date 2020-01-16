@@ -304,7 +304,7 @@ class EncodingModel(object):
             self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') + 1e-6
 
             self.sigma2_trans_ = tf.Variable(
-                _inverse_softplus(1e-9), dtype=tf.float32, name='sigma2_trans')
+                _inverse_softplus(1e-6), dtype=tf.float32, name='sigma2_trans')
             self.sigma2_ = _softplus_tensor(
                 self.sigma2_trans_, name='sigma2')
 
@@ -353,9 +353,10 @@ class EncodingModel(object):
                 (1 - self.lambd_) * self.empirical_covariance_matrix_
 
             if residual_dist == 'gaussian':
-                self.residual_dist = tfd.MultivariateNormalFullCovariance(
+                chol = tf.linalg.cholesky(self.sigma_)
+                self.residual_dist = tfd.MultivariateNormalTriL(
                     tf.zeros(self.data_.shape[1]),
-                    self.sigma_,
+                    chol,
                     allow_nan_stats=False)
             elif residual_dist == 't':
                 self.dof_trans_ = tf.get_variable(
@@ -601,7 +602,8 @@ class EncodingModel(object):
                 self.tau = session.run(self.tau_)
                 self.omega = session.run(self.sigma_)
                 self.sigma2 = session.run(self.sigma2_)
-                predictions = session.run(self.predictions_)
+                self.predictions = session.run(self.predictions_)
+                self.residuals = session.run(self.residuals_)
 
                 if distance_matrix is not None:
                     self.alpha = session.run(self.alpha_)
@@ -611,7 +613,7 @@ class EncodingModel(object):
                     self.dof = session.run(self.dof_)
 
                 predictions = pd.DataFrame(
-                    predictions, index=data.index, columns=data.columns)
+                    self.predictions, index=data.index, columns=data.columns)
 
                 self.ols_weights = self.weights.copy()
 
