@@ -532,7 +532,7 @@ class EncodingModel(object):
 
         parameters = self.parameters
         if parameters is not None:
-            parameters = self.transform_parameters(self.parameters.copy())
+            parameters = self.inverse_transform_parameters(self.parameters.copy())
 
         self.build_graph(paradigm, data, parameters=parameters)
         self.build_residuals_graph(
