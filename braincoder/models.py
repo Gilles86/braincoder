@@ -1580,19 +1580,20 @@ class CombinedModel(EncodingModel):
 
     def inverse_transform_parameters(self, parameters):
 
-        parameters = []
+        combined_pars = []
 
         start_pop = 0
 
         for model in self.models:
             end_pop = start_pop + model.parameters.shape[0]
             labels = model.parameter_labels
-            pars = model.inverse_transform_parameters(model.parameters.iloc[start_pop:end_pop][labels])
-            parameters.append(pars)
+            pars = model.inverse_transform_parameters(parameters.iloc[start_pop:end_pop][labels])
+            combined_pars.append(pars)
+            start_pop = end_pop
 
-        parameters = np.vstack(parameters)
+        combined_pars = np.vstack(combined_pars)
 
-        return super().inverse_transform_parameters(parameters)
+        return super().inverse_transform_parameters(combined_pars)
 
 
     def init_parameters(self, data, paradigm):
@@ -1602,6 +1603,20 @@ class CombinedModel(EncodingModel):
         parameters = np.zeros((self.n_populations, 4))
 
         return parameters
+
+
+    def fit_weights(self, paradigm, data, parameters=None, l2_cost=0.0):
+        super().fit_weights(paradigm, data, parameters, l2_cost)
+
+
+        start_pop = 0
+        for model in self.models:
+            end_pop = start_pop + model.parameters.shape[0]
+            w = self.weights.iloc[start_pop:end_pop]
+            model.weights = w
+            start_pop = end_pop
+
+        return self.weights
 
 def _softplus(x):
     return x * (x >= 0) + np.log1p(np.exp(-np.abs(x)))
