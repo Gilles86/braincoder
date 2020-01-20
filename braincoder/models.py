@@ -213,9 +213,13 @@ class EncodingModel(object):
                     paradigm,
                     data=None,
                     parameters=None,
-                    weights=None):
+                    weights=None,
+                    graph=None):
 
-        self.graph = tf.Graph()
+        if graph is None:
+            self.graph = tf.Graph()
+        else:
+            self.graph = graph
 
         (n_populations, n_parameters, n_voxels,
          n_timepoints, n_stim_dimensions) = \
@@ -230,7 +234,8 @@ class EncodingModel(object):
         self.logger.info((n_populations, n_parameters,
                           n_voxels, n_timepoints, n_stim_dimensions))
 
-        with self.graph.as_default():
+        with self.graph.as_default(), tf.variable_scope(self.__class__.__name__):
+
 
             self.paradigm_ = tf.constant(paradigm.astype(np.float32),
                                          name='paradigm')
@@ -238,7 +243,7 @@ class EncodingModel(object):
             self.parameters_ = tf.get_variable(initializer=parameters.astype(np.float32),
                                                name='parameters',
                                                dtype=tf.float32)
-            
+
             self.basis_predictions_ = self.build_basis_function(
                 self.graph, self.parameters_, self.paradigm_)
 
@@ -561,7 +566,7 @@ class EncodingModel(object):
             with tf.Session() as session:
                 session.run(init)
 
-                self.weights_.load(self.weights.values, session)
+                # self.weights_.load(self.weights.values, session)
                 self.rho_trans_.load(_logit(rho_init / 0.9), session)
                 self.lambd_.load(lambd, session)
 
@@ -759,6 +764,7 @@ class EncodingModel(object):
                 session.run(init)
                 pdf = session.run(self.decode_pdf_)
                 map_ = session.run(self.decode_map_)
+                print(map_)
                 sd = session.run(self.decode_sd_)
                 lower_ci, higher_ci = session.run(
                     [self.lower_ci_, self.upper_ci_])
@@ -810,7 +816,7 @@ class EncodingModel(object):
         else:
             self.data = None
 
-        
+
         self.build_graph(self.paradigm, self.data, self.parameters, self.weights)
 
 class IsolatedPopulationsModel(object):
@@ -863,12 +869,13 @@ class GLMModel(EncodingModel):
                     paradigm,
                     data=None,
                     parameters=None,
-                    weights=None):
+                    weights=None,
+                    graph=None):
 
         parameters = self._get_dummy_parameters(
             paradigm=paradigm)
-        
-        return super().build_graph(paradigm, data, parameters, weights)
+
+        return super().build_graph(paradigm, data, parameters, weights, graph)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
         """
@@ -996,7 +1003,7 @@ class SigmoidModel(EncodingModel):
         range_ = data_.max()
         slopes = np.ones(data.shape[1])
         middle = np.ones(data.shape[1]) * paradigm.mean().mean()
-        
+
         n_populations = data.shape[1]
         pars = np.zeros(
             (n_populations, self.n_parameters), dtype=np.float32)
@@ -1080,11 +1087,13 @@ class GaussianReceptiveFieldModel(EncodingModel):
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
     def __init__(self, paradigm=None, data=None, parameters=None,
+            weights=None,
                  positive_amplitudes=True):
 
         super().__init__(paradigm=paradigm,
                          data=data,
-                         parameters=parameters)
+                         parameters=parameters,
+                         weights=weights)
         self.positive_amplitudes = positive_amplitudes
 
 
@@ -1095,12 +1104,14 @@ class GaussianReceptiveFieldModel(EncodingModel):
                     paradigm,
                     data=None,
                     parameters=None,
-                    weights=None):
+                    weights=None,
+                    graph=None):
 
         super().build_graph(paradigm=paradigm,
                             data=data,
                             parameters=parameters,
-                            weights=weights)
+                            weights=weights,
+                            graph=graph)
 
     def transform_parameters(self, parameters):
 
@@ -1399,7 +1410,7 @@ class GaussianReceptiveFieldModel2D(EncodingModel):
             size = x.shape[1:]
 
             extent = self.extent
-            coords_x, coords_y = tf.meshgrid(tf.linspace(extent[0], extent[1], size[0]), 
+            coords_x, coords_y = tf.meshgrid(tf.linspace(extent[0], extent[1], size[0]),
                                              tf.linspace(extent[2], extent[3], size[1]))
 
             coords = tf.stack((tf.reshape(coords_x, (size[0]*size[1],)),
@@ -1416,7 +1427,7 @@ class GaussianReceptiveFieldModel2D(EncodingModel):
 
             return basis_predictions_
 
-    
+
 
     def _check_input(self, par, name=None):
 
@@ -1444,6 +1455,147 @@ class GaussianReceptiveFieldModel2D(EncodingModel):
 
 class VoxelwiseGaussianReceptiveFieldModel2D(GaussianReceptiveFieldModel2D, IsolatedPopulationsModel):
     pass
+
+class CombinedModel(EncodingModel):
+
+    def __init__(self, models, paradigm=None, data=None, verbosity=logging.INFO):
+
+
+        self.models = models
+
+        super().__init__(paradigm=paradigm,
+                         data=data)
+
+
+        self.n_parameters = np.sum([model.n_parameters for model in self.models])
+        self.n_populations = np.sum([model.parameters.shape[0] for model in self.models])
+
+        self.weights = pd.concat([model.weights for model in self.models],
+                                 keys=[(model.__class__.__name__,) for model in self.models],
+                                 names=['models'],
+                                 axis=0)
+
+
+        self.parameters = pd.concat([model.parameters for model in self.models],
+                                 keys=[(model.__class__.__name__,) for model in self.models],
+                                 names=['models'],
+                                ignore_index=True,
+                                 axis=0)
+
+
+    def build_graph(self,
+                    paradigm,
+                    data=None,
+                    parameters=None,
+                    weights=None,
+                    graph=None):
+
+        self.graph = tf.Graph()
+
+        for model in self.models:
+            parameters = model.inverse_transform_parameters(model.parameters.copy())
+            model.build_graph(paradigm=paradigm,
+                              parameters=parameters,
+                              weights=model.weights,
+                              data=data,
+                              graph=self.graph)
+
+        n_voxels = np.array([model.n_voxels for model in self.models])
+        assert((n_voxels == n_voxels[0]).all())
+        self.n_voxels = n_voxels[0]
+
+        n_populations = self.n_populations
+        n_timepoints = len(paradigm)
+
+
+        with self.graph.as_default():
+
+
+            self.paradigm_ = tf.constant(paradigm.astype(np.float32),
+                                         name='paradigm')
+
+            max_n_pars = np.max([model.n_parameters for model in self.models])
+
+            self.parameters_ = tf.concat([model.parameters_ for model in self.models], axis=0)
+
+            self.weights_ = tf.concat([model.weights_ for model in self.models], axis=0)
+
+            self.basis_predictions_ = self.build_basis_function(self.graph,
+                                                                self.parameters_,
+                                                                self.paradigm_)
+
+            weights_shape = (
+                n_populations, self.n_voxels) if weights is None else None
+
+            self.logger.info('N populations {}, N voxels: {}'.format(
+                n_populations, self.n_voxels))
+
+            self.logger.info('Size predictions: {}'.format(
+                self.basis_predictions_))
+
+            self.predictions_ = tf.tensordot(self.basis_predictions_,
+                                                 self.weights_, (1, 0))
+
+            # Simulation
+            self.noise_level_ = tf.get_variable(
+                dtype=tf.float32, shape=(1, self.n_voxels), name='noise')
+
+            self.noise_ = tf.random.normal(shape=(n_timepoints, self.n_voxels),
+                                           mean=0.0,
+                                           stddev=self.noise_level_,
+                                           dtype=tf.float32)
+
+            self.noisy_prediction_ = self.predictions_ + self.noise_
+
+            if data is not None:
+                self.data_ = tf.constant(data.values, name='data')
+                self.residuals_ = self.data_ - self.predictions_
+                self.cost_ = tf.squeeze(tf.reduce_sum(self.residuals_**2))
+                self.mean_data_ = tf.reduce_mean(self.data_, 0)
+                self.ssq_data_ = tf.reduce_sum(
+                    (self.data_ - tf.expand_dims(self.mean_data_, 0))**2, 0)
+                self.rsq_ = 1 - (self.cost_ / self.ssq_data_)
+
+
+    def build_basis_function(self, graph, parameters, x):
+        with graph.as_default():
+
+            basis_functions = []
+
+            start_pop = 0
+
+            for model in self.models:
+                end_pop = start_pop + model.parameters.shape[0]
+                basis_functions.append(model.build_basis_function(graph, parameters[start_pop:end_pop, :], x))
+                start_pop = end_pop
+
+            return tf.concat(basis_functions, 1)
+
+
+    def inverse_transform_parameters(self, parameters):
+
+        parameters = []
+
+        start_pop = 0
+
+        for model in self.models:
+            end_pop = start_pop + model.parameters.shape[0]
+            labels = model.parameter_labels
+            pars = model.inverse_transform_parameters(model.parameters.iloc[start_pop:end_pop][labels])
+            parameters.append(pars)
+
+        parameters = np.vstack(parameters)
+
+        return super().inverse_transform_parameters(parameters)
+
+
+    def init_parameters(self, data, paradigm):
+
+        parameters = []
+
+        parameters = np.zeros((self.n_populations, 4))
+
+        return parameters
 
 def _softplus(x):
     return x * (x >= 0) + np.log1p(np.exp(-np.abs(x)))
