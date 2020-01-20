@@ -590,9 +590,9 @@ class EncodingModel(object):
                     if progressbar:
                         pbar.update(1)
                         if distance_matrix is None:
-                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:.3f}')
+                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:.3f}, sigma2: {sigma2:7g}')
                         else:
-                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:0.3f}, alpha: {alpha:0.3f}, beta: {beta:0.3f}')
+                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:0.3f}, sigma2: {sigma2:7g}, alpha: {alpha:0.3f}, beta: {beta:0.3f}')
 
 
                     if (costs[step - 1] - c < atol):
