@@ -1470,17 +1470,23 @@ class CombinedModel(EncodingModel):
         self.n_parameters = np.sum([model.n_parameters for model in self.models])
         self.n_populations = np.sum([model.parameters.shape[0] for model in self.models])
 
-        self.weights = pd.concat([model.weights for model in self.models],
-                                 keys=[(model.__class__.__name__,) for model in self.models],
-                                 names=['models'],
-                                 axis=0)
+        if not np.any([model.weights is None for model in self.models]): 
+            self.weights = pd.concat([model.weights for model in self.models if model.weights is not None],
+                                     keys=[(model.__class__.__name__,) for model in self.models],
+                                     names=['models'],
+                                     axis=0)
+        else:
+            self.weights = None
 
 
-        self.parameters = pd.concat([model.parameters for model in self.models],
-                                 keys=[(model.__class__.__name__,) for model in self.models],
-                                 names=['models'],
-                                ignore_index=True,
-                                 axis=0)
+        if not np.any([model.parameters is None for model in self.models]): 
+            self.parameters = pd.concat([model.parameters for model in self.models],
+                                     keys=[(model.__class__.__name__,) for model in self.models],
+                                     names=['models'],
+                                    ignore_index=True,
+                                     axis=0)
+        else:
+            self.parameters = None
 
 
     def build_graph(self,
