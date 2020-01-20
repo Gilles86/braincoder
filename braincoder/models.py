@@ -1618,6 +1618,13 @@ class CombinedModel(EncodingModel):
 
         return self.weights
 
+    def apply_mask(self, mask):
+        super().apply_mask(mask)
+
+        for model in self.models:
+            model.apply_mask(mask)
+
+
 def _softplus(x):
     return x * (x >= 0) + np.log1p(np.exp(-np.abs(x)))
 
