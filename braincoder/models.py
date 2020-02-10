@@ -344,7 +344,8 @@ class EncodingModel(object):
                                                         tf.transpose(
                                                             self.tau_),
                                                         axes=1) + \
-                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.reshape(self.tau_**2,
+                                                                       (self.tau_.shape[0] ,))) + \
                     self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
                                                            self.weights_, axes=(-2, -2)))
 
@@ -764,7 +765,6 @@ class EncodingModel(object):
                 session.run(init)
                 pdf = session.run(self.decode_pdf_)
                 map_ = session.run(self.decode_map_)
-                print(map_)
                 sd = session.run(self.decode_sd_)
                 lower_ci, higher_ci = session.run(
                     [self.lower_ci_, self.upper_ci_])
