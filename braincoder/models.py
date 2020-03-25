@@ -80,7 +80,6 @@ class EncodingModel(object):
         assert(len(data) == len(paradigm)
                ), "paradigm and data should be same length"
 
-        data_cols = pd.DataFrame(data).columns
 
         paradigm = self._check_input(paradigm, 'paradigm')
         data = self._check_input(data, 'data')
@@ -121,8 +120,6 @@ class EncodingModel(object):
                 for step in range(max_n_iterations):
                     _, c = session.run(
                         [train, self.cost_])
-                    #if also_fit_weights:
-                        #_ = session.run(ols_solver)
 
                     costs[step] = c
                     if progressbar:
@@ -144,7 +141,7 @@ class EncodingModel(object):
 
             costs = pd.Series(costs[:step + 1])
 
-            parameters = self.transform_parameters(parameters)
+            parameters = self.transform_parameters(parameters, index=data.columns)
 
             self.parameters = parameters
 
@@ -290,23 +287,23 @@ class EncodingModel(object):
                     (self.data_ - tf.expand_dims(self.mean_data_, 0))**2, 0)
                 self.rsq_ = 1 - (self.cost_ / self.ssq_data_)
 
-    def build_residuals_graph(self, tau_init=None, distance_matrix=None, residual_dist='gaussian'):
+    def build_residuals_graph(self, tau_init=None, distance_matrix=None, residual_dist='gaussian',
+                              stabilize_diagonal=1e-2, min_tau_ratio=0.0, max_rho=0.9):
 
         self.residual_dist_type = residual_dist
 
         with self.graph.as_default():
             self.rho_trans_ = tf.get_variable(
                 'rho_trans', shape=(), dtype=tf.float32)
-            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * 0.9
+            self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * max_rho
 
             if tau_init is None:
-                self.tau_trans_ = tf.get_variable('tau_trans',
-                                                  initializer=_inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis]))
-            else:
-                self.tau_trans_ = tf.get_variable('tau_trans',
-                                              initializer=_inverse_softplus_tensor(tau_init))
+                tau_init = _inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis])
 
-            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') + 1e-6
+            self.tau_trans_ = tf.get_variable('tau_trans',
+                                          initializer=_inverse_softplus_tensor(tau_init))
+
+            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') #+ min_tau_ratio * tau_init
 
             self.sigma2_trans_ = tf.Variable(
                 _inverse_softplus(1e-6), dtype=tf.float32, name='sigma2_trans')
@@ -349,20 +346,27 @@ class EncodingModel(object):
                                                            self.weights_, axes=(-2, -2)))
 
             self.empirical_covariance_matrix_ = tfp.stats.covariance(
-                self.data_)
+                self.residuals_)
 
             self.lambd_ = tf.get_variable(name='lambda',
                                           shape=())
 
-            self.sigma_ = self.lambd_ * self.sigma0_ +  \
+            sigma_ = self.lambd_ * self.sigma0_ +  \
                 (1 - self.lambd_) * self.empirical_covariance_matrix_
+            
+            #mean_tau = tf.math.reduce_mean(tf.diag_part(sigma_))
+
+            #self.sigma_ = sigma_ + tf.diag(tf.ones(self.data_.shape[1])) * tf.diag(self.tau_) * stabilize_diagonal
+            print(f'SIZE TAU: {self.tau_.shape}')
+            self.sigma_ = sigma_ + tf.diag(self.tau_[:, 0]) * stabilize_diagonal
 
             if residual_dist == 'gaussian':
-                chol = tf.linalg.cholesky(self.sigma_)
-                self.residual_dist = tfd.MultivariateNormalTriL(
-                    tf.zeros(self.data_.shape[1]),
-                    chol,
-                    allow_nan_stats=False)
+                #chol = tf.linalg.cholesky(self.sigma_)
+                #self.residual_dist = tfd.MultivariateNormalTriL(
+                    #tf.zeros(self.data_.shape[1]),
+                    #chol,
+                    #allow_nan_stats=False)
+                self.residual_dist = tfd.MultivariateNormalFullCovariance(tf.zeros(self.data_.shape[1]), self.sigma_, allow_nan_stats=False)
             elif residual_dist == 't':
                 self.dof_trans_ = tf.get_variable(
                     'dof_trans', dtype=tf.float32, initializer=_inverse_softplus(8.).astype(np.float32))
@@ -483,9 +487,6 @@ class EncodingModel(object):
 
         parameters = self.inverse_transform_parameters(parameters)
 
-        # n_populations, n_pars, n_voxels, n_timepoints,  \
-        # n_stim_dimensions = self._get_graph_properties(paradigm
-
         self.build_graph(paradigm=paradigm, data=data,
                          parameters=parameters, weights=None)
 
@@ -524,11 +525,16 @@ class EncodingModel(object):
                       distance_matrix=None,
                       rho_init=0.1,
                       tau_init=None,
+                      sigma2_init=1e-3,
                       alpha_init=.5,
                       beta_init=.5,
                       max_n_iterations=100000,
                       patience=1000,
                       atol=1e-12,
+                      stabilize_diagonal=1e-2,
+                      min_tau_ratio=0.0,
+                      max_rho=0.9,
+                      learning_rate=0.001,
                       also_fit_weights=False,
                       progressbar=True):
 
@@ -542,10 +548,12 @@ class EncodingModel(object):
         self.build_graph(paradigm, data, parameters=parameters)
         self.build_residuals_graph(
             distance_matrix=distance_matrix, residual_dist=residual_dist,
-        tau_init=tau_init)
+        tau_init=tau_init, stabilize_diagonal=stabilize_diagonal,
+            max_rho=max_rho,
+        min_tau_ratio=min_tau_ratio)
 
         with self.graph.as_default():
-            optimizer = tf.train.AdamOptimizer()
+            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
             cost = -tf.reduce_sum(self.likelihood_)
             var_list = [self.tau_trans_, self.rho_trans_, self.sigma2_trans_]
             if also_fit_weights:
@@ -566,13 +574,13 @@ class EncodingModel(object):
             with tf.Session() as session:
                 session.run(init)
 
-                # self.weights_.load(self.weights.values, session)
-                self.rho_trans_.load(_logit(rho_init / 0.9), session)
+                self.rho_trans_.load(_logit(rho_init), session)
+                self.sigma2_trans_.load(_inverse_softplus(sigma2_init), session)
                 self.lambd_.load(lambd, session)
 
                 if distance_matrix is not None:
-                    self.alpha_trans_.load(_logit(alpha_init / 0.99), session)
-                    self.beta_trans_.load(_inverse_softplus(beta_init - 0.1), session)
+                    self.alpha_trans_.load(_logit(alpha_init), session)
+                    self.beta_trans_.load(_inverse_softplus(beta_init), session)
 
                 costs = np.ones(max_n_iterations) * -np.inf
 
@@ -581,8 +589,13 @@ class EncodingModel(object):
                 if progressbar:
                     pbar = tqdm(total=max_n_iterations)
                 for step in range(max_n_iterations):
-                    _, c, rho_, sigma2, weights = session.run(
-                        [train, cost, self.rho_, self.sigma2_, self.weights_],)
+                    if step == 0:
+                        c, rho_, sigma2, weights = session.run(
+                            [cost, self.rho_, self.sigma2_, self.weights_],)
+                    else:
+                        _, c, rho_, sigma2, weights = session.run(
+                            [train, cost, self.rho_, self.sigma2_, self.weights_],)
+
                     if distance_matrix is not None:
                         alpha, beta = session.run([self.alpha_, self.beta_])
 
@@ -799,10 +812,10 @@ class EncodingModel(object):
         else:
             return parameters.astype(np.float32)
 
-    def transform_parameters(self, parameters):
+    def transform_parameters(self, parameters, index=None):
         #base case: make dataframe
         labels = self.get_parameter_labels(parameters)
-        return pd.DataFrame(parameters, columns=labels)
+        return pd.DataFrame(parameters, columns=labels, index=index)
 
     def apply_mask(self, mask):
 
@@ -975,9 +988,9 @@ class SigmoidModel(EncodingModel):
             return basis_predictions_
 
 
-    def transform_parameters(self, parameters):
+    def transform_parameters(self, parameters, index=None):
 
-        parameters = super().transform_parameters(parameters)
+        parameters = super().transform_parameters(parameters, index=index)
 
         if self.monotonitcaly_increasing:
             parameters['slope'] = _softplus(parameters['slope'])
@@ -1113,9 +1126,9 @@ class GaussianReceptiveFieldModel(EncodingModel):
                             weights=weights,
                             graph=graph)
 
-    def transform_parameters(self, parameters):
+    def transform_parameters(self, parameters, index=None):
 
-        parameters = super().transform_parameters(parameters)
+        parameters = super().transform_parameters(parameters, index=index)
 
         parameters['sd'] = _softplus(parameters['sd'])
 
