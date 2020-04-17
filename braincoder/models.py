@@ -298,15 +298,15 @@ class EncodingModel(object):
             self.rho_ = tf.math.sigmoid(self.rho_trans_, name='rho') * max_rho
 
             if tau_init is None:
-                tau_init = _inverse_softplus_tensor(tfp.stats.stddev(self.data_)[:, tf.newaxis])
+                tau_init = tfp.stats.stddev(self.data_)[:, tf.newaxis]
 
             self.tau_trans_ = tf.get_variable('tau_trans',
                                           initializer=_inverse_softplus_tensor(tau_init))
 
-            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') #+ min_tau_ratio * tau_init
+            self.tau_ = _softplus_tensor(self.tau_trans_, name='tau') + min_tau_ratio * tau_init
 
             self.sigma2_trans_ = tf.Variable(
-                _inverse_softplus(1e-6), dtype=tf.float32, name='sigma2_trans')
+                _inverse_softplus(1e-9), dtype=tf.float32, name='sigma2_trans')
             self.sigma2_ = _softplus_tensor(
                 self.sigma2_trans_, name='sigma2')
 
@@ -346,27 +346,20 @@ class EncodingModel(object):
                                                            self.weights_, axes=(-2, -2)))
 
             self.empirical_covariance_matrix_ = tfp.stats.covariance(
-                self.residuals_)
+                self.data_)
 
             self.lambd_ = tf.get_variable(name='lambda',
                                           shape=())
 
-            sigma_ = self.lambd_ * self.sigma0_ +  \
-                (1 - self.lambd_) * self.empirical_covariance_matrix_
-            
-            #mean_tau = tf.math.reduce_mean(tf.diag_part(sigma_))
-
-            #self.sigma_ = sigma_ + tf.diag(tf.ones(self.data_.shape[1])) * tf.diag(self.tau_) * stabilize_diagonal
-            print(f'SIZE TAU: {self.tau_.shape}')
-            self.sigma_ = sigma_ + tf.diag(self.tau_[:, 0]) * stabilize_diagonal
+            self.sigma_ = self.lambd_ * self.sigma0_ +  \
+                (1 - self.lambd_) * self.empirical_covariance_matrix_ + \
+                 tf.diag(self.tau_[:, 0]) * stabilize_diagonal
 
             if residual_dist == 'gaussian':
-                #chol = tf.linalg.cholesky(self.sigma_)
-                #self.residual_dist = tfd.MultivariateNormalTriL(
-                    #tf.zeros(self.data_.shape[1]),
-                    #chol,
-                    #allow_nan_stats=False)
-                self.residual_dist = tfd.MultivariateNormalFullCovariance(tf.zeros(self.data_.shape[1]), self.sigma_, allow_nan_stats=False)
+                self.residual_dist = tfd.MultivariateNormalFullCovariance(
+                    tf.zeros(self.data_.shape[1]),
+                    self.sigma_,
+                    allow_nan_stats=False)
             elif residual_dist == 't':
                 self.dof_trans_ = tf.get_variable(
                     'dof_trans', dtype=tf.float32, initializer=_inverse_softplus(8.).astype(np.float32))
