@@ -546,7 +546,7 @@ class EncodingModel(object):
         min_tau_ratio=min_tau_ratio)
 
         with self.graph.as_default():
-            optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+            optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate)
             cost = -tf.reduce_sum(self.likelihood_)
             var_list = [self.tau_trans_, self.rho_trans_, self.sigma2_trans_]
             if also_fit_weights:
@@ -596,13 +596,16 @@ class EncodingModel(object):
                     if progressbar:
                         pbar.update(1)
                         if distance_matrix is None:
-                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:.3f}, sigma2: {sigma2:7g}')
+                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:.3f}, sigma2: {sigma2:7g}, patience: {patience_counter}')
                         else:
-                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:0.3f}, sigma2: {sigma2:7g}, alpha: {alpha:0.3f}, beta: {beta:0.3f}')
+                            pbar.set_description(f'Current cost: {c:7g}, rho:{rho_:0.3f}, sigma2: {sigma2:7g}, alpha: {alpha:0.3f}, beta: {beta:0.3f}, patience: {patience_counter}')
 
 
                     if (costs[step - 1] - c < atol):
                         patience_counter += 1
+                    else:
+                        patience_counter = 0
+
                     if patience_counter == patience:
                         if progressbar:
                             pbar.close()
