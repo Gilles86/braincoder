@@ -714,6 +714,7 @@ class EncodingModel(object):
                     max_ll[:, tf.newaxis] > thr0
                 self.decode_pdf_ = tf.cast(
                     nonzeromask, tf.float32) * tf.exp(self.decode_pdf_log_ - max_ll[:, tf.newaxis])
+                self.decode_pdf_ /= tf.reduce_sum(self.decode_pdf_, 1, keepdims=True)
 
             else:
                 self.decode_pdf_ = tf.exp(self.decode_pdf_log_)
