@@ -527,7 +527,7 @@ class EncodingModel(object):
                       stabilize_diagonal=1e-2,
                       min_tau_ratio=0.0,
                       max_rho=0.9,
-                      learning_rate=0.001,
+                      learning_rate=0.1,
                       also_fit_weights=False,
                       progressbar=True):
 
@@ -775,8 +775,6 @@ class EncodingModel(object):
                 map_ = session.run(self.decode_map_)
                 print(map_)
                 sd = session.run(self.decode_sd_)
-                lower_ci, higher_ci = session.run(
-                    [self.lower_ci_, self.upper_ci_])
 
         if stimulus_range.shape[1] > 1:
             levels = [f'stim_dim{i}' for i in range(
@@ -790,10 +788,8 @@ class EncodingModel(object):
         pdf = pd.DataFrame(pdf, index=data.index, columns=columns)
         map_ = pd.DataFrame(map_, index=data.index, columns=levels)
         sd = pd.DataFrame(sd, index=data.index)
-        lower_ci = pd.DataFrame(lower_ci, index=data.index, columns=levels)
-        higher_ci = pd.DataFrame(higher_ci, index=data.index, columns=levels)
 
-        return pdf, map_, sd, (lower_ci, higher_ci)
+        return pdf, map_, sd
 
     def get_parameter_labels(self, parameters):
         if hasattr(self, 'parameter_labels'):
