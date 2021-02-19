@@ -146,8 +146,7 @@ class ParameterOptimizer(object):
             untransformed_parameters.numpy(), self.model.parameter_labels)
         self.prediction = pd.DataFrame(
             predictions.numpy(), columns=self.data.columns, index=self.data.index)
-        self.r2 = pd.DataFrame(
-            r2.numpy()[np.newaxis, :], columns=self.data.columns)
+        self.r2 = pd.Series(r2.numpy(), index=self.data.columns)
 
     def fit_grid(self, *args, **kwargs):
 
