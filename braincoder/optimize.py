@@ -144,6 +144,8 @@ class ParameterOptimizer(object):
 
         self.estimated_parameters = format_parameters(
             untransformed_parameters.numpy(), self.model.parameter_labels)
+        self.estimated_parameters.index = self.data.columns
+
         self.prediction = pd.DataFrame(
             predictions.numpy(), columns=self.data.columns, index=self.data.index)
         self.r2 = pd.Series(r2.numpy(), index=self.data.columns)
