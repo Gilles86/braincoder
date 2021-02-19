@@ -41,9 +41,6 @@ class EncodingModel(object):
         if weights is not None:
             self.weights = weights
 
-        # if self.weights is None:
-            # self.weights = np.identity(len(self.parameters), dtype=np.float32)
-
         predictions = self._predict(
             self.paradigm.values, self.parameters.values, self.weights)
 

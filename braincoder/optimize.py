@@ -198,6 +198,16 @@ class ParameterOptimizer(object):
 
         return ssq.idxmin(1).apply(lambda row: pd.Series(row, index=self.model.parameters.columns))
 
+    def get_predictions(self, parameters):
+        return self.model.predict(self.paradigm, parameters, None)
+
+    def get_residuals(self, parameters):
+        return self.data - self.get_predictions(parameters)
+
+    def get_r2(self, parameters):
+        residuals = self.get_residuals(parameters)
+        return 1 - (residuals.var() / self.data.var())
+
     @property
     def data(self):
         return self._data

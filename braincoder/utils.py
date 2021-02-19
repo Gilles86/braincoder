@@ -19,7 +19,7 @@ def format_data(data):
     return pd.DataFrame(data,
                         index=pd.Index(
                             np.arange(len(data)), name='time'),
-                        columns=pd.Index(np.arange(data.shape[1]), name='voxel'))
+                        columns=pd.Index(np.arange(data.shape[1]), name='voxel')).astype(np.float32)
 
 
 def format_paradigm(paradigm):
@@ -33,10 +33,13 @@ def format_paradigm(paradigm):
         paradigm = paradigm[:, np.newaxis]
 
     return pd.DataFrame(paradigm, index=pd.Index(range(len(paradigm)), name='time'),
-                        columns=pd.Index(range(paradigm.shape[1]), name='stimulus dimension'))
+                        columns=pd.Index(range(paradigm.shape[1]), name='stimulus dimension')).astype(np.float32)
 
 
 def format_parameters(parameters, parameter_labels=None):
+
+    if isinstance(parameters, pd.DataFrame):
+        return parameters.astype(np.float32)
 
     if parameters is None:
         return None
@@ -48,4 +51,4 @@ def format_parameters(parameters, parameter_labels=None):
     return pd.DataFrame(parameters,
                         columns=pd.Index(
                             parameter_labels, name='parameter'),
-                        index=pd.Index(range(1, len(parameters) + 1), name='population'))
+                        index=pd.Index(range(1, len(parameters) + 1), name='population')).astype(np.float32)
