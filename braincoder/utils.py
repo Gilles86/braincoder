@@ -25,6 +25,9 @@ def format_data(data):
 def format_paradigm(paradigm):
     if paradigm is None:
         return None
+    
+    if isinstance(paradigm, pd.DataFrame):
+        return paradigm
 
     if paradigm.ndim == 1:
         paradigm = paradigm[:, np.newaxis]

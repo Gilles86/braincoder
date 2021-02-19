@@ -20,16 +20,41 @@ class EncodingModel(object):
         self.parameters = parameters
         self.weights = weights
 
+        if (self.weights is None) and (self.parameters is not None) and (self.data is not None) and (len(self.parameters) == self.data.shape[1]):
+            self.weights = np.identity(len(self.parameters), dtype=np.float32)
+
     @tf.function
-    def _predict(self, paradigm, parameters, weights):
-        return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (1, 0))
+    def _predict(self, paradigm, parameters, weights=None):
+        if weights is None:
+            return self._basis_predictions(paradigm, parameters)
+        else:
+            return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (1, 0))
+
+    def predict(self, paradigm=None, parameters=None, weights=None):
+
+        if paradigm is not None:
+            self.paradigm = paradigm
+
+        if parameters is not None:
+            self.parameters = parameters
+
+        if weights is not None:
+            self.weights = weights
+
+        # if self.weights is None:
+            # self.weights = np.identity(len(self.parameters), dtype=np.float32)
+
+        predictions = self._predict(
+            self.paradigm.values, self.parameters.values, self.weights)
+
+        return format_data(predictions)
 
     def _fit_weights(self, y, paradigm, parameters, l2_cost=0.0):
         return tf.linalg.lstsq(self._basis_predictions(paradigm, parameters),
                                y,
                                l2_regularizer=l2_cost)
 
-    def simulate(self, paradigm, parameters, weights, noise=1.):
+    def simulate(self, paradigm, parameters, weights=None, noise=1.):
         self.paradigm = paradigm
         self.parameters = parameters
 
@@ -74,6 +99,7 @@ class EncodingModel(object):
     @parameters.setter
     def parameters(self, parameters):
         self._parameters = format_parameters(parameters, self.parameter_labels)
+
 
 class HRFEncodingModel(EncodingModel):
 
@@ -126,8 +152,14 @@ class GaussianPRF(EncodingModel):
             predictions = (confounds @ beta)
             data -= predictions
 
+        if hasattr(data, 'values'):
+            data = data.values
+
+        if hasattr(paradigm, 'values'):
+            paradigm = paradigm.values
+
         baselines = tf.reduce_min(data, 0)
-        data_ = data - baselines
+        data_ = (data - baselines)
 
         mus = tf.reduce_sum((data_ * paradigm), 0) / tf.reduce_sum(data_, 0)
         sds = tf.sqrt(tf.reduce_sum(data_ * (paradigm - mus)
@@ -159,6 +191,7 @@ class GaussianPRF(EncodingModel):
                               parameters[:, 1][:, tf.newaxis]),
                           parameters[:, 2][:, tf.newaxis],
                           parameters[:, 3][:, tf.newaxis]], axis=1)
+
 
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
     pass
