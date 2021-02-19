@@ -11,22 +11,25 @@ import logging
 
 class ParameterOptimizer(object):
 
-    def __init__(self, model, data, paradigm, log_dir=None, progressbar=True):
+    def __init__(self, model, data, paradigm, log_dir=False, progressbar=True):
         self.model = model
         self.data = data
         self.paradigm = paradigm
 
         self.progressbar = True
 
+        self.log_dir = log_dir
+
         if log_dir is None:
             log_dir = op.abspath('logs/fit')
+
+        if log_dir is not False:
             if not op.exists(log_dir):
                 os.makedirs(log_dir)
+            self.summary_writer = tf.summary.create_file_writer(op.join(log_dir,
+                                                                        datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
 
-        self.summary_writer = tf.summary.create_file_writer(op.join(log_dir,
-                                                                    datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
-
-    def optimize_parameters(self, max_n_iterations=1000,
+    def fit(self, max_n_iterations=1000,
                             min_n_iterations=100,
                             init_pars=None,
                             confounds=None,
@@ -110,8 +113,9 @@ class ParameterOptimizer(object):
 
                 mean_r2s.append(mean_r2)
 
-                with self.summary_writer.as_default():
-                    tf.summary.scalar('mean R2', mean_r2, step=step)
+                if hasattr(self, 'summary_write'):
+                    with self.summary_writer.as_default():
+                        tf.summary.scalar('mean R2', mean_r2, step=step)
 
                 if store_intermediate_parameters:
                     p = untransformed_parameters.numpy().T
@@ -124,7 +128,6 @@ class ParameterOptimizer(object):
 
                 pbar.set_description(f'Mean R2: {mean_r2:0.5f}')
 
-                self.summary_writer.flush()
 
             except Exception as e:
                 logging.log(f'Exception at step {step}: {e}')
@@ -146,7 +149,7 @@ class ParameterOptimizer(object):
         self.r2 = pd.DataFrame(
             r2.numpy()[np.newaxis, :], columns=self.data.columns)
 
-    def fit_parameters_with_grid(self, *args, **kwargs):
+    def fit_grid(self, *args, **kwargs):
 
         # Make sure that ranges for all parameters are given ing
         # *args or **kwargs

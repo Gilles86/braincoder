@@ -55,13 +55,13 @@ class EncodingModel(object):
         self.paradigm = paradigm
         self.parameters = parameters
 
-        self.data = self._simulate(paradigm, parameters, weights, noise)
+        self.data = self._simulate(self.paradigm, self.parameters, weights, noise)
         return self.data
 
     def _simulate(self, paradigm, parameters, weights, noise=1.):
 
         n_timepoints = paradigm.shape[0]
-        n_voxels = weights.shape[1]
+        n_voxels = parameters.shape[0]
 
         noise = tf.random.normal(shape=(n_timepoints, n_voxels),
                                  mean=0.0,
