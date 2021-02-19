@@ -209,7 +209,7 @@ class ParameterOptimizer(object):
         return self.model.predict(self.paradigm, parameters, None)
 
     def get_residuals(self, parameters):
-        return self.data - self.get_predictions(parameters)
+        return self.data - self.get_predictions(parameters).values
 
     def get_r2(self, parameters):
         residuals = self.get_residuals(parameters)
