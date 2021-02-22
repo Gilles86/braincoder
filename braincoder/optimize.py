@@ -30,13 +30,13 @@ class ParameterOptimizer(object):
                                                                         datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
 
     def fit(self, max_n_iterations=1000,
-                            min_n_iterations=100,
-                            init_pars=None,
-                            confounds=None,
-                            optimizer=None,
-                            store_intermediate_parameters=True,
-                            r2_atol=0.000001,
-                            learning_rate=0.01):
+            min_n_iterations=100,
+            init_pars=None,
+            confounds=None,
+            optimizer=None,
+            store_intermediate_parameters=True,
+            r2_atol=0.000001,
+            learning_rate=0.01):
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
 
@@ -51,7 +51,7 @@ class ParameterOptimizer(object):
             print('using get_init_pars')
         elif hasattr(init_pars, 'values'):
             init_pars = init_pars.values.astype(np.float32)
-        
+
         init_pars = self.model._transform_parameters_backward(init_pars)
 
         parameters = tf.Variable(initial_value=init_pars,
@@ -79,9 +79,8 @@ class ParameterOptimizer(object):
                     untransformed_parameters = self.model._transform_parameters_forward(
                         parameters)
 
-                    predictions_ = self.model._predict(self.paradigm,
-                                                       untransformed_parameters,
-                                                       np.identity(n_voxels, dtype=np.float32))
+                    predictions_ = self.model._predict(
+                        self.paradigm, untransformed_parameters, None)
 
                     if confounds is None:
                         residuals = y - predictions_
@@ -128,7 +127,6 @@ class ParameterOptimizer(object):
 
                 pbar.set_description(f'Mean R2: {mean_r2:0.5f}')
 
-
             except Exception as e:
                 logging.log(f'Exception at step {step}: {e}')
 
@@ -168,8 +166,6 @@ class ParameterOptimizer(object):
             raise ValueError(
                 f'Please provide parameter ranges for all these parameters: {self.model.parameter_labels}')
 
-
-
         def _create_grid(model, *args):
             parameters = pd.MultiIndex.from_product(
                 args, names=model.parameter_labels).to_frame(index=False)
@@ -192,17 +188,18 @@ class ParameterOptimizer(object):
             ssq = tf.math.reduce_variance(
                 grid_predictions[:, tf.newaxis, :] - data[:, :, tf.newaxis], 0)
             # ssq = pd.DataFrame(ssq.numpy(), index=data.columns,
-                               # columns=pd.MultiIndex.from_frame(par_grid))
+            # columns=pd.MultiIndex.from_frame(par_grid))
             return ssq
 
         ssq = []
         for chunk, pg in tqdm(par_grid.groupby('chunk')):
             ssq.append(_get_ssq_for_predictions(pg.values, self.data.values,
-                self.model, self.paradigm.values))
+                                                self.model, self.paradigm.values))
 
         # ssq = pd.concat(ssq, 1)
         ssq = tf.concat(ssq, axis=1).numpy()
-        ssq = pd.DataFrame(ssq, index=self.data.columns, columns=pd.MultiIndex.from_frame(par_grid))
+        ssq = pd.DataFrame(ssq, index=self.data.columns,
+                           columns=pd.MultiIndex.from_frame(par_grid))
 
         return ssq.idxmin(1).apply(lambda row: pd.Series(row, index=self.model.parameter_labels))
 
