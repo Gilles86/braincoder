@@ -52,3 +52,8 @@ def format_parameters(parameters, parameter_labels=None):
                         columns=pd.Index(
                             parameter_labels, name='parameter'),
                         index=pd.Index(range(1, len(parameters) + 1), name='population')).astype(np.float32)
+
+
+def format_weights(weights):
+    if weights is not None:
+        return weights.astype(np.float32)

@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
-from .utils import norm, format_data, format_paradigm, format_parameters
+from .utils import norm, format_data, format_paradigm, format_parameters, format_weights
 
 
 class EncodingModel(object):
@@ -96,6 +96,14 @@ class EncodingModel(object):
     @parameters.setter
     def parameters(self, parameters):
         self._parameters = format_parameters(parameters, self.parameter_labels)
+
+    @property
+    def weights(self):
+        return self._weights
+
+    @parameters.setter
+    def weights(self, weights):
+        self._weights = format_weights(weights)
 
 
 class HRFEncodingModel(EncodingModel):

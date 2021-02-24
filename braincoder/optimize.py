@@ -203,6 +203,9 @@ class ParameterOptimizer(object):
 
         return ssq.idxmin(1).apply(lambda row: pd.Series(row, index=self.model.parameter_labels))
 
+    def fit_residual_distribution(self):
+
+
     def get_predictions(self, parameters):
         return self.model.predict(self.paradigm, parameters, None)
 
