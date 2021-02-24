@@ -178,7 +178,7 @@ class GaussianPRF(EncodingModel):
     def _transform_parameters_forward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
     @tf.function
@@ -186,7 +186,8 @@ class GaussianPRF(EncodingModel):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           tfp.math.softplus_inverse(
                               parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
 
