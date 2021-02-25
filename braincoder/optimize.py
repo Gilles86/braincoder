@@ -67,6 +67,8 @@ class ParameterFitter(object):
         parameters = tf.Variable(initial_value=init_pars,
                                  shape=(n_voxels, n_pars), name='estimated_parameters', dtype=tf.float32)
 
+        trainable_variables = [parameters]
+
         ssq_data = tf.math.reduce_variance(y, 0)
         ssq_data = tf.clip_by_value(ssq_data, 1e-6, 1e12)
 
@@ -82,6 +84,38 @@ class ParameterFitter(object):
 
         mean_r2s = []
 
+
+        if confounds is None:
+            @tf.function
+            def get_ssq(parameters):
+                predictions = self.model._predict(
+                    self.paradigm, parameters, None)
+
+                residuals = y - predictions
+
+                ssq = tf.squeeze(tf.reduce_sum(residuals**2))
+                ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
+                return ssq
+
+        else:
+            @tf.function
+            def get_ssq(parameters):
+                predictions_ = self.model._predict(
+                    self.paradigm, parameters, None)
+
+                predictions = tf.transpose(predictions_)[
+                    :, tf.newaxis, :, tf.newaxis]
+                X = tf.concat([predictions, confounds], -1)
+                beta = tf.linalg.lstsq(X, tf.transpose(
+                    y)[:, tf.newaxis, :, tf.newaxis])
+                predictions = tf.transpose((X @ beta)[:, 0, :, 0])
+
+                residuals = y - predictions
+
+                ssq = tf.squeeze(tf.reduce_sum(residuals**2))
+                ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
+                return ssq
+
         for step in pbar:
             try:
                 with tf.GradientTape() as t:
@@ -89,27 +123,9 @@ class ParameterFitter(object):
                     untransformed_parameters = self.model._transform_parameters_forward(
                         parameters)
 
-                    predictions_ = self.model._predict(
-                        self.paradigm, untransformed_parameters, None)
-
-                    if confounds is None:
-                        residuals = y - predictions_
-                        predictions = predictions_
-                    else:
-                        predictions = tf.transpose(predictions_)[
-                            :, tf.newaxis, :, tf.newaxis]
-                        X = tf.concat([predictions, confounds], -1)
-                        beta = tf.linalg.lstsq(X, tf.transpose(
-                            y)[:, tf.newaxis, :, tf.newaxis])
-                        predictions = tf.transpose((X @ beta)[:, 0, :, 0])
-
-                    residuals = y - predictions
-                    ssq = tf.squeeze(tf.reduce_sum(residuals**2, ))
-                    ssq = tf.clip_by_value(
-                        tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
+                    ssq = get_ssq(untransformed_parameters)
                     cost = tf.reduce_sum(ssq)
 
-                trainable_variables = [parameters]
                 gradients = t.gradient(cost, trainable_variables)
                 r2 = (1 - (ssq / ssq_data))
                 mean_r2 = tf.reduce_mean(r2)
@@ -154,10 +170,8 @@ class ParameterFitter(object):
             untransformed_parameters.numpy(), self.model.parameter_labels)
         self.estimated_parameters.index = self.data.columns
 
-        self.prediction = pd.DataFrame(
-            predictions.numpy(), columns=self.data.columns, index=self.data.index)
+        self.predictions = self.model.predict(self.paradigm, self.estimated_parameters, self.model.weights)
         self.r2 = pd.Series(r2.numpy(), index=self.data.columns)
-
 
         return self.estimated_parameters
 
