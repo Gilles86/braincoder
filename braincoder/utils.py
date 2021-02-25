@@ -56,4 +56,14 @@ def format_parameters(parameters, parameter_labels=None):
 
 def format_weights(weights):
     if weights is not None:
-        return weights.astype(np.float32)
+        if isinstance(weights, pd.DataFrame):
+            return weights
+        else:
+            return pd.DataFrame(weights,
+                    index=pd.Index(range(1, len(weights) + 1), name='population'),
+                    columns=pd.Index(np.arange(weights.shape[1]), name='voxel')).astype(np.float32)
+
+
+def get_map(p):
+    stimuli = p.columns.to_frame(index=False).T
+    return stimuli.groupby(level=0).apply(lambda d: (p*d.values).sum(1) / p.sum(1)).T

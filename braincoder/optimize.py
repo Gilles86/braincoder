@@ -7,9 +7,19 @@ import os
 from tqdm import tqdm
 from .utils import format_data, format_parameters, format_paradigm
 import logging
+from tensorflow.math import softplus, sigmoid
+import tensorflow_probability as tfp
+from tensorflow_probability import distributions as tfd
+
+softplus_inverse = tfp.math.softplus_inverse
 
 
-class ParameterOptimizer(object):
+def logit(x):
+    """ Computes the logit function, i.e. the logistic sigmoid inverse. """
+    return - np.log(1. / x - 1.)
+
+
+class ParameterFitter(object):
 
     def __init__(self, model, data, paradigm, log_dir=False, progressbar=True):
         self.model = model
@@ -148,6 +158,9 @@ class ParameterOptimizer(object):
             predictions.numpy(), columns=self.data.columns, index=self.data.index)
         self.r2 = pd.Series(r2.numpy(), index=self.data.columns)
 
+
+        return self.estimated_parameters
+
     def fit_grid(self, *args, **kwargs):
 
         # Calculate a proper chunk size for cutting up the parameter grid
@@ -203,9 +216,6 @@ class ParameterOptimizer(object):
 
         return ssq.idxmin(1).apply(lambda row: pd.Series(row, index=self.model.parameter_labels))
 
-    def fit_residual_distribution(self):
-
-
     def get_predictions(self, parameters):
         return self.model.predict(self.paradigm, parameters, None)
 
@@ -234,3 +244,118 @@ class ParameterOptimizer(object):
     @paradigm.setter
     def paradigm(self, paradigm):
         self._paradigm = format_paradigm(paradigm)
+
+
+class ResidualFitter(object):
+
+    def __init__(self, model, data, paradigm=None, parameters=None, weights=None):
+
+        self.model = model
+        self.data = format_data(data)
+
+        if paradigm is None:
+            if self.model.paradigm is None:
+                raise ValueError('Need to have paradigm')
+        else:
+            self.model.paradigm = paradigm
+
+        if parameters is None:
+            if self.model.parameters is None:
+                raise ValueError('Need to have parameters')
+        else:
+            self.model.parameters = parameters
+
+        if weights is not None:
+            self.model.weights = weights
+
+    def fit(self, init_rho=.1, init_tau=None, init_sigma2=1e-9, D=None, max_n_iterations=1000,
+            method='likelihood',
+            learning_rate=0.1, rtol=1e-6, lag=100):
+
+        n_voxels = self.data.shape[1]
+
+        residuals = (self.data - self.model.predict()).values
+
+        if init_tau is None:
+            init_tau = self.data.std().values[np.newaxis, :]
+
+        tau_ = tf.Variable(initial_value=softplus_inverse(init_tau), shape=(
+            1, n_voxels), name='tau_trans', dtype=tf.float32)
+        rho_ = tf.Variable(initial_value=logit(
+            init_rho), shape=None, name='rho_trans', dtype=tf.float32)
+        sigma2_ = tf.Variable(initial_value=softplus_inverse(
+            init_sigma2), shape=None, name='sigma2_trans', dtype=tf.float32)
+
+        weights = self.model.weights.values
+        WtW = tf.transpose(weights) @ weights
+
+        trainable_variables = [tau_, rho_, sigma2_]
+
+
+        if method == 'likelihood':
+            @tf.function
+            def likelihood(tau, rho, sigma2):
+                omega = self._get_omega(tau, rho, sigma2, WtW)
+
+                residual_dist = tfd.MultivariateNormalFullCovariance(
+                    tf.zeros(n_voxels),
+                    omega, allow_nan_stats=False)
+
+                return tf.reduce_sum(residual_dist.log_prob(residuals))
+
+            fit_stat = likelihood
+
+        elif method == 'ssq_cov':
+            
+            sample_cov = tfp.stats.covariance(self.data)
+
+            @tf.function
+            def ssq(tau, rho, sigma2):
+                omega = self._get_omega(tau, rho, sigma2, WtW)
+                ssq = tf.reduce_sum((omega - sample_cov)**2)
+
+                return -ssq
+
+            fit_stat = ssq
+
+        opt = tf.optimizers.Adam(learning_rate=learning_rate)
+        
+        pbar = tqdm(range(max_n_iterations))
+
+        costs = np.zeros(max_n_iterations)
+
+        for step in pbar:
+            with tf.GradientTape() as tape:
+                tau = softplus(tau_)
+                rho = sigmoid(rho_)
+                sigma2 = softplus(sigma2_)
+                cost = -fit_stat(tau, rho, sigma2)
+                gradients = tape.gradient(cost,
+                        trainable_variables)
+                opt.apply_gradients(zip(gradients, trainable_variables))
+
+                pbar.set_description(f'fit stat: {-cost.numpy():0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}')
+
+                costs[step] = cost.numpy()
+
+                previous_cost = costs[np.min(step-lag, 0)]
+                if np.sign(previous_cost) == np.sign(cost):
+                    if (cost / previous_cost) > 1 - rtol:
+                        break
+    
+
+        return self._get_omega(tau, rho, sigma2, WtW).numpy()
+
+
+    @tf.function
+    def _get_omega(self, tau, rho, sigma2, WtW):
+        return rho * tf.transpose(tau) @ tau  + \
+                (1 - rho) * tf.linalg.tensor_diag(tau[0, :]**2) + \
+                sigma2 * WtW
+
+# weights = np.identity(3)
+# parameters = np.diag([1, 2, 3])
+# paradigm = np.array([[1, 2, 3]]).T
+# discretemodel = DiscreteModel(
+# weights=weights, parameters=parameters, paradigm=paradigm)
+# data = discretemodel.predict()
