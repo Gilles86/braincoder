@@ -332,6 +332,19 @@ class ResidualFitter(object):
 
             fit_stat = ssq
 
+        elif method == 'slogsq_cov':
+            
+            sample_cov = tfp.stats.covariance(self.data)
+
+            @tf.function
+            def ssq(tau, rho, sigma2):
+                omega = self._get_omega(tau, rho, sigma2, WtW)
+                ssq = tf.reduce_sum(tf.math.log(1+(omega - sample_cov)**2))
+
+                return -ssq
+
+            fit_stat = ssq
+
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
         
         pbar = tqdm(range(max_n_iterations))
