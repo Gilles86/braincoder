@@ -72,7 +72,6 @@ class ParameterFitter(object):
         ssq_data = tf.math.reduce_variance(y, 0)
         ssq_data = tf.clip_by_value(ssq_data, 1e-6, 1e12)
 
-        pbar = tqdm(range(max_n_iterations))
 
         if confounds is not None:
             # n_voxels x 1 x n_timepoints x n variables
@@ -116,58 +115,81 @@ class ParameterFitter(object):
                 ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
                 return ssq
 
-        for step in pbar:
-            try:
-                with tf.GradientTape() as t:
+        if optimizer is None:
+            pbar = tqdm(range(max_n_iterations))
+            for step in pbar:
+                try:
+                    with tf.GradientTape() as t:
 
-                    untransformed_parameters = self.model._transform_parameters_forward(
-                        parameters)
+                        untransformed_parameters = self.model._transform_parameters_forward(
+                            parameters)
 
-                    ssq = get_ssq(untransformed_parameters)
-                    cost = tf.reduce_sum(ssq)
+                        ssq = get_ssq(untransformed_parameters)
+                        cost = tf.reduce_sum(ssq)
 
-                gradients = t.gradient(cost, trainable_variables)
-                r2 = (1 - (ssq / ssq_data))
-                mean_r2 = tf.reduce_mean(r2)
+                    gradients = t.gradient(cost, trainable_variables)
+                    r2 = (1 - (ssq / ssq_data))
+                    mean_r2 = tf.reduce_mean(r2)
 
-                if step >= min_n_iterations:
-                    r2_diff = mean_r2 - mean_r2s[-1]
-                    if (r2_diff >= 0.0) & (r2_diff < r2_atol):
-                        pbar.close()
-                        break
+                    if step >= min_n_iterations:
+                        r2_diff = mean_r2 - mean_r2s[-1]
+                        if (r2_diff >= 0.0) & (r2_diff < r2_atol):
+                            pbar.close()
+                            break
 
-                mean_r2s.append(mean_r2)
+                    mean_r2s.append(mean_r2)
 
-                if hasattr(self, 'summary_write'):
-                    with self.summary_writer.as_default():
-                        tf.summary.scalar('mean R2', mean_r2, step=step)
+                    if hasattr(self, 'summary_write'):
+                        with self.summary_writer.as_default():
+                            tf.summary.scalar('mean R2', mean_r2, step=step)
 
-                if store_intermediate_parameters:
-                    p = untransformed_parameters.numpy().T
-                    intermediate_parameters.append(
-                        np.reshape(p, np.prod(p.shape)))
-                    intermediate_parameters[-1] = np.concatenate(
-                        (intermediate_parameters[-1], r2), 0)
+                    if store_intermediate_parameters:
+                        p = untransformed_parameters.numpy().T
+                        intermediate_parameters.append(
+                            np.reshape(p, np.prod(p.shape)))
+                        intermediate_parameters[-1] = np.concatenate(
+                            (intermediate_parameters[-1], r2), 0)
 
-                opt.apply_gradients(zip(gradients, trainable_variables))
+                    opt.apply_gradients(zip(gradients, trainable_variables))
 
-                pbar.set_description(f'Mean R2: {mean_r2:0.5f}')
+                    pbar.set_description(f'Mean R2: {mean_r2:0.5f}')
 
-            except Exception as e:
-                logging.log(f'Exception at step {step}: {e}')
+                except Exception as e:
+                    logging.log(f'Exception at step {step}: {e}')
 
-        if store_intermediate_parameters:
-            columns = pd.MultiIndex.from_product([self.model.parameter_labels + ['r2'],
-                                                  np.arange(n_voxels)],
-                                                 names=['parameter', 'voxel'])
+            if store_intermediate_parameters:
+                columns = pd.MultiIndex.from_product([self.model.parameter_labels + ['r2'],
+                                                      np.arange(n_voxels)],
+                                                     names=['parameter', 'voxel'])
 
-            self.intermediate_parameters = pd.DataFrame(intermediate_parameters,
-                                                        columns=columns,
-                                                        index=pd.Index(np.arange(len(intermediate_parameters)),
-                                                                       name='step'))
+                self.intermediate_parameters = pd.DataFrame(intermediate_parameters,
+                                                            columns=columns,
+                                                            index=pd.Index(np.arange(len(intermediate_parameters)),
+                                                                           name='step'))
 
-        self.estimated_parameters = format_parameters(
-            untransformed_parameters.numpy(), self.model.parameter_labels)
+            self.estimated_parameters = format_parameters(
+                untransformed_parameters.numpy(), self.model.parameter_labels)
+
+        elif optimizer.endswith('bfgs'):
+
+            def bfgs_cost(trans_parameters):
+                parameters = self.model._transform_parameters_forward(trans_parameters)
+                return tfp.math.value_and_gradient(get_ssq, parameters)
+
+            if optimizer == 'bfgs':
+                optim_results = tfp.optimizer.bfgs_minimize(bfgs_cost,
+                    initial_position=init_pars, tolerance=1e-6,
+                    max_iterations=500)
+            elif optimizer == 'lbfgs':
+                optim_results = tfp.optimizer.lbfgs_minimize(bfgs_cost,
+                    initial_position=init_pars, tolerance=1e-6,
+                    max_iterations=500)
+        
+            self.estimated_parameters = format_parameters(optim_results.position, self.model.parameter_labels)
+
+            ssq = get_ssq(optim_results.position)
+            r2 = (1 - (ssq / ssq_data))
+
         self.estimated_parameters.index = self.data.columns
 
         self.predictions = self.model.predict(self.paradigm, self.estimated_parameters, self.model.weights)
