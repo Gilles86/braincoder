@@ -197,63 +197,63 @@ class ParameterFitter(object):
 
         return self.estimated_parameters
 
-def fit_grid(self, *args, **kwargs):
+    def fit_grid(self, *args, **kwargs):
 
-    # Calculate a proper chunk size for cutting up the parameter grid
-    n_timepoints, n_voxels = self.data.shape
-    max_array_elements = int(4e9 / 6)  # 8 GB?
-    chunk_size = max_array_elements / n_voxels / n_timepoints
-    chunk_size = int(kwargs.pop('chunk_size', chunk_size))
-    print(f'Working with chunk size of {chunk_size}')
+        # Calculate a proper chunk size for cutting up the parameter grid
+        n_timepoints, n_voxels = self.data.shape
+        max_array_elements = int(4e9 / 6)  # 8 GB?
+        chunk_size = max_array_elements / n_voxels / n_timepoints
+        chunk_size = int(kwargs.pop('chunk_size', chunk_size))
+        print(f'Working with chunk size of {chunk_size}')
 
-    # Make sure that ranges for all parameters are given ing
-    # *args or **kwargs
-    if len(args) == len(self.model.parameter_labels):
-        kwargs = dict(zip(self.model.parameter_labels, args))
+        # Make sure that ranges for all parameters are given ing
+        # *args or **kwargs
+        if len(args) == len(self.model.parameter_labels):
+            kwargs = dict(zip(self.model.parameter_labels, args))
 
-    if not list(kwargs.keys()) == self.model.parameter_labels:
-        raise ValueError(
-            f'Please provide parameter ranges for all these parameters: {self.model.parameter_labels}')
+        if not list(kwargs.keys()) == self.model.parameter_labels:
+            raise ValueError(
+                f'Please provide parameter ranges for all these parameters: {self.model.parameter_labels}')
 
-    def _create_grid(model, *args):
-        parameters = pd.MultiIndex.from_product(
-            args, names=model.parameter_labels).to_frame(index=False)
-        return parameters
+        def _create_grid(model, *args):
+            parameters = pd.MultiIndex.from_product(
+                args, names=model.parameter_labels).to_frame(index=False)
+            return parameters
 
-    grid_args = [kwargs[key] for key in self.model.parameter_labels]
-    par_grid = _create_grid(self.model, *grid_args).astype(np.float32)
+        grid_args = [kwargs[key] for key in self.model.parameter_labels]
+        par_grid = _create_grid(self.model, *grid_args).astype(np.float32)
 
-    # Add chunks to the parameter columns, to process them chunk-wise and save memory
-    par_grid = par_grid.set_index(
-        pd.Index(par_grid.index // chunk_size, name='chunk'), append=True)
-    
-
-    logging.info('Built grid of {len(par_grid)} parameter settings...')
-
-    @tf.function
-    def _get_ssq_for_predictions(par_grid, data, model, paradigm):
-        grid_predictions = model._predict(paradigm, par_grid, None)
-
-        # time x voxels x parameters
-        ssq = tf.math.reduce_variance(
-            grid_predictions[:, tf.newaxis, :] - data[:, :, tf.newaxis], 0)
-        return ssq
-
-    # n_voxels x n_parameters
-    ssq = pd.DataFrame(np.zeros((self.data.shape[1], len(par_grid)), dtype=np.float32),
-                       index=self.data.columns,
-                       columns=pd.MultiIndex.from_frame(par_grid.reset_index('chunk')))
-    
-    for chunk, pg in tqdm(par_grid.groupby('chunk')):
-        ssq[chunk] = _get_ssq_for_predictions(pg.values, self.data.values,
-                                            self.model, self.paradigm.values).numpy()
+        # Add chunks to the parameter columns, to process them chunk-wise and save memory
+        par_grid = par_grid.set_index(
+            pd.Index(par_grid.index // chunk_size, name='chunk'), append=True)
         
-    ssq = ssq.droplevel('chunk', axis=1,)
 
-    best_pars = ssq.columns.to_frame(index=False).iloc[ssq.values.argmin(1)]
-    best_pars.index = self.data.columns
+        logging.info('Built grid of {len(par_grid)} parameter settings...')
 
-    return best_pars
+        @tf.function
+        def _get_ssq_for_predictions(par_grid, data, model, paradigm):
+            grid_predictions = model._predict(paradigm, par_grid, None)
+
+            # time x voxels x parameters
+            ssq = tf.math.reduce_variance(
+                grid_predictions[:, tf.newaxis, :] - data[:, :, tf.newaxis], 0)
+            return ssq
+
+        # n_voxels x n_parameters
+        ssq = pd.DataFrame(np.zeros((self.data.shape[1], len(par_grid)), dtype=np.float32),
+                           index=self.data.columns,
+                           columns=pd.MultiIndex.from_frame(par_grid.reset_index('chunk')))
+        
+        for chunk, pg in tqdm(par_grid.groupby('chunk')):
+            ssq[chunk] = _get_ssq_for_predictions(pg.values, self.data.values,
+                                                self.model, self.paradigm.values).numpy()
+            
+        ssq = ssq.droplevel('chunk', axis=1,)
+
+        best_pars = ssq.columns.to_frame(index=False).iloc[ssq.values.argmin(1)]
+        best_pars.index = self.data.columns
+
+        return best_pars
 
     def get_predictions(self, parameters):
         return self.model.predict(self.paradigm, parameters, None)
