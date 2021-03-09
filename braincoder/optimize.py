@@ -21,11 +21,12 @@ def logit(x):
 
 class ParameterFitter(object):
 
-    def __init__(self, model, data, paradigm, log_dir=False, progressbar=True):
+    def __init__(self, model, data, paradigm, memory_limit=666666666, log_dir=False, progressbar=True):
         self.model = model
         self.data = data
         self.paradigm = paradigm
 
+        self.memory_limit = memory_limit  # 8 GB?
         self.progressbar = True
 
         self.log_dir = log_dir
@@ -201,8 +202,7 @@ class ParameterFitter(object):
 
         # Calculate a proper chunk size for cutting up the parameter grid
         n_timepoints, n_voxels = self.data.shape
-        max_array_elements = int(4e9 / 6)  # 8 GB?
-        chunk_size = max_array_elements / n_voxels / n_timepoints
+        chunk_size = self.memory_limit / n_voxels / n_timepoints
         chunk_size = int(kwargs.pop('chunk_size', chunk_size))
         print(f'Working with chunk size of {chunk_size}')
 
