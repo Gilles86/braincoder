@@ -93,7 +93,6 @@ class ParameterFitter(object):
 
                 residuals = y - predictions
 
-                ssq = tf.squeeze(tf.reduce_sum(residuals**2))
                 ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
                 return ssq
 
