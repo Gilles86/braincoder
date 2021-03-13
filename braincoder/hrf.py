@@ -43,19 +43,23 @@ class SPMHRFModel(object):
     def convolve(self, timeseries):
 
         if self.oversampling == 1:
-            return self._convolve(timeseries)
+            return self._convolve(timeseries, pad_size=len(self.hrf))
 
         else:
             upsampled_timeseries = self._upsample(timeseries)
             cts = self._convolve(upsampled_timeseries)
             return self._downsample(cts)
 
-    def _convolve(self, timeseries):
-        cts = tf.nn.conv1d(tf.transpose(timeseries)[..., tf.newaxis],
-                           self.hrf[:, tf.newaxis, tf.newaxis],
+    def _convolve(self, timeseries, pad_size):
+        pad_ = tf.tile(timeseries[:1, :], [pad_size, 1])
+        timeseries_padded = tf.concat((pad_, timeseries), 0)    
+        
+        cts = tf.nn.conv1d(tf.transpose(timeseries_padded)[..., tf.newaxis],
+                           self.hrf[:, tf.newaxis, tf.newaxis][::-1], #THIS IS WEIRD TENSORFLOW BEHAVIOR
                            stride=1,
-                           padding='SAME')
-        return tf.transpose(tf.squeeze(cts))
+                           padding='VALID')
+        
+        return tf.transpose(tf.squeeze(cts))[pad_size-len(self.hrf)+1:]
 
     def _upsample(self, timeseries):
         new_length = len(timeseries) * self.oversampling
