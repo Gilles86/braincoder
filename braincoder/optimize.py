@@ -247,7 +247,7 @@ class ParameterFitter(object):
             ssq[chunk] = _get_ssq_for_predictions(pg.values, self.data.values,
                                                 self.model, self.paradigm.values).numpy()
             
-        ssq = ssq.droplevel('chunk', axis=1,)
+        ssq = ssq.droplevel('chunk', axis=1,).fillna(np.inf)
 
         best_pars = ssq.columns.to_frame(index=False).iloc[ssq.values.argmin(1)]
         best_pars.index = self.data.columns
@@ -286,10 +286,11 @@ class ParameterFitter(object):
 
 class ResidualFitter(object):
 
-    def __init__(self, model, data, paradigm=None, parameters=None, weights=None):
+    def __init__(self, model, data, paradigm=None, parameters=None, weights=None, lambd=0.0):
 
         self.model = model
         self.data = format_data(data)
+        self.lambd = lambd
 
         if paradigm is None:
             if self.model.paradigm is None:
@@ -306,16 +307,22 @@ class ResidualFitter(object):
         if weights is not None:
             self.model.weights = weights
 
-    def fit(self, init_rho=.1, init_tau=None, init_sigma2=1e-9, D=None, max_n_iterations=1000,
+    def fit(self, init_rho=.1, init_tau=None, init_dof=1., init_sigma2=1e-9, D=None, max_n_iterations=1000,
+            resid_dist='gauss',
+            min_n_iterations=100,
             method='likelihood',
+            residuals=None,
             learning_rate=0.1, rtol=1e-6, lag=100):
 
         n_voxels = self.data.shape[1]
 
-        residuals = (self.data - self.model.predict()).values
+        if residuals is None:
+            residuals = (self.data - self.model.predict()).values
+
+        sample_cov= tfp.stats.covariance(residuals)
 
         if init_tau is None:
-            init_tau = self.data.std().values[np.newaxis, :]
+            init_tau = residuals.std(0)[np.newaxis, :]
 
         tau_ = tf.Variable(initial_value=softplus_inverse(init_tau), shape=(
             1, n_voxels), name='tau_trans', dtype=tf.float32)
@@ -324,8 +331,13 @@ class ResidualFitter(object):
         sigma2_ = tf.Variable(initial_value=softplus_inverse(
             init_sigma2), shape=None, name='sigma2_trans', dtype=tf.float32)
 
-        weights = self.model.weights.values
-        WtW = tf.transpose(weights) @ weights
+        # weights = self.model.weights.values
+        # WtW = tf.transpose(weights) @ weights
+        if hasattr(self.model, 'get_pseudoWWT'):
+            print('USING A PSEUDO-WWT!')
+            WWT = self.model.get_pseudoWWT()
+        else:
+            WWT = self.model.get_WWT()
 
         trainable_variables = [tau_, rho_, sigma2_]
 
@@ -333,7 +345,10 @@ class ResidualFitter(object):
         if method == 'likelihood':
             @tf.function
             def likelihood(tau, rho, sigma2):
-                omega = self._get_omega(tau, rho, sigma2, WtW)
+                if self.lambd > 0.0:
+                    omega = self._get_omega_lambda(tau, rho, sigma2, WWT, self.lambd, sample_cov)
+                else:
+                    omega = self._get_omega(tau, rho, sigma2, WWT)
 
                 residual_dist = tfd.MultivariateNormalFullCovariance(
                     tf.zeros(n_voxels),
@@ -343,13 +358,40 @@ class ResidualFitter(object):
 
             fit_stat = likelihood
 
-        elif method == 'ssq_cov':
-            
-            sample_cov = tfp.stats.covariance(self.data)
+        elif method == 't':
+
+            dof_ = tf.Variable(initial_value=softplus_inverse(init_dof), name='tau_trans', dtype=tf.float32)
+
+            trainable_variables += [dof_]
 
             @tf.function
+            def likelihood(dof, tau, rho, sigma2):
+                if self.lambd > 0.0:
+                    omega = self._get_omega_lambda(tau, rho, sigma2, WWT, self.lambd, sample_cov)
+                else:
+                    omega = self._get_omega(tau, rho, sigma2, WWT)
+
+                # omega = (dof - 2) * omega / dof
+                chol = tf.linalg.cholesky(omega)
+
+                residual_dist = tfd.MultivariateStudentTLinearOperator(
+                        dof,
+                        tf.zeros(n_voxels),
+                        tf.linalg.LinearOperatorLowerTriangular(chol), allow_nan_stats=False)
+
+                return tf.reduce_sum(residual_dist.log_prob(residuals))
+
+            fit_stat = likelihood
+
+        elif method == 'ssq_cov':
+            
+            @tf.function
             def ssq(tau, rho, sigma2):
-                omega = self._get_omega(tau, rho, sigma2, WtW)
+                if self.lambd > 0.0:
+                    omega = self._get_omega_lambda(tau, rho, sigma2, WWT, self.lambd, sample_cov)
+                else:
+                    omega = self._get_omega(tau, rho, sigma2, WWT)
+
                 ssq = tf.reduce_sum((omega - sample_cov)**2)
 
                 return -ssq
@@ -362,7 +404,11 @@ class ResidualFitter(object):
 
             @tf.function
             def ssq(tau, rho, sigma2):
-                omega = self._get_omega(tau, rho, sigma2, WtW)
+                if self.lambd > 0.0:
+                    omega = self._get_omega_lambda(tau, rho, sigma2, WWT, self.lambd, sample_cov)
+                else:
+                    omega = self._get_omega(tau, rho, sigma2, WWT)
+
                 ssq = tf.reduce_sum(tf.math.log(1+(omega - sample_cov)**2))
 
                 return -ssq
@@ -380,29 +426,159 @@ class ResidualFitter(object):
                 tau = softplus(tau_)
                 rho = sigmoid(rho_)
                 sigma2 = softplus(sigma2_)
-                cost = -fit_stat(tau, rho, sigma2)
+
+                if method == 't':
+                    dof = softplus(dof_)
+                    cost = -fit_stat(dof, tau, rho, sigma2)
+                else:
+                    cost = -fit_stat(tau, rho, sigma2)
+
                 gradients = tape.gradient(cost,
                         trainable_variables)
                 opt.apply_gradients(zip(gradients, trainable_variables))
 
-                pbar.set_description(f'fit stat: {-cost.numpy():0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}')
+                mean_tau = tf.reduce_mean(tau).numpy()
+
+                if method == 't':
+                    pbar.set_description(f'fit stat: {-cost.numpy():0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}, dof: {dof:0.2f}')
+                else:
+                    pbar.set_description(f'fit stat: {-cost.numpy():0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}')
 
                 costs[step] = cost.numpy()
 
-                previous_cost = costs[np.min(step-lag, 0)]
-                if np.sign(previous_cost) == np.sign(cost):
-                    if (cost / previous_cost) > 1 - rtol:
-                        break
+                previous_cost = costs[np.max(step-lag, 0)]
+                if (step > min_n_iterations) & (np.sign(previous_cost) == np.sign(cost)):
+                    if np.sign(cost) == -1:
+                        if (cost / previous_cost) < 1 - rtol:
+                            break
+                    else:
+                        if (cost / previous_cost) > 1 - rtol:
+                            break
     
 
-        return self._get_omega(tau, rho, sigma2, WtW).numpy()
+
+        if self.lambd > 0.0:
+            omega = self._get_omega_lambda(tau, rho, sigma2, WWT, self.lambd, sample_cov).numpy()
+        else:
+            omega = self._get_omega(tau, rho, sigma2, WWT).numpy()
+
+        if method == 't':
+            return omega, dof.numpy()
+        else:
+            return omega, None
 
 
     @tf.function
-    def _get_omega(self, tau, rho, sigma2, WtW):
+    def _get_omega(self, tau, rho, sigma2, WWT):
         return rho * tf.transpose(tau) @ tau  + \
                 (1 - rho) * tf.linalg.tensor_diag(tau[0, :]**2) + \
-                sigma2 * WtW
+                sigma2 * WWT
+
+    @tf.function
+    def _get_omega_lambda(self, tau, rho, sigma2, WWT, lambd, sample_covariance, eps=1e-9):
+        return (1-lambd) * (rho * tf.transpose(tau) @ tau + \
+                (1 - rho) * tf.linalg.tensor_diag(tau[0, :]**2) + \
+                sigma2 * WWT) + \
+                lambd * sample_covariance +  \
+                tf.linalg.diag(tf.ones(tau.shape[1]) * eps)
+
+class Stimulus2DFitter(object):
+
+
+    def __init__(self, data, model, stimulus_size, omega, dof=None):
+
+        self.data = data
+        self.model = model
+        self.stimulus_size = stimulus_size
+        self.model.omega = omega
+        self.model.dof = dof
+
+
+        if self.model.weights is None:
+            self.model.weights
+
+    def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6):
+
+        size_stimulus_var = (len(self.data), 1, self.stimulus_size)
+
+        if init_stimulus is None:
+            init_stimulus = np.zeros(size_stimulus_var)
+
+        if len(init_stimulus.shape) == 2:
+            init_stimulus = init_stimulus[:, np.newaxis, :]
+
+        decoded_stimulus = tf.Variable(initial_value=init_stimulus, shape=size_stimulus_var,
+                name='decoded_stimulus', dtype=tf.float32)
+
+        print(decoded_stimulus)
+
+        trainable_variables = [decoded_stimulus]
+
+        opt = tf.optimizers.Adam(learning_rate=learning_rate)
+        
+        pbar = tqdm(range(max_n_iterations))
+
+        costs = np.ones(max_n_iterations) * 1e12
+
+        data_ = self.data.values
+        parameters = self.model.parameters.values
+        weights = None if self.model.weights is None else self.model.weights.values
+
+        for step in pbar:
+            with tf.GradientTape() as tape:
+                ll = self.model._likelihood(decoded_stimulus,
+                        data_, parameters,
+                        weights, self.model.omega, self.model.dof, logp=True, normalize=False)
+
+                cost = -tf.reduce_sum(ll)
+                costs[step] = cost.numpy()
+
+                gradients = tape.gradient(cost, trainable_variables)
+                opt.apply_gradients(zip(gradients, trainable_variables))
+
+                pbar.set_description(f'fit stat: {-cost.numpy():6.2f}')
+
+                costs[step] = cost.numpy()
+
+                previous_cost = costs[np.max(step-lag, 0)]
+                if step > min_n_iterations:
+                    if np.sign(previous_cost) == np.sign(cost):
+                        if np.sign(cost) == 1:
+                            if (cost / previous_cost) > 1 - rtol:
+                                break
+                        else:
+                            if (cost / previous_cost) < 1 - rtol:
+                                break
+
+        return decoded_stimulus.numpy()
+
+
+    def firstpass(self):
+        baseline = np.zeros(self.stimulus_size, dtype=np.float32)
+        possible_stimuli = np.zeros((self.stimulus_size, self.stimulus_size), dtype=np.float32)
+
+        np.fill_diagonal(possible_stimuli, 1)
+
+
+        weights = None if self.model.weights is None else self.model.weights.values
+
+        baseline_ll = self.model._likelihood(baseline[np.newaxis, np.newaxis, :],
+                                       self.data,
+                                       self.model.parameters.values, weights=weights, omega=self.model.omega,
+                                       dof=self.model.dof, logp=True)
+
+        possible_stimuli_ll = self.model._likelihood(possible_stimuli[np.newaxis, :, :], 
+                                       self.data,
+                                       self.model.parameters.values, weights=weights, omega=self.model.omega,
+                                       dof=self.model.dof, logp=True)
+
+        ll_increase = tf.exp(tf.clip_by_value(possible_stimuli_ll - baseline_ll, -tf.math.log(1000.), tf.math.log(1000.)))
+
+
+        ll_increase -= tf.reduce_min(ll_increase)
+        ll_increase /= tf.reduce_max(ll_increase)
+
+        return ll_increase
 
 # weights = np.identity(3)
 # parameters = np.diag([1, 2, 3])

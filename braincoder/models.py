@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from .utils import norm, format_data, format_paradigm, format_parameters, format_weights
+from tensorflow_probability import distributions as tfd
 
 
 class EncodingModel(object):
@@ -13,12 +14,13 @@ class EncodingModel(object):
     parameter_labels = None
 
     def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, verbosity=logging.INFO):
+                 weights=None, omega=None, verbosity=logging.INFO):
 
         self.paradigm = paradigm
         self.data = data
         self.parameters = parameters
         self.weights = weights
+        self.omega = omega
 
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
@@ -167,7 +169,94 @@ class EncodingModel(object):
             p = (p.T / p.T.sum()).T
         
         return p
+
+    def likelihood(self, stimuli, data=None, parameters=None, weights=None, omega=None, dof=None, logp=False, normalize=True):
+
+
+        if data is None:
+            data = self.data
+        else:
+            data = format_data(data)
+
+        if parameters is None:
+            parameters = self.parameters
+        else:
+            parameters = format_parameters(parameters)
+
+        if not isinstance(stimuli, pd.DataFrame):
+            stimuli = pd.DataFrame(stimuli)
+            stimuli.index.name = 'stimulus'
+            stimuli.columns.name = 'stimulus dimension'
+
+        for name, value in zip(['data', 'parameters'], [data, parameters]):
+            if value is None:
+                raise Exception('Please set {}'.format(name))
+
+
+        likelihood = self._likelihood(stimuli.values, data.values, parameters.values,
+                weights if not hasattr(weights, 'values') else weights.values,
+                omega,
+                dof,
+                logp,
+                normalize).numpy()
+
+        likelihood = pd.DataFrame(likelihood, index=data.index, columns=stimuli.index)
+
+        return likelihood
+
+
+    def get_WWT(self):
+        return self.weights.T.dot(self.weights)
+
+
+    @tf.function
+    def _likelihood(self, stimuli, data, parameters, weights, omega, dof, logp=False, normalize=False):
+
+
+        # stimuli: n_timepoints x n_stimuli x n_stimulus_features
+        # data: n_timepoints x n_units
+
+        if len(stimuli.shape) == 2:
+            stimuli = stimuli[:, tf.newaxis, :]
+
+        n_voxels = data.shape[1]
+        n_stimulus_features = stimuli.shape[2]
+
+        stimuli_ = tf.reshape(stimuli, (stimuli.shape[0] * stimuli.shape[1], n_stimulus_features))
+
+        # n_timepoints * n_stimuli x n_voxels
+        pred = self._predict(stimuli_, parameters, weights)
+        print(pred.shape)
+
+        # n_timepoints x n_stimuli x n_voxels
+        residuals = data[:, tf.newaxis, :] - tf.reshape(pred, (stimuli.shape[0], stimuli.shape[1], n_voxels))
+
+        if dof is None:
+            residual_dist = tfd.MultivariateNormalFullCovariance(
+                            tf.zeros(n_voxels),
+                            omega, allow_nan_stats=False)
+        else:
+            chol = tf.linalg.cholesky(omega)
+            residual_dist = tfd.MultivariateStudentTLinearOperator(
+                    dof,
+                    tf.zeros(n_voxels),
+                    tf.linalg.LinearOperatorLowerTriangular(chol), allow_nan_stats=False)
+
+        # we use log likelihood to correct for very small numbers
+        p = residual_dist.log_prob(residuals)
+
+        if logp:
+            return p
+
+        if normalize:
+            p = p - tf.reduce_max(p, 1)[:, tf.newaxis]
+            p = tf.exp(p)
+            p = p / tf.reduce_sum(p, 1)[:, tf.newaxis]
+        else:
+            p = tf.exp(p)
         
+        return p
+
 
 class HRFEncodingModel(EncodingModel):
 
@@ -265,6 +354,112 @@ class GaussianPRF(EncodingModel):
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
     pass
 
+class GaussianPRF2D(EncodingModel):
+    
+    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude']
+    
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, verbosity=logging.INFO, **kwargs):
+        
+        
+        if grid_coordinates is None:            
+            grid_coordinates = np.array(np.meshgrid(np.linspace(-1, 1, paradigm.shape[1]),
+                                           np.linspace(-1, 1, paradigm.shape[2]),), dtype=np.float32)
+
+
+            grid_coordinates = np.swapaxes(grid_coordinates, 2, 1)
+            grid_coordinates = np.reshape(grid_coordinates, (len(grid_coordinates), -1)).T
+            
+
+        self.grid_coordinates = pd.DataFrame(grid_coordinates, columns=['x', 'y'])
+        self._grid_coordinates = self.grid_coordinates.values
+
+        paradigm = np.reshape(paradigm, (len(paradigm), -1))
+            
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                 weights=weights, verbosity=logging.INFO, **kwargs)
+        
+        self.paradigm.columns = pd.MultiIndex.from_frame(self.grid_coordinates)
+        
+    def get_rf(self, as_frame=False, unpack=False):
+        
+        grid_coordinates = self.grid_coordinates.values
+        parameters = self.parameters.values
+        
+        rf = self._get_rf(grid_coordinates, parameters).numpy()
+        
+        if as_frame:
+            rf = pd.concat([pd.DataFrame(e,
+                              index=pd.MultiIndex.from_frame(self.grid_coordinates))
+                            for e in rf],
+                           keys=self.parameters.index)
+
+            if unpack:
+                rf = rf.unstack('x').sort_index(ascending=False)
+                          
+
+        return rf
+    
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):        
+        rf = self._get_rf(self.grid_coordinates, parameters)
+        
+        baseline = parameters[tf.newaxis, :, 3]
+        #  n_timepoints x n_populations x n_pixels
+        # return tf.squeeze(tf.tensordot(paradigm[:, tf.newaxis, :], rf[tf.newaxis, :, :], (2, 2)))
+        return tf.tensordot(paradigm[:, tf.newaxis, :], rf[tf.newaxis, :, :], (2, 2))[:, 0, 0, :] + baseline
+        
+    @tf.function
+    def _get_rf(self, grid_coordinates, parameters):
+        
+        
+        # n_populations x n_parameters x n_grid_spaces
+        x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
+        y = grid_coordinates[:, 1][tf.newaxis, tf.newaxis, :]
+
+        mu_x = parameters[:, 0, tf.newaxis]
+        mu_y = parameters[:, 1, tf.newaxis]
+        sd = parameters[:, 2, tf.newaxis]
+        amplitude = parameters[:, 4, tf.newaxis]
+
+        return tf.squeeze((tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude)
+    
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          parameters[:, 1][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          parameters[:, 1][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
+
+
+    def get_pseudoWWT(self):
+        rf = self.get_rf()
+        return rf.dot(rf.T)
+
+
+    def to_linear_model(self):
+
+        return LinearModelWithBaseline(self.paradigm, self.data, self.parameters[['baseline']].T, weights=self.get_rf().T)
+
+
+class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
+                 weights=None, hrf_model=None, verbosity=logging.INFO):
+
+        super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
+                hrf_model=hrf_model)
+
 class DiscreteModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
@@ -275,9 +470,6 @@ class DiscreteModel(EncodingModel):
         _parameters[np.diag_indices(len(parameters))] = np.diag(parameters)
 
         super().__init__(paradigm, data, _parameters, weights, verbosity)
-
-
-
     
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
@@ -285,3 +477,41 @@ class DiscreteModel(EncodingModel):
         parameters_ = tf.linalg.diag_part(parameters)
         
         return tf.cast(tf.equal(paradigm, parameters_[tf.newaxis, :]), tf.float32)
+
+
+class LinearModel(EncodingModel):
+    
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, verbosity=logging.INFO):
+
+        if parameters is not None:
+            raise ValueError('LinearModel does not use any parameters!')
+            
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                 weights=weights, verbosity=logging.INFO)
+
+
+    def predict(self, paradigm=None, parameters=None, weights=None):
+        
+        if parameters is not None:
+            raise ValueError('LinearModel does not use any parameters!')
+        
+        return super().predict(paradigm, paraemters, weights)
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        return paradigm
+
+    
+class LinearModelWithBaseline(EncodingModel):
+    
+    @tf.function
+    def _predict(self, paradigm, parameters, weights=None):
+        if weights is None:
+            return self._basis_predictions(paradigm, None)
+        else:
+            return tf.tensordot(self._basis_predictions(paradigm, None), weights, (1, 0)) + parameters
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        return paradigm
