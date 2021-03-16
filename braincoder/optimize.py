@@ -342,7 +342,7 @@ class ResidualFitter(object):
         trainable_variables = [tau_, rho_, sigma2_]
 
 
-        if method == 'likelihood':
+        if method == 'gauss':
             @tf.function
             def likelihood(tau, rho, sigma2):
                 if self.lambd > 0.0:
@@ -482,7 +482,7 @@ class ResidualFitter(object):
                 lambd * sample_covariance +  \
                 tf.linalg.diag(tf.ones(tau.shape[1]) * eps)
 
-class Stimulus2DFitter(object):
+class StimulusFitter(object):
 
 
     def __init__(self, data, model, stimulus_size, omega, dof=None):

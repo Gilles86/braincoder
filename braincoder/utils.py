@@ -19,7 +19,7 @@ def format_data(data):
     return pd.DataFrame(data,
                         index=pd.Index(
                             np.arange(len(data)), name='time'),
-                        columns=pd.Index(np.arange(data.shape[1]), name='voxel')).astype(np.float32)
+                        columns=pd.Index(np.arange(data.shape[1]), name='unit')).astype(np.float32)
 
 
 def format_paradigm(paradigm):
@@ -51,7 +51,7 @@ def format_parameters(parameters, parameter_labels=None):
     return pd.DataFrame(parameters,
                         columns=pd.Index(
                             parameter_labels, name='parameter'),
-                        index=pd.Index(range(1, len(parameters) + 1), name='population')).astype(np.float32)
+                        index=pd.Index(range(1, len(parameters) + 1), name='unit')).astype(np.float32)
 
 
 def format_weights(weights):
@@ -61,9 +61,18 @@ def format_weights(weights):
         else:
             return pd.DataFrame(weights,
                     index=pd.Index(range(1, len(weights) + 1), name='population'),
-                    columns=pd.Index(np.arange(weights.shape[1]), name='voxel')).astype(np.float32)
+                    columns=pd.Index(np.arange(weights.shape[1]), name='unit')).astype(np.float32)
 
 
 def get_map(p):
     stimuli = p.columns.to_frame(index=False).T
     return stimuli.groupby(level=0).apply(lambda d: (p*d.values).sum(1) / p.sum(1)).T
+
+def get_rsq(data, predictions):
+    
+    resid = data - predictions
+    
+    ssq_data = np.clip(data.var(0), 1e-9, None)
+    ssq_resid = np.clip(resid.var(0), 1e-6, None)
+    
+    return (1 -  (ssq_resid /ssq_data))
