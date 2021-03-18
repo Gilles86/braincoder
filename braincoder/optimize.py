@@ -307,10 +307,10 @@ class ResidualFitter(object):
         if weights is not None:
             self.model.weights = weights
 
-    def fit(self, init_rho=.1, init_tau=None, init_dof=1., init_sigma2=1e-9, D=None, max_n_iterations=1000,
+    def fit(self, init_rho=.1, init_tau=None, init_dof=1., init_sigma2=1e-3, D=None, max_n_iterations=1000,
             resid_dist='gauss',
             min_n_iterations=100,
-            method='likelihood',
+            method='gauss',
             residuals=None,
             learning_rate=0.1, rtol=1e-6, lag=100):
 
