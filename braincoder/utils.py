@@ -19,7 +19,7 @@ def format_data(data):
     return pd.DataFrame(data,
                         index=pd.Index(
                             np.arange(len(data)), name='time'),
-                        columns=pd.Index(np.arange(data.shape[1]), name='unit')).astype(np.float32)
+                        columns=pd.Index(range(data.shape[1]), name='unit')).astype(np.float32)
 
 
 def format_paradigm(paradigm):
@@ -51,7 +51,7 @@ def format_parameters(parameters, parameter_labels=None):
     return pd.DataFrame(parameters,
                         columns=pd.Index(
                             parameter_labels, name='parameter'),
-                        index=pd.Index(range(1, len(parameters) + 1), name='unit')).astype(np.float32)
+                        index=pd.Index(range(len(parameters)), name='unit')).astype(np.float32)
 
 
 def format_weights(weights):
