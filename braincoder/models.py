@@ -3,7 +3,6 @@ import tensorflow_probability as tfp
 import logging
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from .utils import norm, format_data, format_paradigm, format_parameters, format_weights
 from tensorflow_probability import distributions as tfd
@@ -239,7 +238,6 @@ class EncodingModel(object):
 
         # n_timepoints * n_stimuli x n_voxels
         pred = self._predict(stimuli_, parameters, weights)
-        print(pred.shape)
 
         # n_timepoints x n_stimuli x n_voxels
         residuals = data[:, tf.newaxis, :] - \
