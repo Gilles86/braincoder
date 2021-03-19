@@ -251,15 +251,26 @@ class ParameterFitter(object):
 
         return best_pars
 
-    def get_predictions(self, parameters):
+    def get_predictions(self, parameters=None):
+
+        if parameters is None:
+            parameters = self.estimated_parameters
+
         return self.model.predict(self.paradigm, parameters, None)
 
-    def get_residuals(self, parameters):
+    def get_residuals(self, parameters=None):
+
+        if parameters is None:
+            parameters = self.estimated_parameters
+
         return self.data - self.get_predictions(parameters).values
 
-    def get_r2(self, parameters):
-        residuals = self.get_residuals(parameters)
-        return 1 - (residuals.var() / self.data.var())
+    def get_rsq(self, parameters=None):
+
+        if parameters is None:
+            parameters = self.estimated_parameters
+
+        return get_rsq(self.data, self.get_predictions())
 
     @property
     def data(self):
