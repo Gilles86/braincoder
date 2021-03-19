@@ -4,9 +4,9 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from .utils import norm, format_data, format_paradigm, format_parameters, format_weights
+from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit
 from tensorflow_probability import distributions as tfd
-
+from tensorflow.math import softplus, sigmoid
 
 class EncodingModel(object):
 
@@ -472,6 +472,52 @@ class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
         super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
                          hrf_model=hrf_model)
 
+class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
+
+
+    # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
+    # srf factor is limited to be above 1
+    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude', 'srf_amplitude', 'srf_factor']
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          parameters[:, 1][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis],
+                          sigmoid(parameters[:, 5][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          parameters[:, 1][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis],
+                          logit(parameters[:, 5][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis])], axis=1)
+
+    @tf.function
+    def _get_rf(self, grid_coordinates, parameters):
+        # n_populations x n_grid_spaces
+        x = grid_coordinates[:, 0][tf.newaxis, :]
+        y = grid_coordinates[:, 1][tf.newaxis, :]
+
+        mu_x = parameters[:, 0, tf.newaxis]
+        mu_y = parameters[:, 1, tf.newaxis]
+        sd = parameters[:, 2, tf.newaxis]
+        amplitude = parameters[:, 4, tf.newaxis]
+
+        srf_amplitude = parameters[:, 5, tf.newaxis]
+        srf_size = parameters[:, 6, tf.newaxis]
+
+        standard_prf = super()._get_rf(grid_coordinates, parameters)
+        srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*srf_size*sd**2)) * amplitude * srf_amplitude / srf_size**2
+
+        return standard_prf - srf
 
 class DiscreteModel(EncodingModel):
 
