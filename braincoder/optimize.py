@@ -42,6 +42,7 @@ class ParameterFitter(object):
             optimizer=None,
             store_intermediate_parameters=True,
             r2_atol=0.000001,
+            lag=100,
             learning_rate=0.01):
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
@@ -128,7 +129,7 @@ class ParameterFitter(object):
                     mean_r2 = tf.reduce_mean(r2)
 
                     if step >= min_n_iterations:
-                        r2_diff = mean_r2 - mean_r2s[-1]
+                        r2_diff = mean_r2 - mean_r2s[np.max(step - lag, 0)]
                         if (r2_diff >= 0.0) & (r2_diff < r2_atol):
                             pbar.close()
                             break
