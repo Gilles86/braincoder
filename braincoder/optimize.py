@@ -70,8 +70,8 @@ class ParameterFitter(object):
 
         trainable_variables = [parameters]
 
-        ssq_data = tf.math.reduce_variance(y, 0)
-        ssq_data = tf.clip_by_value(ssq_data, 1e-6, 1e12)
+        ssq_data = tf.reduce_sum((y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
+        # ssq_data = tf.clip_by_value(ssq_data, 1e-6, 1e12)
 
 
         if confounds is not None:
@@ -93,7 +93,8 @@ class ParameterFitter(object):
 
                 residuals = y - predictions
 
-                ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
+                # ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
+                ssq = tf.reduce_sum(residuals**2, 0)
                 return ssq
 
         else:

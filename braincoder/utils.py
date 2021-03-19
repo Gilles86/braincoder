@@ -72,10 +72,10 @@ def get_rsq(data, predictions, zerovartonan=True):
     
     resid = data - predictions
     
-    ssq_data = np.clip(data.var(0), 1e-5, None)
-    ssq_resid = np.clip(resid.var(0), 1e-5, None)
+    ssq_data = np.clip(((data - data.mean(0))**2).sum(0), 1e-5, None)
+    ssq_resid = np.clip((resid**2).sum(0), 1e-5, None)
 
-    r2 = (1 -  (ssq_resid /ssq_data))
+    r2 = (1 - (ssq_resid /ssq_data))
 
     if zerovartonan:
 	    r2[data.var() == 0] = np.nan
