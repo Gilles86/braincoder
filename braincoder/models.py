@@ -419,23 +419,21 @@ class GaussianPRF2D(EncodingModel):
         rf = self._get_rf(self.grid_coordinates, parameters)
 
         baseline = parameters[tf.newaxis, :, 3]
-        #  n_timepoints x n_populations x n_pixels
-        # return tf.squeeze(tf.tensordot(paradigm[:, tf.newaxis, :], rf[tf.newaxis, :, :], (2, 2)))
         return tf.tensordot(paradigm[:, tf.newaxis, :], rf[tf.newaxis, :, :], (2, 2))[:, 0, 0, :] + baseline
 
     @tf.function
     def _get_rf(self, grid_coordinates, parameters):
 
-        # n_populations x n_parameters x n_grid_spaces
-        x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
-        y = grid_coordinates[:, 1][tf.newaxis, tf.newaxis, :]
+        # n_populations x  n_grid_spaces
+        x = grid_coordinates[:, 0][tf.newaxis, :]
+        y = grid_coordinates[:, 1][tf.newaxis, :]
 
         mu_x = parameters[:, 0, tf.newaxis]
         mu_y = parameters[:, 1, tf.newaxis]
         sd = parameters[:, 2, tf.newaxis]
         amplitude = parameters[:, 4, tf.newaxis]
 
-        return tf.squeeze((tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude)
+        return (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
