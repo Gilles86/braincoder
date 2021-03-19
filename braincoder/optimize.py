@@ -5,18 +5,13 @@ import tensorflow as tf
 import os.path as op
 import os
 from tqdm import tqdm
-from .utils import format_data, format_parameters, format_paradigm
+from .utils import format_data, format_parameters, format_paradigm, logit, get_rsq
 import logging
 from tensorflow.math import softplus, sigmoid
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
 
 softplus_inverse = tfp.math.softplus_inverse
-
-
-def logit(x):
-    """ Computes the logit function, i.e. the logistic sigmoid inverse. """
-    return - np.log(1. / x - 1.)
 
 
 class ParameterFitter(object):

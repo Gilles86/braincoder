@@ -81,3 +81,7 @@ def get_rsq(data, predictions, zerovartonan=True):
 	    r2[data.var() == 0] = np.nan
 
     return r2
+
+def logit(x):
+    """ Computes the logit function, i.e. the logistic sigmoid inverse. """
+    return tf.clip_by_value(-tf.math.log(1. / x - 1.), 1e-12, 1e12)
