@@ -457,8 +457,7 @@ class GaussianPRF2D(EncodingModel):
         return rf.dot(rf.T)
 
     def to_linear_model(self):
-
-        return LinearModelWithBaseline(self.paradigm, self.data, self.parameters[['baseline']].T, weights=self.get_rf().T)
+        return LinearModelWithBaseline(self.paradigm, self.data, self.parameters[['baseline']], weights=self.get_rf().T)
 
     def unpack_stimulus(self, stimulus):
         return np.reshape(stimulus, (-1, self.n_x, self.n_y))
