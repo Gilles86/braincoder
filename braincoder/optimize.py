@@ -523,17 +523,15 @@ class StimulusFitter(object):
             init_stimulus = init_stimulus[:, np.newaxis, :]
 
         decoded_stimulus = tf.Variable(initial_value=init_stimulus, shape=size_stimulus_var,
-                name='decoded_stimulus', dtype=tf.float32)
-
-        print(decoded_stimulus)
+                                       name='decoded_stimulus', dtype=tf.float32)
 
         trainable_variables = [decoded_stimulus]
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
-        
+
         pbar = tqdm(range(max_n_iterations))
 
-        costs = np.ones(max_n_iterations) * 1e12
+        self.costs = np.ones(max_n_iterations) * 1e12
 
         data_ = self.data.values
         parameters = self.model.parameters.values
@@ -552,56 +550,65 @@ class StimulusFitter(object):
         for step in pbar:
             with tf.GradientTape() as tape:
                 ll = self.model._likelihood(decoded_stimulus,
-                        data_, parameters,
-                        weights, self.model.omega, self.model.dof, logp=True, normalize=False)
+                                            data_, parameters,
+                                            weights, self.model.omega, self.model.dof, logp=True, normalize=False)
 
                 cost = -tf.reduce_sum(ll)
-                costs[step] = cost.numpy()
 
                 if spike_and_slab_prior:
                     cost += -tf.reduce_sum(logprior(decoded_stimulus))
 
-                pbar.set_description(f'fit stat: {-cost.numpy():6.2f}')
+                self.costs[step] = cost.numpy()
 
-                costs[step] = cost.numpy()
+            gradients = tape.gradient(cost, trainable_variables)
+            opt.apply_gradients(zip(gradients, trainable_variables))
 
-                previous_cost = costs[np.max(step-lag, 0)]
-                if step > min_n_iterations:
-                    if np.sign(previous_cost) == np.sign(cost):
-                        if np.sign(cost) == 1:
-                            if (cost / previous_cost) > 1 - rtol:
-                                break
-                        else:
-                            if (cost / previous_cost) < 1 - rtol:
-                                break
+            pbar.set_description(f'fit stat: {-cost.numpy():6.2f}')
+
+            self.costs[step] = cost.numpy()
+
+            previous_cost = self.costs[np.max((step-lag, 0))]
+            if step > min_n_iterations:
+                if np.sign(previous_cost) == np.sign(cost):
+                    if np.sign(cost) == 1:
+                        if (cost / previous_cost) > 1 - rtol:
+                            break
+                    else:
+                        if (cost / previous_cost) < 1 - rtol:
+                            break
 
         return decoded_stimulus.numpy()
 
-
     def firstpass(self):
         baseline = np.zeros(self.stimulus_size, dtype=np.float32)
-        possible_stimuli = np.zeros((self.stimulus_size, self.stimulus_size), dtype=np.float32)
+        possible_stimuli = np.zeros(
+            (self.stimulus_size, self.stimulus_size), dtype=np.float32)
 
         np.fill_diagonal(possible_stimuli, 1)
-
 
         weights = None if self.model.weights is None else self.model.weights.values
 
         baseline_ll = self.model._likelihood(baseline[np.newaxis, np.newaxis, :],
-                                       self.data,
-                                       self.model.parameters.values, weights=weights, omega=self.model.omega,
-                                       dof=self.model.dof, logp=True)
+                                             self.data,
+                                             self.model.parameters.values, weights=weights, omega=self.model.omega,
+                                             dof=self.model.dof, logp=True)
 
-        possible_stimuli_ll = self.model._likelihood(possible_stimuli[np.newaxis, :, :], 
-                                       self.data,
-                                       self.model.parameters.values, weights=weights, omega=self.model.omega,
-                                       dof=self.model.dof, logp=True)
+        possible_stimuli_ll = self.model._likelihood(possible_stimuli[np.newaxis, :, :],
+                                                     self.data,
+                                                     self.model.parameters.values, weights=weights, omega=self.model.omega,
+                                                     dof=self.model.dof, logp=True)
 
-        ll_increase = tf.exp(tf.clip_by_value(possible_stimuli_ll - baseline_ll, -tf.math.log(1000.), tf.math.log(1000.)))
-
+        ll_increase = tf.exp(tf.clip_by_value(
+            possible_stimuli_ll - baseline_ll, -tf.math.log(1000.), tf.math.log(1000.)))
 
         ll_increase -= tf.reduce_min(ll_increase)
         ll_increase /= tf.reduce_max(ll_increase)
+
+        ll_firstpass = self.model._likelihood(ll_increase,
+                                              self.data,
+                                              self.model.parameters.values, weights=weights, omega=self.model.omega,
+                                              dof=self.model.dof, logp=True)
+        print(f'Likelihood firstpass: {np.sum(ll_firstpass.numpy())}')
 
         return ll_increase
 
