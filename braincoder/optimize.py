@@ -431,10 +431,10 @@ class ResidualFitter(object):
             fit_stat = ssq
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
-        
+
         pbar = tqdm(range(max_n_iterations))
 
-        costs = np.zeros(max_n_iterations)
+        self.costs = np.zeros(max_n_iterations)
 
         for step in pbar:
             with tf.GradientTape() as tape:
@@ -461,9 +461,9 @@ class ResidualFitter(object):
                     pbar.set_description(
                         f'fit stat: {-cost.numpy():0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}')
 
-                costs[step] = cost.numpy()
+                self.costs[step] = cost.numpy()
 
-                previous_cost = costs[np.max(step-lag, 0)]
+                previous_cost = self.costs[np.max((step-lag, 0))]
                 if (step > min_n_iterations) & (np.sign(previous_cost) == np.sign(cost)):
                     if np.sign(cost) == -1:
                         if (cost / previous_cost) < 1 - rtol:
