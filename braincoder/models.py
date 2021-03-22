@@ -518,6 +518,14 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
         return standard_prf - srf
 
+class DifferenceOfGaussiansPRF2DWithHRF(DifferenceOfGaussiansPRF2D, HRFEncodingModel):
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
+                 weights=None, hrf_model=None, verbosity=logging.INFO):
+
+        super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
+                         hrf_model=hrf_model)
+
 class DiscreteModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
