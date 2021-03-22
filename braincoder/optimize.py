@@ -508,11 +508,11 @@ class StimulusFitter(object):
         self.model.omega = omega
         self.model.dof = dof
 
-
         if self.model.weights is None:
             self.model.weights
 
-    def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6):
+    def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6,
+            spike_and_slab_prior=False, sigma_prior=1., alpha=.5):
 
         size_stimulus_var = (len(self.data), 1, self.stimulus_size)
 
@@ -539,6 +539,16 @@ class StimulusFitter(object):
         parameters = self.model.parameters.values
         weights = None if self.model.weights is None else self.model.weights.values
 
+        if spike_and_slab_prior:
+            @tf.function
+            def logprior(stimulus):
+                prior_dist = tfd.Mixture(cat=tfd.Categorical(probs=[alpha, 1.-alpha]),
+                                         components=[
+                    tfd.Laplace(loc=0, scale=sigma_prior),
+                    tfd.Normal(loc=0, scale=sigma_prior), ])
+
+                return prior_dist.log_prob(stimulus)
+
         for step in pbar:
             with tf.GradientTape() as tape:
                 ll = self.model._likelihood(decoded_stimulus,
@@ -548,8 +558,8 @@ class StimulusFitter(object):
                 cost = -tf.reduce_sum(ll)
                 costs[step] = cost.numpy()
 
-                gradients = tape.gradient(cost, trainable_variables)
-                opt.apply_gradients(zip(gradients, trainable_variables))
+                if spike_and_slab_prior:
+                    cost += -tf.reduce_sum(logprior(decoded_stimulus))
 
                 pbar.set_description(f'fit stat: {-cost.numpy():6.2f}')
 
