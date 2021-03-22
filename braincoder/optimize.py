@@ -129,7 +129,7 @@ class ParameterFitter(object):
                     mean_r2 = tf.reduce_mean(r2)
 
                     if step >= min_n_iterations:
-                        r2_diff = mean_r2 - mean_r2s[np.max(step - lag, 0)]
+                        r2_diff = mean_r2 - mean_r2s[np.max((step - lag, 0))]
                         if (r2_diff >= 0.0) & (r2_diff < r2_atol):
                             pbar.close()
                             break
