@@ -221,6 +221,22 @@ class EncodingModel(object):
     def get_WWT(self):
         return self.weights.T.dot(self.weights)
 
+
+    def get_residual_dist(self, n_voxels, omega, dof):
+
+        if dof is None:
+            residual_dist = tfd.MultivariateNormalFullCovariance(
+                tf.zeros(n_voxels),
+                omega, allow_nan_stats=False)
+        else:
+            chol = tf.linalg.cholesky(omega)
+            residual_dist = tfd.MultivariateStudentTLinearOperator(
+                dof,
+                tf.zeros(n_voxels),
+                tf.linalg.LinearOperatorLowerTriangular(chol), allow_nan_stats=False)
+
+        return residual_dist
+
     @tf.function
     def _likelihood(self, stimuli, data, parameters, weights, omega, dof, logp=False, normalize=False):
 
@@ -243,16 +259,7 @@ class EncodingModel(object):
         residuals = data[:, tf.newaxis, :] - \
             tf.reshape(pred, (stimuli.shape[0], stimuli.shape[1], n_voxels))
 
-        if dof is None:
-            residual_dist = tfd.MultivariateNormalFullCovariance(
-                tf.zeros(n_voxels),
-                omega, allow_nan_stats=False)
-        else:
-            chol = tf.linalg.cholesky(omega)
-            residual_dist = tfd.MultivariateStudentTLinearOperator(
-                dof,
-                tf.zeros(n_voxels),
-                tf.linalg.LinearOperatorLowerTriangular(chol), allow_nan_stats=False)
+        residual_dist = self.get_residual_dist(n_voxels, omega, dof)
 
         # we use log likelihood to correct for very small numbers
         p = residual_dist.log_prob(residuals)
