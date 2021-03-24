@@ -8,6 +8,7 @@ from .utils import norm, format_data, format_paradigm, format_parameters, format
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 
+
 class EncodingModel(object):
 
     parameter_labels = None
@@ -23,10 +24,14 @@ class EncodingModel(object):
 
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
+
+        # paradigm: n_batch x n_timepoints x n_stimulus_features
+        # parameters: n_batch x n_units x n_parameters
+        # weights: n_batch x n_basis_functions x n_units
         if weights is None:
             return self._basis_predictions(paradigm, parameters)
         else:
-            return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (1, 0))
+            return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (2, 1))[:, :, 0, :]
 
     def predict(self, paradigm=None, parameters=None, weights=None):
 
@@ -39,8 +44,13 @@ class EncodingModel(object):
         if weights is not None:
             self.weights = weights
 
+        if self.weights is None:
+            weights_ = None
+        else:
+            weights_ = self.weights.values[np.newaxis, ...]
+
         predictions = self._predict(
-            self.paradigm.values, self.parameters.values, self.weights)
+            self.paradigm.values[np.newaxis, ...], self.parameters.values[np.newaxis, ...], weights_)[0]
 
         return pd.DataFrame(predictions.numpy(), index=self.paradigm.index, columns=self.parameters.index)
 
@@ -59,20 +69,29 @@ class EncodingModel(object):
         if weights is not None:
             self.weights = weights
 
-        self.data = self._simulate(
-            self.paradigm, self.parameters, self.weights, noise)
-        return self.data
+        if self.weights is None:
+            weights_ = None
+        else:
+            weights_ = self.weights.values[np.newaxis, ...]
+
+        simulated_data = self._simulate(
+            self.paradigm.values[np.newaxis, ...],
+            self.parameters.values[np.newaxis, ...],
+            weights_, noise).numpy()
+
+        return format_data(simulated_data[0])
 
     def _simulate(self, paradigm, parameters, weights, noise=1.):
 
-        n_timepoints = paradigm.shape[0]
+        n_batches = paradigm.shape[0]
+        n_timepoints = paradigm.shape[1]
 
         if weights is None:
-            n_voxels = parameters.shape[0]
+            n_voxels = parameters.shape[1]
         else:
-            n_voxels = weights.shape[1]
+            n_voxels = weights.shape[2]
 
-        noise = tf.random.normal(shape=(n_timepoints, n_voxels),
+        noise = tf.random.normal(shape=(n_batches, n_timepoints, n_voxels),
                                  mean=0.0,
                                  stddev=noise,
                                  dtype=tf.float32)
@@ -136,40 +155,6 @@ class EncodingModel(object):
                              weights=discrete_weights,
                              data=self.data)
 
-    def get_stimulus_posterior(self, data, grid, omega=None, parameters=None, weights=None, normalize=True):
-
-        n_voxels = data.shape[1]
-
-        if omega is None:
-            self.omega = omega
-
-        grid = format_paradigm(grid[:, np.newaxis])
-
-        predictions = self.predict(grid, parameters, weights)
-        predictions.set_index(pd.MultiIndex.from_frame(grid))
-
-        # time x grid x voxel
-        residuals = data.values[:, np.newaxis, :] - \
-            predictions.values[np.newaxis, :, :]
-
-        residual_dist = tfd.MultivariateNormalFullCovariance(
-            tf.zeros(n_voxels),
-            omega, allow_nan_stats=False)
-
-        # we use log likelihood to correct for very small numbers
-        p = pd.DataFrame(residual_dist.log_prob(residuals).numpy(),
-                         index=data.index,
-                         columns=pd.MultiIndex.from_frame(grid))
-
-        p -= p.min().min()
-
-        p = np.exp(p)
-
-        if normalize:
-            p = (p.T / p.T.sum()).T
-
-        return p
-
     def likelihood(self, stimuli, data=None, parameters=None, weights=None, omega=None, dof=None, logp=False, normalize=True):
 
         if data is None:
@@ -204,7 +189,6 @@ class EncodingModel(object):
 
         return likelihood
 
-
     def apply_mask(self, mask):
 
         if self.data is not None:
@@ -216,11 +200,8 @@ class EncodingModel(object):
         if self.weights is not None:
             self.weights = self.weights.loc[:, mask]
 
-
-
     def get_WWT(self):
         return self.weights.T.dot(self.weights)
-
 
     def get_residual_dist(self, n_voxels, omega, dof):
 
@@ -240,26 +221,25 @@ class EncodingModel(object):
     @tf.function
     def _likelihood(self, stimuli, data, parameters, weights, omega, dof, logp=False, normalize=False):
 
-        # stimuli: n_timepoints x n_stimuli x n_stimulus_features
-        # data: n_timepoints x n_units
+        # stimuli: n_batches x n_timepoints x n_stimulus_features
+        # data: n_batches x n_timepoints x n_units
+        # parameters: n_batches x n_subpops x n_parmeters
+        # weights: n_batches x n_subpops x n_units
+        # omega: n_units x n_units
 
-        if len(stimuli.shape) == 2:
-            stimuli = stimuli[:, tf.newaxis, :]
+        # n_batches * n_timepoints x n_stimulus_features
+        prediction = self._predict(stimuli, parameters, weights)
 
-        n_voxels = data.shape[1]
-        n_stimulus_features = stimuli.shape[2]
+        return self._likelihood_timeseries(data, prediction, omega, dof, logp, normalize)
 
-        stimuli_ = tf.reshape(
-            stimuli, (stimuli.shape[0] * stimuli.shape[1], n_stimulus_features))
+    @tf.function
+    def _likelihood_timeseries(self, data, prediction, omega, dof, logp=False, normalize=False):
+        # n_timepoints x n_stimuli x n_units
+        n_units = data.shape[2]
 
-        # n_timepoints * n_stimuli x n_voxels
-        pred = self._predict(stimuli_, parameters, weights)
+        residuals = data - prediction
 
-        # n_timepoints x n_stimuli x n_voxels
-        residuals = data[:, tf.newaxis, :] - \
-            tf.reshape(pred, (stimuli.shape[0], stimuli.shape[1], n_voxels))
-
-        residual_dist = self.get_residual_dist(n_voxels, omega, dof)
+        residual_dist = self.get_residual_dist(n_units, omega, dof)
 
         # we use log likelihood to correct for very small numbers
         p = residual_dist.log_prob(residuals)
@@ -295,6 +275,10 @@ class HRFEncodingModel(EncodingModel):
             self, paradigm, parameters, weights)
 
         return self.hrf_model.convolve(pre_convolve)
+
+    @tf.function
+    def _predict_no_hrf(self, paradigm, parameters, weights):
+        return EncodingModel._predict(self, paradigm, parameters, weights)
 
     def get_init_pars(self, data, paradigm, confounds=None):
 
@@ -351,7 +335,7 @@ class GaussianPRF(EncodingModel):
 
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
-        return norm(paradigm, parameters[:, 0], parameters[:, 1]) * parameters[:, 2] + parameters[:, 3]
+        return norm(paradigm, parameters[..., 0], parameters[..., 1]) * parameters[..., 2] + parameters[..., 3]
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
@@ -406,9 +390,9 @@ class GaussianPRF2D(EncodingModel):
     def get_rf(self, as_frame=False, unpack=False):
 
         grid_coordinates = self.grid_coordinates.values
-        parameters = self.parameters.values
+        parameters = self.parameters.values[np.newaxis, ...]
 
-        rf = self._get_rf(grid_coordinates, parameters).numpy()
+        rf = self._get_rf(grid_coordinates, parameters).numpy()[0]
 
         if as_frame:
             rf = pd.concat([pd.DataFrame(e,
@@ -425,20 +409,23 @@ class GaussianPRF2D(EncodingModel):
     def _basis_predictions(self, paradigm, parameters):
         rf = self._get_rf(self.grid_coordinates, parameters)
 
-        baseline = parameters[tf.newaxis, :, 3]
-        return tf.tensordot(paradigm[:, tf.newaxis, :], rf[tf.newaxis, :, :], (2, 2))[:, 0, 0, :] + baseline
+        baseline = parameters[..., 3]
+        result = tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :] + baseline
+
+        return result
 
     @tf.function
     def _get_rf(self, grid_coordinates, parameters):
 
-        # n_populations x  n_grid_spaces
-        x = grid_coordinates[:, 0][tf.newaxis, :]
-        y = grid_coordinates[:, 1][tf.newaxis, :]
+        # n_batches x n_populations x  n_grid_spaces
+        x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
+        y = grid_coordinates[:, 1][tf.newaxis, tf.newaxis, :]
 
-        mu_x = parameters[:, 0, tf.newaxis]
-        mu_y = parameters[:, 1, tf.newaxis]
-        sd = parameters[:, 2, tf.newaxis]
-        amplitude = parameters[:, 4, tf.newaxis]
+        # n_batches x n_populations x n_grid_spaces (broadcast)
+        mu_x = parameters[:, :, 0, tf.newaxis]
+        mu_y = parameters[:, :, 1, tf.newaxis]
+        sd = parameters[:, :, 2, tf.newaxis]
+        amplitude = parameters[:, :, 4, tf.newaxis]
 
         return (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
 
@@ -478,12 +465,19 @@ class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
         super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
                          hrf_model=hrf_model)
 
-class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
+    def to_linear_model(self):
+        return LinearModelWithBaselineHRF(self.paradigm, self.data,
+                                          self.parameters[[
+                                              'baseline']], weights=self.get_rf().T,
+                                          hrf_model=self.hrf_model)
 
+
+class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
     # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
     # srf factor is limited to be above 1
-    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude', 'srf_amplitude', 'srf_factor']
+    parameter_labels = ['x', 'y', 'sd', 'baseline',
+                        'amplitude', 'srf_amplitude', 'srf_factor']
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
@@ -521,9 +515,11 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
         srf_size = parameters[:, 6, tf.newaxis]
 
         standard_prf = super()._get_rf(grid_coordinates, parameters)
-        srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*srf_size*sd**2)) * amplitude * srf_amplitude / srf_size**2
+        srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*srf_size*sd**2)
+                     ) * amplitude * srf_amplitude / srf_size**2
 
         return standard_prf - srf
+
 
 class DifferenceOfGaussiansPRF2DWithHRF(DifferenceOfGaussiansPRF2D, HRFEncodingModel):
 
@@ -532,6 +528,7 @@ class DifferenceOfGaussiansPRF2DWithHRF(DifferenceOfGaussiansPRF2D, HRFEncodingM
 
         super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
                          hrf_model=hrf_model)
+
 
 class DiscreteModel(EncodingModel):
 
@@ -577,13 +574,16 @@ class LinearModel(EncodingModel):
 
 
 class LinearModelWithBaseline(EncodingModel):
-
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
+
+        basis_predictions = self._basis_predictions(paradigm, None)
+
         if weights is None:
-            return self._basis_predictions(paradigm, None)
+            return basis_predictions + parameters[..., 0]
         else:
-            return tf.tensordot(self._basis_predictions(paradigm, None), weights, (1, 0)) + tf.transpose(parameters)
+            return tf.tensordot(basis_predictions, weights, (2, 1))[:, :, 0, :] + \
+                tf.transpose(parameters, [0, 2, 1])
 
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
@@ -596,7 +596,6 @@ class LinearModelWithBaselineHRF(LinearModelWithBaseline, HRFEncodingModel):
                  weights=None, hrf_model=None, verbosity=logging.INFO,
                  **kwargs):
 
-        print(kwargs)
         super().__init__(paradigm=paradigm,
                          data=data,
                          parameters=parameters,
@@ -611,3 +610,7 @@ class LinearModelWithBaselineHRF(LinearModelWithBaseline, HRFEncodingModel):
             self, paradigm, parameters, weights)
 
         return self.hrf_model.convolve(pre_convolve)
+
+    @tf.function
+    def _predict_no_hrf(self, paradigm, parameters, weights):
+        return LinearModelWithBaseline._predict(self, paradigm, parameters, weights)

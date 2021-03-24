@@ -19,12 +19,12 @@ class BarStimulusFitter(StimulusFitter):
         if self.model.weights is None:
             self.model.weights
 
-    def fit_grid(self, angle, radius, width):
+    def fit_grid(self, angle, radius, width, include_xy=True):
 
         data = self.data.values
         model = self.model
-        parameters = self.model.parameters.values
-        weights = None if model.weights is None else model.weights.values
+        parameters = self.model.parameters.values[np.newaxis, ...]
+        weights = None if model.weights is None else model.weights.values[np.newaxis, ...]
         grid_coordinates = self.grid_coordinates.values
 
         grid = pd.MultiIndex.from_product(
@@ -32,30 +32,64 @@ class BarStimulusFitter(StimulusFitter):
 
         logging.info('Built grid of {len(par_grid)} bar settings...')
 
-        bars = self.make_bar_stimuli(grid_coordinates,
-                                     grid['angle'], grid['radius'], grid['width'])
+        bars = make_bar_stimuli(grid_coordinates,
+                                grid['angle'], grid['radius'], grid['width'])
 
-        ll = []
-        for row in range(len(data)):
-            ll.append(self.model._likelihood(bars[tf.newaxis, ...],
-                                             data[[row]], parameters, weights, self.model.omega, dof=self.model.dof, logp=True).numpy())
+        if hasattr(self.model, 'hrf_model'):
 
-        ll = pd.DataFrame(np.squeeze(
-            ll), columns=pd.MultiIndex.from_frame(grid))
+            bars = tf.concat((tf.zeros((bars.shape[0],
+                                        1,
+                                        bars.shape[1])),
+                              bars[:, tf.newaxis, :],
+                              tf.zeros((bars.shape[0],
+                                        len(self.model.hrf_model.hrf)-1,
+                                        bars.shape[1]))),
+                             1)
+
+            hrf_shift = np.argmax(model.hrf_model.hrf)
+
+            ts_prediction = model._predict(bars, parameters, weights)
+
+            baseline = ts_prediction[:, 0, :]
+
+            ts_prediction_summed_over_hrf = tf.reduce_sum(
+                ts_prediction - baseline[:, tf.newaxis, :], 1) / tf.reduce_sum(model.hrf_model.hrf) + baseline
+
+            ll = self.model._likelihood_timeseries(data[tf.newaxis, ...],
+                                                   ts_prediction_summed_over_hrf[:,
+                                                                                 tf.newaxis, :],
+                                                   self.model.omega,
+                                                   self.model.dof,
+                                                   logp=True,
+                                                   normalize=False)
+
+            ll = tf.concat((tf.roll(ll, -hrf_shift, 1)
+                            [:, :-hrf_shift], tf.ones((len(bars), hrf_shift)) * -1e12), 1)
+
+        else:
+            bars = bars[:, tf.newaxis, :]
+
+            ll = self.model._likelihood(bars, data[tf.newaxis, ...], parameters, weights,
+                                        self.model.omega, self.model.dof, logp=True)
+        ll = pd.DataFrame(ll.numpy().T, columns=pd.MultiIndex.from_frame(grid))
 
         best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
         best_pars.index = self.data.index
 
+        if include_xy:
+            best_pars['x'] = np.sin(best_pars['angle']) * best_pars['radius']
+            best_pars['y'] = np.cos(best_pars['angle']) * best_pars['radius']
+
         return best_pars.astype(np.float32)
 
     def fit(self, init_pars, learning_rate=0.01, max_n_iterations=500, min_n_iterations=100, lag=100,
-            rtol=1e-6):
+            rtol=1e-6, include_xy=True):
 
-        data = self.data.values
+        data = self.data.values[tf.newaxis, ...]
         grid_coordinates = self.grid_coordinates
         model = self.model
-        parameters = self.model.parameters.values
-        weights = None if model.weights is None else model.weights.values
+        parameters = self.model.parameters.values[tf.newaxis, ...]
+        weights = None if model.weights is None else model.weights.values[tf.newaxis, ...]
 
         if hasattr(init_pars, 'values'):
             init_pars = init_pars.values
@@ -63,11 +97,11 @@ class BarStimulusFitter(StimulusFitter):
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
         angle = tf.Variable(name='angle', shape=(
-            len(data),), initial_value=init_pars[:, 0])
+            data.shape[1],), initial_value=init_pars[:, 0])
         radius = tf.Variable(name='radius', shape=(
-            len(data),), initial_value=init_pars[:, 1])
+            data.shape[1],), initial_value=init_pars[:, 1])
         width = tf.Variable(name='width', shape=(
-            len(data),), initial_value=init_pars[:, 2])
+            data.shape[1],), initial_value=init_pars[:, 2])
         trainable_vars = [angle, radius, width]
 
         pbar = tqdm(range(max_n_iterations))
@@ -75,8 +109,8 @@ class BarStimulusFitter(StimulusFitter):
 
         for step in pbar:
             with tf.GradientTape() as tape:
-                bars = self.make_bar_stimuli(
-                    grid_coordinates, angle, radius, width)
+                bars = make_bar_stimuli(
+                    grid_coordinates, angle, radius, width)[tf.newaxis, ...]
 
                 ll = self.model._likelihood(
                     bars,  data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
@@ -110,24 +144,29 @@ class BarStimulusFitter(StimulusFitter):
                                    index=self.data.index,
                                    dtype=np.float32)
 
+        if include_xy:
+            fitted_pars['x'] = np.sin(fitted_pars['angle']) * fitted_pars['radius']
+            fitted_pars['y'] = np.cos(fitted_pars['angle']) * fitted_pars['radius']
+
         return fitted_pars
 
-    @tf.function
-    def make_bar_stimuli(self, grid_coordinates, angle, radius, width, falloff_speed=50.):
 
-        # stimuli: n_timepoints x n_stimuli x n_stimulus_features
-        x = grid_coordinates[tf.newaxis, :, 0]
-        y = grid_coordinates[tf.newaxis, :, 1]
+@tf.function
+def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=50.):
 
-        angle, radius, width = angle[:, tf.newaxis], radius[:,
-                                                            tf.newaxis], width[:, tf.newaxis]
+    # stimuli: n_timepoints x n_stimuli x n_stimulus_features
+    x = grid_coordinates[tf.newaxis, :, 0]
+    y = grid_coordinates[tf.newaxis, :, 1]
 
-        a = tf.sin(angle)
-        b = tf.cos(angle)
-        c = tf.sqrt(a**2 + b**2) * -radius
+    angle, radius, width = angle[:, tf.newaxis], radius[:,
+                                                        tf.newaxis], width[:, tf.newaxis]
 
-        distance = tf.abs(a * x + b * y + c) / tf.sqrt(a**2 + b**2)
+    a = tf.sin(angle)
+    b = tf.cos(angle)
+    c = tf.sqrt(a**2 + b**2) * -radius
 
-        bar = tf.math.sigmoid((-distance + width / 2) * falloff_speed)
+    distance = tf.abs(a * x + b * y + c) / tf.sqrt(a**2 + b**2)
 
-        return bar
+    bar = tf.math.sigmoid((-distance + width / 2) * falloff_speed)
+
+    return bar

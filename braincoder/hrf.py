@@ -15,15 +15,17 @@ class HRFModel(object):
             return self._downsample(cts)
 
     def _convolve(self, timeseries, pad_size):
-        pad_ = tf.tile(timeseries[:1, :], [pad_size, 1])
-        timeseries_padded = tf.concat((pad_, timeseries), 0)    
-        
-        cts = tf.nn.conv1d(tf.transpose(timeseries_padded)[..., tf.newaxis],
-                           self.hrf[:, tf.newaxis, tf.newaxis][::-1], #THIS IS WEIRD TENSORFLOW BEHAVIOR
-                           stride=1,
-                           padding='VALID')
-        
-        return tf.transpose(tf.squeeze(cts))[pad_size-len(self.hrf)+1:]
+        pad_ = tf.tile(timeseries[:, :1, :], [1, pad_size, 1])
+        timeseries_padded = tf.concat((pad_, timeseries), 1)
+
+        cts = tf.nn.conv2d(timeseries_padded[:, :, :, tf.newaxis],
+                           # THIS IS WEIRD TENSORFLOW BEHAVIOR
+                           self.hrf[:, tf.newaxis,
+                                    tf.newaxis, tf.newaxis][::-1],
+                           strides=[1, 1],
+                           padding='VALID')[:, :, :, 0]
+
+        return cts[:, pad_size-len(self.hrf)+1:, :]
 
     def _upsample(self, timeseries):
         new_length = len(timeseries) * self.oversampling
@@ -38,6 +40,7 @@ class HRFModel(object):
                                                  [new_length, upsampled_timeseries.shape[1]])
 
         return tf.squeeze(timeseries_downsampled)
+
 
 class SPMHRFModel(HRFModel):
 

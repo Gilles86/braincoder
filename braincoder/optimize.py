@@ -84,9 +84,9 @@ class ParameterFitter(object):
             @tf.function
             def get_ssq(parameters):
                 predictions = self.model._predict(
-                    self.paradigm, parameters, None)
+                    self.paradigm.values[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
 
-                residuals = y - predictions
+                residuals = y - predictions[0]
 
                 # ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
                 ssq = tf.reduce_sum(residuals**2, 0)
@@ -96,7 +96,7 @@ class ParameterFitter(object):
             @tf.function
             def get_ssq(parameters):
                 predictions_ = self.model._predict(
-                    self.paradigm, parameters, None)
+                    self.paradigm.values[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
 
                 predictions = tf.transpose(predictions_)[
                     :, tf.newaxis, :, tf.newaxis]
@@ -105,7 +105,7 @@ class ParameterFitter(object):
                     y)[:, tf.newaxis, :, tf.newaxis])
                 predictions = tf.transpose((X @ beta)[:, 0, :, 0])
 
-                residuals = y - predictions
+                residuals = y - predictions[0]
 
                 ssq = tf.squeeze(tf.reduce_sum(residuals**2))
                 ssq = tf.clip_by_value(
@@ -230,11 +230,12 @@ class ParameterFitter(object):
 
         @tf.function
         def _get_ssq_for_predictions(par_grid, data, model, paradigm):
-            grid_predictions = model._predict(paradigm, par_grid, None)
+            grid_predictions = model._predict(paradigm[tf.newaxis, ...],
+                                              par_grid[tf.newaxis, ...], None)
 
             # time x voxels x parameters
-            ssq = tf.math.reduce_variance(
-                grid_predictions[:, tf.newaxis, :] - data[:, :, tf.newaxis], 0)
+            ssq = tf.math.reduce_sum(
+                (grid_predictions[0, :, tf.newaxis, :] - data[:, :, tf.newaxis])**2, 0)
             return ssq
 
         # n_voxels x n_parameters
@@ -273,7 +274,7 @@ class ParameterFitter(object):
         if parameters is None:
             parameters = self.estimated_parameters
 
-        return get_rsq(self.data, self.get_predictions())
+        return get_rsq(self.data, self.get_predictions(parameters))
 
     @property
     def data(self):
@@ -502,7 +503,7 @@ class StimulusFitter(object):
 
     def __init__(self, data, model, stimulus_size, omega, dof=None):
 
-        self.data = data
+        self.data = format_data(data)
         self.model = model
         self.stimulus_size = stimulus_size
         self.model.omega = omega
@@ -514,7 +515,7 @@ class StimulusFitter(object):
     def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6,
             spike_and_slab_prior=False, sigma_prior=1., alpha=.5):
 
-        size_stimulus_var = (len(self.data), 1, self.stimulus_size)
+        size_stimulus_var = (1, len(self.data), self.stimulus_size)
 
         if init_stimulus is None:
             init_stimulus = np.zeros(size_stimulus_var)
@@ -533,9 +534,10 @@ class StimulusFitter(object):
 
         self.costs = np.ones(max_n_iterations) * 1e12
 
-        data_ = self.data.values
-        parameters = self.model.parameters.values
-        weights = None if self.model.weights is None else self.model.weights.values
+        data_ = self.data.values[np.newaxis, :, :]
+        parameters = self.model.parameters.values[np.newaxis, :, :]
+        weights = None if self.model.weights is None else self.model.weights.values[
+            np.newaxis, :, :]
 
         if spike_and_slab_prior:
             @tf.function
@@ -577,44 +579,7 @@ class StimulusFitter(object):
                         if (cost / previous_cost) < 1 - rtol:
                             break
 
-        return decoded_stimulus.numpy()
+        return decoded_stimulus[0].numpy()
 
     def firstpass(self):
-        baseline = np.zeros(self.stimulus_size, dtype=np.float32)
-        possible_stimuli = np.zeros(
-            (self.stimulus_size, self.stimulus_size), dtype=np.float32)
-
-        np.fill_diagonal(possible_stimuli, 1)
-
-        weights = None if self.model.weights is None else self.model.weights.values
-
-        baseline_ll = self.model._likelihood(baseline[np.newaxis, np.newaxis, :],
-                                             self.data,
-                                             self.model.parameters.values, weights=weights, omega=self.model.omega,
-                                             dof=self.model.dof, logp=True)
-
-        possible_stimuli_ll = self.model._likelihood(possible_stimuli[np.newaxis, :, :],
-                                                     self.data,
-                                                     self.model.parameters.values, weights=weights, omega=self.model.omega,
-                                                     dof=self.model.dof, logp=True)
-
-        ll_increase = tf.exp(tf.clip_by_value(
-            possible_stimuli_ll - baseline_ll, -tf.math.log(1000.), tf.math.log(1000.)))
-
-        ll_increase -= tf.reduce_min(ll_increase)
-        ll_increase /= tf.reduce_max(ll_increase)
-
-        ll_firstpass = self.model._likelihood(ll_increase,
-                                              self.data,
-                                              self.model.parameters.values, weights=weights, omega=self.model.omega,
-                                              dof=self.model.dof, logp=True)
-        print(f'Likelihood firstpass: {np.sum(ll_firstpass.numpy())}')
-
-        return ll_increase
-
-# weights = np.identity(3)
-# parameters = np.diag([1, 2, 3])
-# paradigm = np.array([[1, 2, 3]]).T
-# discretemodel = DiscreteModel(
-# weights=weights, parameters=parameters, paradigm=paradigm)
-# data = discretemodel.predict()
+        raise NotImplementedError("Best to start fitting with empty image")
