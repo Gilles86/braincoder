@@ -33,7 +33,9 @@ class BarStimulusFitter(StimulusFitter):
         logging.info('Built grid of {len(par_grid)} bar settings...')
 
         bars = make_bar_stimuli(grid_coordinates,
-                                grid['angle'], grid['radius'], grid['width'])
+                                grid['angle'].values[np.newaxis, ...],
+                                grid['radius'].values[np.newaxis, ...],
+                                grid['width'].values[np.newaxis, ...])[0]
 
         if hasattr(self.model, 'hrf_model'):
 
@@ -110,10 +112,13 @@ class BarStimulusFitter(StimulusFitter):
         for step in pbar:
             with tf.GradientTape() as tape:
                 bars = make_bar_stimuli(
-                    grid_coordinates, angle, radius, width)[tf.newaxis, ...]
+                    grid_coordinates,
+                    angle[tf.newaxis, ...],
+                    radius[tf.newaxis, ...],
+                    width[tf.newaxis, ...])
 
                 ll = self.model._likelihood(
-                    bars,  data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
+                    bars, data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
 
                 sll = tf.reduce_sum(ll)
                 cost = -sll
@@ -145,8 +150,10 @@ class BarStimulusFitter(StimulusFitter):
                                    dtype=np.float32)
 
         if include_xy:
-            fitted_pars['x'] = np.sin(fitted_pars['angle']) * fitted_pars['radius']
-            fitted_pars['y'] = np.cos(fitted_pars['angle']) * fitted_pars['radius']
+            fitted_pars['x'] = np.sin(
+                fitted_pars['angle']) * fitted_pars['radius']
+            fitted_pars['y'] = np.cos(
+                fitted_pars['angle']) * fitted_pars['radius']
 
         return fitted_pars
 
@@ -154,19 +161,20 @@ class BarStimulusFitter(StimulusFitter):
 @tf.function
 def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=50.):
 
-    # stimuli: n_timepoints x n_stimuli x n_stimulus_features
-    x = grid_coordinates[tf.newaxis, :, 0]
-    y = grid_coordinates[tf.newaxis, :, 1]
+    # batch x stimulus x stimulus_dimension
 
-    angle, radius, width = angle[:, tf.newaxis], radius[:,
-                                                        tf.newaxis], width[:, tf.newaxis]
+    x = grid_coordinates[:, 0]
+    y = grid_coordinates[:, 1]
 
     a = tf.sin(angle)
     b = tf.cos(angle)
-    c = tf.sqrt(a**2 + b**2) * -radius
+    c = tf.sqrt(a**2 + b**2) * - radius
 
-    distance = tf.abs(a * x + b * y + c) / tf.sqrt(a**2 + b**2)
+    distance = tf.abs(a[..., tf.newaxis] * x[tf.newaxis, tf.newaxis, ...] +
+                      b[..., tf.newaxis] * y[tf.newaxis, tf.newaxis, ...] +
+                      c[..., tf.newaxis]) / tf.sqrt(a[..., tf.newaxis]**2 + b[..., tf.newaxis]**2)
 
-    bar = tf.math.sigmoid((-distance + width / 2) * falloff_speed)
+    bar = tf.math.sigmoid(
+        (-distance + width[..., tf.newaxis] / 2) * falloff_speed)
 
     return bar
