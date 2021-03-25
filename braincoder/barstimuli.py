@@ -105,10 +105,10 @@ class BarStimulusFitter(StimulusFitter):
         if max_width is None:
             max_width = 2. * radius_range
 
-        max_width = np.float32(max_width)
+        max_width = np.float32(max_width + 1e-8)
 
         angle_bijector = tfb.Sigmoid(low=np.float32(-1e-8),
-                                     high=np.float32(.5 * np.pi + 1e8))
+                                     high=np.float32(.5 * np.pi + 1e-8))
 
         radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range * (1+1e-8)),
                                       high=np.float32(radius_range * (1+1e-8)))
