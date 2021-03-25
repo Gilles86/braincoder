@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from .optimize import StimulusFitter
 import logging
+from tensorflow_probability import bijectors as tfb
 
 
 class BarStimulusFitter(StimulusFitter):
@@ -85,6 +86,7 @@ class BarStimulusFitter(StimulusFitter):
         return best_pars.astype(np.float32)
 
     def fit(self, init_pars, learning_rate=0.01, max_n_iterations=500, min_n_iterations=100, lag=100,
+            radius_range=1.4142, max_width=None,
             rtol=1e-6, include_xy=True):
 
         data = self.data.values[tf.newaxis, ...]
@@ -95,22 +97,49 @@ class BarStimulusFitter(StimulusFitter):
 
         if hasattr(init_pars, 'values'):
             init_pars = init_pars.values
-
+        
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
-        angle = tf.Variable(name='angle', shape=(
-            data.shape[1],), initial_value=init_pars[:, 0])
-        radius = tf.Variable(name='radius', shape=(
-            data.shape[1],), initial_value=init_pars[:, 1])
-        width = tf.Variable(name='width', shape=(
-            data.shape[1],), initial_value=init_pars[:, 2])
-        trainable_vars = [angle, radius, width]
+        radius_range = np.float32(radius_range)
+
+        if max_width is None:
+            max_width = 2. * radius_range
+
+        max_width = np.float32(max_width)
+
+        angle_bijector = tfb.Sigmoid(low=np.float32(-1e-8),
+                                     high=np.float32(.5 * np.pi + 1e8))
+
+        radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range * (1+1e-8)),
+                                      high=np.float32(radius_range * (1+1e-8)))
+
+        width_bijector = tfb.Sigmoid(low=np.float32(0.),
+                                     high=np.float32(max_width * (1+1e-8)))
+
+        angle_ = tf.Variable(name='angle',
+                             shape=(data.shape[1],),
+                             initial_value=angle_bijector.inverse(init_pars[:, 0]))
+
+        radius_ = tf.Variable(name='radius',
+                              shape=(data.shape[1],),
+                              initial_value=radius_bijector.inverse(init_pars[:, 1]))
+
+        width_ = tf.Variable(name='width',
+                             shape=(data.shape[1],),
+                             initial_value=radius_bijector.inverse(init_pars[:, 2]))
+
+        trainable_vars = [angle_, radius_, width_]
 
         pbar = tqdm(range(max_n_iterations))
         self.costs = np.ones(max_n_iterations) * 1e12
 
         for step in pbar:
             with tf.GradientTape() as tape:
+
+                angle = angle_bijector.forward(angle_)
+                radius = radius_bijector.forward(radius_)
+                width = width_bijector.forward(width_)
+
                 bars = make_bar_stimuli(
                     grid_coordinates,
                     angle[tf.newaxis, ...],
