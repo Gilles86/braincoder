@@ -97,7 +97,7 @@ class BarStimulusFitter(StimulusFitter):
 
         if hasattr(init_pars, 'values'):
             init_pars = init_pars.values
-        
+
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
         radius_range = np.float32(radius_range)
@@ -107,14 +107,33 @@ class BarStimulusFitter(StimulusFitter):
 
         max_width = np.float32(max_width + 1e-8)
 
-        angle_bijector = tfb.Sigmoid(low=np.float32(-1e-8),
-                                     high=np.float32(.5 * np.pi + 1e-8))
+        if np.any(init_pars[:, 0] < 0.0):
+            raise ValueError('All angles should be more than 0 radians')
 
-        radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range * (1+1e-8)),
-                                      high=np.float32(radius_range * (1+1e-8)))
+        if np.any(init_pars[:, 0] > .5 * np.pi):
+            raise ValueError('All angles should be less than .5 pi radians')
 
-        width_bijector = tfb.Sigmoid(low=np.float32(0.),
-                                     high=np.float32(max_width * (1+1e-8)))
+        if np.any(np.abs(init_pars[:, 1]) > radius_range):
+            raise ValueError(f'All radiuses should be within -({radius_range}, {radius_range})')
+
+        if np.any(np.abs(init_pars[:, 2]) < 0.0):
+            raise ValueError('All widths should be positive')
+
+        if np.any(np.abs(init_pars[:, 2]) > max_width):
+            raise ValueError(f'All widths should be less than {max_width}')
+
+        init_pars[:, 0] = tf.clip_by_value(init_pars[:, 0], 1e-6, .5 * np.pi-1e-6)
+        init_pars[:, 1] = tf.clip_by_value(init_pars[:, 1], -radius_range + 1e-6, radius_range - 1e-6)
+        init_pars[:, 2] = tf.clip_by_value(init_pars[:, 2], 1e-6, max_width - 1e-6)
+
+        angle_bijector = tfb.Sigmoid(low=np.float32(0.0),
+                                     high=np.float32(.5 * np.pi))
+
+        radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range),
+                                      high=np.float32(radius_range))
+
+        width_bijector = tfb.Sigmoid(low=np.float32(0.0),
+                                     high=np.float32(max_width))
 
         angle_ = tf.Variable(name='angle',
                              shape=(data.shape[1],),
