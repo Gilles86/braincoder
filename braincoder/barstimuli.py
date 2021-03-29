@@ -80,8 +80,8 @@ class BarStimulusFitter(StimulusFitter):
         best_pars.index = self.data.index
 
         if include_xy:
-            best_pars['x'] = np.sin(best_pars['angle']) * best_pars['radius']
-            best_pars['y'] = np.cos(best_pars['angle']) * best_pars['radius']
+            best_pars['x'] = np.cos(best_pars['angle']) * best_pars['radius']
+            best_pars['y'] = np.sin(best_pars['angle']) * best_pars['radius']
 
         return best_pars.astype(np.float32)
 
@@ -203,9 +203,9 @@ class BarStimulusFitter(StimulusFitter):
                                    dtype=np.float32)
 
         if include_xy:
-            fitted_pars['x'] = np.sin(
+            fitted_pars['x'] = np.cos(
                 fitted_pars['angle']) * fitted_pars['radius']
-            fitted_pars['y'] = np.cos(
+            fitted_pars['y'] = np.sin(
                 fitted_pars['angle']) * fitted_pars['radius']
 
         return fitted_pars
@@ -219,8 +219,8 @@ def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=50.):
     x = grid_coordinates[:, 0]
     y = grid_coordinates[:, 1]
 
-    a = tf.sin(angle)
-    b = tf.cos(angle)
+    a = tf.cos(angle)
+    b = tf.sin(angle)
     c = tf.sqrt(a**2 + b**2) * - radius
 
     distance = tf.abs(a[..., tf.newaxis] * x[tf.newaxis, tf.newaxis, ...] +
