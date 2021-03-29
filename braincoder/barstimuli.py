@@ -126,9 +126,6 @@ class BarStimulusFitter(StimulusFitter):
         init_pars[:, 1] = tf.clip_by_value(init_pars[:, 1], -radius_range + 1e-6, radius_range - 1e-6)
         init_pars[:, 2] = tf.clip_by_value(init_pars[:, 2], 1e-6, max_width - 1e-6)
 
-        # angle_bijector = tfb.Sigmoid(low=np.float32(-.5 * np.pi),
-                                     # high=np.float32(.5 * np.pi))
-
         radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range),
                                       high=np.float32(radius_range))
 
