@@ -291,6 +291,7 @@ class BarStimulusFitter(StimulusFitter):
                 step_size,
                 target_log_prob_fn,
                 unconstraining_bijectors,
+                target_accept_prob=0.75,
                 num_steps=50,
                 burnin=50):
 
@@ -314,7 +315,7 @@ class BarStimulusFitter(StimulusFitter):
             adaptive_sampler = tfp.mcmc.DualAveragingStepSizeAdaptation(
                 inner_kernel=hmc,
                 num_adaptation_steps=int(0.8 * burnin),
-                target_accept_prob=0.75,
+                target_accept_prob=target_accept_prob,
                 # NUTS inside of a TTK requires custom getter/setter functions.
                 step_size_setter_fn=lambda pkr, new_step_size: pkr._replace(
                     inner_results=pkr.inner_results._replace(
@@ -359,6 +360,8 @@ class BarStimulusFitter(StimulusFitter):
         likelihood = self.build_likelihood_function(
             relevant_frames, n_batches=n_chains)
 
+        step_size = [tf.fill([n_chains] + [1] * (len(s.shape) - 1),
+                             tf.constant(0.001, np.float32)) for s in initial_state]
         samples, stats = sample_hmc(
             initial_state, step_size, likelihood, bijectors, num_steps=n_samples, burnin=n_burnin)
 
