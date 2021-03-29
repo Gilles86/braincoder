@@ -16,13 +16,14 @@ class BarStimulusFitter(StimulusFitter):
 
         self.data = data
         self.model = model
-        self.grid_coordinates = pd.DataFrame(grid_coordinates)
+        self.grid_coordinates = pd.DataFrame(
+            grid_coordinates, columns=['x', 'y'])
         self.model.omega = omega
         self.model.dof = dof
 
         if max_radius is None:
             self.max_radius = np.sqrt(
-                np.max(grid_coordinates['x'])**2 + np.max(grid_coordinates['y'])**2)
+                np.max(self.grid_coordinates['x'])**2 + np.max(self.grid_coordinates['y'])**2)
         else:
             self.max_radius = max_radius
 
@@ -355,9 +356,11 @@ class BarStimulusFitter(StimulusFitter):
         initial_state = list(
             np.repeat(init_pars.values.T[:, np.newaxis, :], n_chains, 1))
 
-        likelihood = self.build_likelihood_function(relevant_frames, n_batches=n_chains)
+        likelihood = self.build_likelihood_function(
+            relevant_frames, n_batches=n_chains)
 
-        samples, stats = sample_hmc(initial_state, step_size, likelihood, bijectors, num_steps=n_samples, burnin=n_burnin)
+        samples, stats = sample_hmc(
+            initial_state, step_size, likelihood, bijectors, num_steps=n_samples, burnin=n_burnin)
 
         angle = tf.math.atan(samples[1] / samples[0]).numpy()
         radius = samples[2].numpy()
