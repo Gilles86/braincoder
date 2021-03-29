@@ -107,11 +107,11 @@ class BarStimulusFitter(StimulusFitter):
 
         max_width = np.float32(max_width + 1e-8)
 
-        if np.any(init_pars[:, 0] < 0.0):
-            raise ValueError('All angles should be more than 0 radians')
+        if np.any(init_pars[:, 0] < -.5*np.pi):
+            raise ValueError('All angles should be more than -1/2 pi radians')
 
-        if np.any(init_pars[:, 0] > .5 * np.pi):
-            raise ValueError('All angles should be less than .5 pi radians')
+        if np.any(init_pars[:, 0] > .5*np.pi):
+            raise ValueError('All angles should be less than 1/2 pi radians')
 
         if np.any(np.abs(init_pars[:, 1]) > radius_range):
             raise ValueError(f'All radiuses should be within -({radius_range}, {radius_range})')
@@ -122,12 +122,12 @@ class BarStimulusFitter(StimulusFitter):
         if np.any(np.abs(init_pars[:, 2]) > max_width):
             raise ValueError(f'All widths should be less than {max_width}')
 
-        init_pars[:, 0] = tf.clip_by_value(init_pars[:, 0], 1e-6, .5 * np.pi-1e-6)
+        init_pars[:, 0] = tf.clip_by_value(init_pars[:, 0], -.5*np.pi + 1e-6, .5 * np.pi-1e-6)
         init_pars[:, 1] = tf.clip_by_value(init_pars[:, 1], -radius_range + 1e-6, radius_range - 1e-6)
         init_pars[:, 2] = tf.clip_by_value(init_pars[:, 2], 1e-6, max_width - 1e-6)
 
-        angle_bijector = tfb.Sigmoid(low=np.float32(0.0),
-                                     high=np.float32(.5 * np.pi))
+        # angle_bijector = tfb.Sigmoid(low=np.float32(-.5 * np.pi),
+                                     # high=np.float32(.5 * np.pi))
 
         radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range),
                                       high=np.float32(radius_range))
@@ -135,9 +135,13 @@ class BarStimulusFitter(StimulusFitter):
         width_bijector = tfb.Sigmoid(low=np.float32(0.0),
                                      high=np.float32(max_width))
 
-        angle_ = tf.Variable(name='angle',
+        x_orient = tf.Variable(name='x_orient',
                              shape=(data.shape[1],),
-                             initial_value=angle_bijector.inverse(init_pars[:, 0]))
+                             initial_value=np.cos(init_pars[:, 0]))
+
+        y_orient = tf.Variable(name='y_orient',
+                             shape=(data.shape[1],),
+                             initial_value=np.sin(init_pars[:, 0]))
 
         radius_ = tf.Variable(name='radius',
                               shape=(data.shape[1],),
@@ -147,7 +151,7 @@ class BarStimulusFitter(StimulusFitter):
                              shape=(data.shape[1],),
                              initial_value=radius_bijector.inverse(init_pars[:, 2]))
 
-        trainable_vars = [angle_, radius_, width_]
+        trainable_vars = [x_orient, y_orient, radius_, width_]
 
         pbar = tqdm(range(max_n_iterations))
         self.costs = np.ones(max_n_iterations) * 1e12
@@ -155,9 +159,10 @@ class BarStimulusFitter(StimulusFitter):
         for step in pbar:
             with tf.GradientTape() as tape:
 
-                angle = angle_bijector.forward(angle_)
                 radius = radius_bijector.forward(radius_)
                 width = width_bijector.forward(width_)
+
+                angle = tf.math.atan(y_orient / x_orient)
 
                 bars = make_bar_stimuli(
                     grid_coordinates,
