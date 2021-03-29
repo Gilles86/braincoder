@@ -207,7 +207,7 @@ class BarStimulusFitter(StimulusFitter):
 
 
 @tf.function
-def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=50.):
+def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=1000.):
 
     # batch x stimulus x stimulus_dimension
 
