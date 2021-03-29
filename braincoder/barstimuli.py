@@ -110,8 +110,8 @@ class BarStimulusFitter(StimulusFitter):
         if np.any(init_pars[:, 0] < 0.0):
             raise ValueError('All angles should be more than 0 radians')
 
-        if np.any(init_pars[:, 0] > .5 * np.pi):
-            raise ValueError('All angles should be less than .5 pi radians')
+        if np.any(init_pars[:, 0] > np.pi):
+            raise ValueError('All angles should be less than pi radians')
 
         if np.any(np.abs(init_pars[:, 1]) > radius_range):
             raise ValueError(f'All radiuses should be within -({radius_range}, {radius_range})')
@@ -122,12 +122,12 @@ class BarStimulusFitter(StimulusFitter):
         if np.any(np.abs(init_pars[:, 2]) > max_width):
             raise ValueError(f'All widths should be less than {max_width}')
 
-        init_pars[:, 0] = tf.clip_by_value(init_pars[:, 0], 1e-6, .5 * np.pi-1e-6)
+        init_pars[:, 0] = tf.clip_by_value(init_pars[:, 0], 1e-6, np.pi-1e-6)
         init_pars[:, 1] = tf.clip_by_value(init_pars[:, 1], -radius_range + 1e-6, radius_range - 1e-6)
         init_pars[:, 2] = tf.clip_by_value(init_pars[:, 2], 1e-6, max_width - 1e-6)
 
         angle_bijector = tfb.Sigmoid(low=np.float32(0.0),
-                                     high=np.float32(.5 * np.pi))
+                                     high=np.float32(np.pi))
 
         radius_bijector = tfb.Sigmoid(low=np.float32(-radius_range),
                                       high=np.float32(radius_range))
