@@ -318,7 +318,7 @@ class BarStimulusFitter(StimulusFitter):
             relevant_frames, n_batches=n_chains)
 
         step_size = [tf.fill([n_chains] + [1] * (len(s.shape) - 1),
-                             tf.constant(step_size np.float32)) for s in initial_state]
+                             tf.constant(step_size, np.float32)) for s in initial_state]
         samples, stats = sample_hmc(
             initial_state, step_size, likelihood, bijectors, num_steps=n_samples, burnin=n_burnin)
 
