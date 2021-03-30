@@ -6,7 +6,7 @@ from .optimize import StimulusFitter
 import logging
 import tensorflow_probability as tfp
 from tensorflow_probability import bijectors as tfb
-from .utils.mcmc import cleanup_chain
+from .utils.mcmc import cleanup_chain, sample_hmc
 
 
 class BarStimulusFitter(StimulusFitter):
@@ -288,53 +288,6 @@ class BarStimulusFitter(StimulusFitter):
         init_pars = init_pars.astype(np.float32)
         init_pars['orient_x'] = np.cos(init_pars['angle'])
         init_pars['orient_y'] = np.sin(init_pars['angle'])
-
-        @tf.function
-        def sample_hmc(
-                init_state,
-                step_size,
-                target_log_prob_fn,
-                unconstraining_bijectors,
-                target_accept_prob=0.75,
-                num_steps=50,
-                burnin=50):
-
-            def trace_fn(_, pkr):
-                return {
-                    'log_prob': pkr.inner_results.inner_results.target_log_prob,
-                    'diverging': pkr.inner_results.inner_results.has_divergence,
-                    'is_accepted': pkr.inner_results.inner_results.is_accepted,
-                    'accept_ratio': tf.exp(pkr.inner_results.inner_results.log_accept_ratio),
-                    'leapfrogs_taken': pkr.inner_results.inner_results.leapfrogs_taken,
-                    'step_size': pkr.inner_results.inner_results.step_size}
-
-            hmc = tfp.mcmc.NoUTurnSampler(
-                target_log_prob_fn,
-                step_size=step_size)
-
-            hmc = tfp.mcmc.TransformedTransitionKernel(
-                inner_kernel=hmc,
-                bijector=unconstraining_bijectors)
-
-            adaptive_sampler = tfp.mcmc.DualAveragingStepSizeAdaptation(
-                inner_kernel=hmc,
-                num_adaptation_steps=int(0.8 * burnin),
-                target_accept_prob=target_accept_prob,
-                # NUTS inside of a TTK requires custom getter/setter functions.
-                step_size_setter_fn=lambda pkr, new_step_size: pkr._replace(
-                    inner_results=pkr.inner_results._replace(
-                        step_size=new_step_size)
-                ),
-                step_size_getter_fn=lambda pkr: pkr.inner_results.step_size,
-                log_accept_prob_getter_fn=lambda pkr: pkr.inner_results.log_accept_ratio,
-            )
-
-            # Sampling from the chain.
-            return tfp.mcmc.sample_chain(
-                num_results=burnin + num_steps,
-                current_state=init_state,
-                kernel=adaptive_sampler,
-                trace_fn=trace_fn)
 
         if (relevant_frames is not None) and (len(init_pars) > len(relevant_frames)):
             init_pars = init_pars.iloc[relevant_frames, :]
