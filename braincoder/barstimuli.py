@@ -244,8 +244,14 @@ class BarStimulusFitter(StimulusFitter):
 
         else:
             relevant_frames = tf.constant(relevant_frames, tf.int32)
-            size_ = tf.constant(
-                [data.shape[1], n_batches, len(grid_coordinates)], dtype=tf.int32)
+
+            size_ = (n_batches, data.shape[1], len(grid_coordinates))
+            size_ = tf.constant(size_, dtype=tf.int32)
+
+            time_ix, batch_ix = np.meshgrid(relevant_frames, range(n_batches))
+            indices = np.zeros((n_batches, len(relevant_frames), 2), dtype=np.int32)
+            indices[..., 0] = batch_ix
+            indices[..., 1] = time_ix
 
             @tf.function
             def likelihood(orient_x,
@@ -257,11 +263,9 @@ class BarStimulusFitter(StimulusFitter):
                 bars = make_bar_stimuli(
                     grid_coordinates.values, angle, radius, width)
 
-                stimulus = tf.scatter_nd(relevant_frames[:, tf.newaxis],
-                                         tf.transpose(bars, [1, 0, 2]),
+                stimulus = tf.scatter_nd(indices,
+                                         bars,
                                          size_)
-
-                stimulus = tf.transpose(stimulus, [1, 0, 2])
 
                 ll = self.model._likelihood(
                     stimulus,  data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
