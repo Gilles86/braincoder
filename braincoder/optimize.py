@@ -324,6 +324,7 @@ class ResidualFitter(object):
             min_n_iterations=100,
             method='gauss',
             residuals=None,
+            normalize_WWT=True,
             learning_rate=0.1, rtol=1e-6, lag=100):
 
         n_voxels = self.data.shape[1]
@@ -350,6 +351,12 @@ class ResidualFitter(object):
             WWT = self.model.get_pseudoWWT()
         else:
             WWT = self.model.get_WWT()
+        
+        if hasattr(WWT, 'values'):
+                WWT = WWT.values
+
+        if normalize_WWT:
+            WWT /= np.max(WWT)
 
         trainable_variables = [tau_, rho_, sigma2_]
 
