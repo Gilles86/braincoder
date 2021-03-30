@@ -16,13 +16,14 @@ class BarStimulusFitter(StimulusFitter):
 
         self.data = data
         self.model = model
-        self.grid_coordinates = pd.DataFrame(grid_coordinates)
+        self.grid_coordinates = pd.DataFrame(
+            grid_coordinates, columns=['x', 'y'])
         self.model.omega = omega
         self.model.dof = dof
 
         if max_radius is None:
             self.max_radius = np.sqrt(
-                np.max(grid_coordinates['x'])**2 + np.max(grid_coordinates['y'])**2)
+                np.max(self.grid_coordinates['x'])**2 + np.max(self.grid_coordinates['y'])**2)
         else:
             self.max_radius = max_radius
 
