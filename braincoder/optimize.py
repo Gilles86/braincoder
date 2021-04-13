@@ -68,7 +68,6 @@ class ParameterFitter(object):
 
         ssq_data = tf.reduce_sum(
             (y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
-        ssq_data = tf.clip_by_value(ssq_data, 1e-6, 1e12)
 
         if confounds is not None:
             # n_voxels x 1 x n_timepoints x n variables
@@ -125,8 +124,9 @@ class ParameterFitter(object):
                         cost = tf.reduce_sum(ssq)
 
                     gradients = t.gradient(cost, trainable_variables)
-                    r2 = (1 - (ssq / ssq_data))
-                    mean_r2 = tf.reduce_mean(r2)
+                    r2 = (1 - (ssq / ssq_data)).numpy()
+                    r2[~np.isfinite(r2)] = 0.0
+                    mean_r2 = r2.mean()
 
                     if step >= min_n_iterations:
                         r2_diff = mean_r2 - mean_r2s[np.max((step - lag, 0))]
@@ -249,8 +249,11 @@ class ParameterFitter(object):
 
         ssq = ssq.droplevel('chunk', axis=1,).fillna(np.inf)
 
+        # best_pars = ssq.columns.to_frame(
+            # index=False).iloc[ssq.values.argmin(1)]
+
         best_pars = ssq.columns.to_frame(
-            index=False).iloc[ssq.values.argmin(1)]
+            index=False).iloc[tf.math.argmin(ssq, 1)]
         best_pars.index = self.data.columns
 
         return best_pars
@@ -355,6 +358,8 @@ class ResidualFitter(object):
         if hasattr(WWT, 'values'):
                 WWT = WWT.values
 
+        WWT = tf.clip_by_value(WWT, -1e10, 1e10)
+        print(f'WWT max: {np.max(WWT)}')
         if normalize_WWT:
             WWT /= np.max(WWT)
 

@@ -12,7 +12,7 @@ from .utils.mcmc import cleanup_chain, sample_hmc
 class BarStimulusFitter(StimulusFitter):
 
     def __init__(self, data, model, grid_coordinates, omega, dof=None,
-                 max_radius=None, max_width=None):
+                 max_radius=None, max_width=None, max_intensity=1.0):
 
         self.data = data
         self.model = model
@@ -20,6 +20,7 @@ class BarStimulusFitter(StimulusFitter):
             grid_coordinates, columns=['x', 'y'])
         self.model.omega = omega
         self.model.dof = dof
+        self.max_intensity = max_intensity
 
         if max_radius is None:
             self.max_radius = np.sqrt(
@@ -54,7 +55,8 @@ class BarStimulusFitter(StimulusFitter):
         bars = make_bar_stimuli(grid_coordinates,
                                 grid['angle'].values[np.newaxis, ...],
                                 grid['radius'].values[np.newaxis, ...],
-                                grid['width'].values[np.newaxis, ...])[0]
+                                grid['width'].values[np.newaxis, ...],
+                                intensity=self.max_intensity)[0]
 
         if hasattr(self.model, 'hrf_model'):
 
@@ -236,7 +238,8 @@ class BarStimulusFitter(StimulusFitter):
                     grid_coordinates,
                     angle[tf.newaxis, ...],
                     radius[tf.newaxis, ...],
-                    width[tf.newaxis, ...])
+                    width[tf.newaxis, ...],
+                    intensity=self.max_intensity)
 
                 ll = self.model._likelihood(
                     bars, data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
@@ -262,7 +265,8 @@ class BarStimulusFitter(StimulusFitter):
 
                 angle = tf.math.atan(orient_y/orient_x)
                 bars = make_bar_stimuli(
-                    grid_coordinates.values, angle, radius, width)
+                    grid_coordinates.values, angle, radius, width, 
+                    intensity=self.max_intensity)
 
                 stimulus = tf.scatter_nd(indices,
                                          bars,
@@ -341,7 +345,7 @@ class BarStimulusFitter(StimulusFitter):
 
 
 @tf.function
-def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=1000.):
+def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=1000., intensity=1.0):
 
     # batch x stimulus x stimulus_dimension
 
@@ -357,6 +361,6 @@ def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=1000.
                       c[..., tf.newaxis]) / tf.sqrt(a[..., tf.newaxis]**2 + b[..., tf.newaxis]**2)
 
     bar = tf.math.sigmoid(
-        (-distance + width[..., tf.newaxis] / 2) * falloff_speed)
+        (-distance + width[..., tf.newaxis] / 2) * falloff_speed) * intensity
 
     return bar

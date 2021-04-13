@@ -24,7 +24,7 @@ def sample_hmc(
         step_size,
         target_log_prob_fn,
         unconstraining_bijectors,
-        target_accept_prob=0.75,
+        target_accept_prob=0.85,
         num_steps=50,
         burnin=50):
 
