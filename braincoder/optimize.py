@@ -488,8 +488,11 @@ class ResidualFitter(object):
         if self.lambd > 0.0:
             omega = self._get_omega_lambda(
                 tau, rho, sigma2, WWT, self.lambd, sample_cov).numpy()
+
+            self.fitted_omega_parameters = dict(tau=tau, rho=rho, sigma2=sigma2, WWT=WWT, lambd=lambd, sample_cov=sample_cov)
         else:
             omega = self._get_omega(tau, rho, sigma2, WWT).numpy()
+            self.fitted_omega_parameters = dict(tau=tau, rho=rho, sigma2=sigma2, WWT=WWT)
 
         if method == 't':
             return omega, dof.numpy()
