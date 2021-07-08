@@ -22,6 +22,9 @@ class EncodingModel(object):
         self.weights = weights
         self.omega = omega
 
+        if omega is not None:
+            self.omega_chol = np.linalg.cholesky(omega)
+
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
 
@@ -176,10 +179,13 @@ class EncodingModel(object):
             if value is None:
                 raise Exception('Please set {}'.format(name))
 
+         
+        omega_chol = tf.linalg.cholesky(omega).numpy()
+
         likelihood = self._likelihood(stimuli.values, data.values, parameters.values,
                                       weights if not hasattr(
                                           weights, 'values') else weights.values,
-                                      omega,
+                                      omega_chol,
                                       dof,
                                       logp,
                                       normalize).numpy()
@@ -203,23 +209,22 @@ class EncodingModel(object):
     def get_WWT(self):
         return self.weights.T.dot(self.weights)
 
-    def get_residual_dist(self, n_voxels, omega, dof):
+    def get_residual_dist(self, n_voxels, omega_chol, dof):
 
         if dof is None:
             residual_dist = tfd.MultivariateNormalFullCovariance(
                 tf.zeros(n_voxels),
-                omega, allow_nan_stats=False)
+                omega_chol, allow_nan_stats=False)
         else:
-            chol = tf.linalg.cholesky(omega)
             residual_dist = tfd.MultivariateStudentTLinearOperator(
                 dof,
                 tf.zeros(n_voxels),
-                tf.linalg.LinearOperatorLowerTriangular(chol), allow_nan_stats=False)
+                tf.linalg.LinearOperatorLowerTriangular(omega_chol), allow_nan_stats=False)
 
         return residual_dist
 
     @tf.function
-    def _likelihood(self, stimuli, data, parameters, weights, omega, dof, logp=False, normalize=False):
+    def _likelihood(self, stimuli, data, parameters, weights, omega_chol, dof, logp=False, normalize=False):
 
         # stimuli: n_batches x n_timepoints x n_stimulus_features
         # data: n_batches x n_timepoints x n_units
@@ -230,16 +235,15 @@ class EncodingModel(object):
         # n_batches * n_timepoints x n_stimulus_features
         prediction = self._predict(stimuli, parameters, weights)
 
-        return self._likelihood_timeseries(data, prediction, omega, dof, logp, normalize)
+        return self._likelihood_timeseries(data, prediction, omega_chol, dof, logp, normalize)
 
     @tf.function
-    def _likelihood_timeseries(self, data, prediction, omega, dof, logp=False, normalize=False):
+    def _likelihood_timeseries(self, data, prediction, omega_chol, dof, logp=False, normalize=False):
         # n_timepoints x n_stimuli x n_units
         n_units = data.shape[2]
 
         residuals = data - prediction
-
-        residual_dist = self.get_residual_dist(n_units, omega, dof)
+        residual_dist = self.get_residual_dist(n_units, omega_chol, dof)
 
         # we use log likelihood to correct for very small numbers
         p = residual_dist.log_prob(residuals)

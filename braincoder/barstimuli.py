@@ -19,6 +19,7 @@ class BarStimulusFitter(StimulusFitter):
         self.grid_coordinates = pd.DataFrame(
             grid_coordinates, columns=['x', 'y'])
         self.model.omega = omega
+        self.model.omega_chol = tf.linalg.cholesky(omega).numpy()
         self.model.dof = dof
         self.max_intensity = max_intensity
 
@@ -81,7 +82,7 @@ class BarStimulusFitter(StimulusFitter):
             ll = self.model._likelihood_timeseries(data[tf.newaxis, ...],
                                                    ts_prediction_summed_over_hrf[:,
                                                                                  tf.newaxis, :],
-                                                   self.model.omega,
+                                                   self.model.omega_chol,
                                                    self.model.dof,
                                                    logp=True,
                                                    normalize=False)
@@ -93,7 +94,7 @@ class BarStimulusFitter(StimulusFitter):
             bars = bars[:, tf.newaxis, :]
 
             ll = self.model._likelihood(bars, data[tf.newaxis, ...], parameters, weights,
-                                        self.model.omega, self.model.dof, logp=True)
+                                        self.model.omega_chol, self.model.dof, logp=True)
         ll = pd.DataFrame(ll.numpy().T, columns=pd.MultiIndex.from_frame(grid))
 
         best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
@@ -243,7 +244,7 @@ class BarStimulusFitter(StimulusFitter):
                     intensity=self.max_intensity)
 
                 ll = self.model._likelihood(
-                    bars, data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
+                    bars, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
 
                 return tf.reduce_sum(ll, 1)
 
@@ -275,7 +276,7 @@ class BarStimulusFitter(StimulusFitter):
                                          size_)
 
                 ll = self.model._likelihood(
-                    stimulus,  data, parameters, weights, self.model.omega, dof=self.model.dof, logp=True)
+                    stimulus,  data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
 
                 sll = tf.reduce_sum(ll, 1)
 
