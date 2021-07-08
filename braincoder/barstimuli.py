@@ -220,7 +220,7 @@ class BarStimulusFitter(StimulusFitter):
 
         return fitted_pars
 
-    def build_likelihood_function(self, relevant_frames=None, n_batches=1):
+    def build_likelihood_function(self, relevant_frames=None, falloff_speed=1000., n_batches=1):
 
         data = self.data.values[tf.newaxis, ...]
         grid_coordinates = self.grid_coordinates
@@ -239,6 +239,7 @@ class BarStimulusFitter(StimulusFitter):
                     angle[tf.newaxis, ...],
                     radius[tf.newaxis, ...],
                     width[tf.newaxis, ...],
+                    falloff_speed=falloff_speed,
                     intensity=self.max_intensity)
 
                 ll = self.model._likelihood(
@@ -266,6 +267,7 @@ class BarStimulusFitter(StimulusFitter):
                 angle = tf.math.atan(orient_y/orient_x)
                 bars = make_bar_stimuli(
                     grid_coordinates.values, angle, radius, width, 
+                    falloff_speed=falloff_speed,
                     intensity=self.max_intensity)
 
                 stimulus = tf.scatter_nd(indices,
@@ -287,7 +289,8 @@ class BarStimulusFitter(StimulusFitter):
                          relevant_frames=None,
                          step_size=0.0001,
                          n_burnin=10,
-                         n_samples=10):
+                         n_samples=10,
+                         falloff_speed=1000.):
 
         init_pars = init_pars.astype(np.float32)
         init_pars['orient_x'] = np.cos(init_pars['angle'])
@@ -319,7 +322,7 @@ class BarStimulusFitter(StimulusFitter):
             np.repeat(init_pars.values.T[:, np.newaxis, :], n_chains, 1))
 
         likelihood = self.build_likelihood_function(
-            relevant_frames, n_batches=n_chains)
+            relevant_frames ,falloff_speed=falloff_speed, n_batches=n_chains)
 
         step_size = [tf.fill([n_chains] + [1] * (len(s.shape) - 1),
                              tf.constant(step_size, np.float32)) for s in initial_state]
