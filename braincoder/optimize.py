@@ -361,7 +361,7 @@ class ResidualFitter(object):
         WWT = tf.clip_by_value(WWT, -1e10, 1e10)
         print(f'WWT max: {np.max(WWT)}')
         if normalize_WWT:
-            WWT /= np.max(WWT)
+            WWT /= np.mean(WWT)
 
         trainable_variables = [tau_, rho_, sigma2_]
 
