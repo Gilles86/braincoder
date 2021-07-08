@@ -25,6 +25,8 @@ def sample_hmc(
         target_log_prob_fn,
         unconstraining_bijectors,
         target_accept_prob=0.85,
+        unrolled_leapfrog_steps=1,
+        max_tree_depth=10,
         num_steps=50,
         burnin=50):
 
@@ -40,6 +42,8 @@ def sample_hmc(
 
     hmc = tfp.mcmc.NoUTurnSampler(
         target_log_prob_fn,
+        unrolled_leapfrog_steps=unrolled_leapfrog_steps,
+        max_tree_depth=max_tree_depth,
         step_size=step_size)
 
     hmc = tfp.mcmc.TransformedTransitionKernel(

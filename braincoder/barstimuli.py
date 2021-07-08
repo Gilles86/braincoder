@@ -290,7 +290,10 @@ class BarStimulusFitter(StimulusFitter):
                          step_size=0.0001,
                          n_burnin=10,
                          n_samples=10,
-                         falloff_speed=1000.):
+                         max_tree_depth=10,
+                         unrolled_leapfrog_steps=1,
+                         falloff_speed=1000.,
+                         target_accept_prob=0.85):
 
         init_pars = init_pars.astype(np.float32)
         init_pars['orient_x'] = np.cos(init_pars['angle'])
@@ -327,7 +330,9 @@ class BarStimulusFitter(StimulusFitter):
         step_size = [tf.fill([n_chains] + [1] * (len(s.shape) - 1),
                              tf.constant(step_size, np.float32)) for s in initial_state]
         samples, stats = sample_hmc(
-            initial_state, step_size, likelihood, bijectors, num_steps=n_samples, burnin=n_burnin)
+            initial_state, step_size, likelihood, bijectors, num_steps=n_samples, burnin=n_burnin,
+            target_accept_prob=target_accept_prob, unrolled_leapfrog_steps=unrolled_leapfrog_steps,
+            max_tree_depth=max_tree_depth)
 
         angle = tf.math.atan(samples[1] / samples[0]).numpy()
         radius = samples[2].numpy()
