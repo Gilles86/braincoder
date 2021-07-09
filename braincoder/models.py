@@ -264,14 +264,14 @@ class EncodingModel(object):
 class HRFEncodingModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
+                 weights=None, omega=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
 
         if hrf_model is None:
             raise ValueError('Please provide HRFModel!')
 
         self.hrf_model = hrf_model
 
-        super().__init__(paradigm, data, parameters, weights, verbosity, **kwargs)
+        super().__init__(paradigm, data, parameters, weights, omega, verbosity, **kwargs)
 
     @tf.function
     def _predict(self, paradigm, parameters, weights):

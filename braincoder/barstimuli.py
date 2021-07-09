@@ -6,7 +6,7 @@ from .optimize import StimulusFitter
 import logging
 import tensorflow_probability as tfp
 from tensorflow_probability import bijectors as tfb
-from .utils.mcmc import cleanup_chain, sample_hmc
+from .utils.mcmc import cleanup_chain, sample_hmc, Periodic
 
 
 class BarStimulusFitter(StimulusFitter):
@@ -141,7 +141,7 @@ class BarStimulusFitter(StimulusFitter):
         init_pars[:, 2] = tf.clip_by_value(
             init_pars[:, 2], 1e-6, self.max_width - 1e-6)
 
-        radius_bijector = tfb.Sigmoid(low=np.float32(-self.max_radius),
+        radius_bijector = Periodic(low=np.float32(-self.max_radius),
                                       high=np.float32(self.max_radius))
 
         width_bijector = tfb.Sigmoid(low=np.float32(0.0),
@@ -305,7 +305,7 @@ class BarStimulusFitter(StimulusFitter):
 
         unconstraining_bjs = [tfb.Identity(),
                               tfb.Identity(),
-                              tfb.Sigmoid(low=-self.max_radius,
+                              Periodic(low=-self.max_radius,
                                           high=self.max_radius),  # radius
                               tfb.Sigmoid(low=np.float32(0.0), high=self.max_width)]  # width
 

@@ -1,5 +1,6 @@
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow_probability import bijectors as tfb
 import pandas as pd
 
 def cleanup_chain(chain, name, frames):
@@ -73,3 +74,32 @@ def sample_hmc(
     return samples, stats
 
 
+
+class Periodic(tfb.Bijector):
+
+    def __init__(self, low, high, validate_args=False, name='periodic'):
+
+        self.low = low
+        self.high = high
+        self.width = high - low
+
+        super(Periodic, self).__init__(
+            is_constant_jacobian=True,
+            validate_args=validate_args,
+            forward_min_event_ndims=0,
+            name=name)
+
+    def _forward(self, x):
+      return ((x - self.low) % self.width) + self.low
+
+    def _inverse(self, y):
+      return y
+
+    # def _inverse_log_det_jacobian(self, y):
+      # return -self._forward_log_det_jacobian(self._inverse(y))
+
+    # def _forward_log_det_jacobian(self, x):
+      # # The full log jacobian determinant would be tf.zero_like(x).
+      # # However, we circumvent materializing that, since the jacobian
+      # # calculation is input independent, and we specify it for one input.
+      # return tf.constant(0., x.dtype)
