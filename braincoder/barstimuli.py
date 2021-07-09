@@ -23,6 +23,9 @@ class BarStimulusFitter(StimulusFitter):
         self.model.dof = dof
         self.max_intensity = max_intensity
 
+        self.min_x, self.max_x = self.grid_coordinates['x'].min(), self.grid_coordinates['x'].max()
+        self.min_y, self.max_y = self.grid_coordinates['y'].min(), self.grid_coordinates['y'].max()
+
         if max_radius is None:
             self.max_radius = np.sqrt(
                 np.max(self.grid_coordinates['x'])**2 + np.max(self.grid_coordinates['y'])**2)
@@ -40,24 +43,42 @@ class BarStimulusFitter(StimulusFitter):
         if self.model.weights is None:
             self.model.weights
 
-    def fit_grid(self, angle, radius, width, include_xy=True):
+    def fit_grid(self, x, y, width, include_xy=True):
 
-        data = self.data.values
-        model = self.model
-        parameters = self.model.parameters.values[np.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[np.newaxis, ...]
-        grid_coordinates = self.grid_coordinates.values
+        grid = pd.MultiIndex.from_product(
+            [x, y, width], names=['x', 'y', 'width']).to_frame(index=False).astype(np.float32)
+
+        logging.info('Built grid of {len(par_grid)} bar settings...')
+
+        bars = make_bar_stimuli(self.grid_coordinates.values,
+                                grid['x'].values[np.newaxis, ...],
+                                grid['y'].values[np.newaxis, ...],
+                                grid['width'].values[np.newaxis, ...],
+                                intensity=self.max_intensity)[0]
+
+        return self._fit_grid(grid, bars)
+
+    def fit_grid2(self, angle, radius, width, include_xy=True):
 
         grid = pd.MultiIndex.from_product(
             [angle, radius, width], names=['angle', 'radius', 'width']).to_frame(index=False).astype(np.float32)
 
         logging.info('Built grid of {len(par_grid)} bar settings...')
 
-        bars = make_bar_stimuli(grid_coordinates,
+        bars = make_bar_stimuli2(self.grid_coordinates.values,
                                 grid['angle'].values[np.newaxis, ...],
                                 grid['radius'].values[np.newaxis, ...],
                                 grid['width'].values[np.newaxis, ...],
                                 intensity=self.max_intensity)[0]
+        return self._fit_grid(grid, bars)
+
+
+    def _fit_grid(self, grid, bars):
+
+        data = self.data.values
+        model = self.model
+        parameters = self.model.parameters.values[np.newaxis, ...]
+        weights = None if model.weights is None else model.weights.values[np.newaxis, ...]
 
         if hasattr(self.model, 'hrf_model'):
 
@@ -100,29 +121,38 @@ class BarStimulusFitter(StimulusFitter):
         best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
         best_pars.index = self.data.index
 
-        if include_xy:
+        if 'x' not in best_pars.columns:
             best_pars['x'] = np.cos(best_pars['angle']) * best_pars['radius']
             best_pars['y'] = np.sin(best_pars['angle']) * best_pars['radius']
+        if 'angle' not in best_pars.columns:
+            best_pars['angle'] = np.arctan2(best_pars['y'], best_pars['x'])
+            best_pars['radius'] = np.sqrt(best_pars['y']**2 + best_pars['x']**2)
 
         return best_pars.astype(np.float32)
+
 
     def fit(self, init_pars, learning_rate=0.01, max_n_iterations=500, min_n_iterations=100, lag=100,
             relevant_frames=None, rtol=1e-6, include_xy=True):
 
+
+        # init_pars: x, y, width
+
         if hasattr(init_pars, 'values'):
-            init_pars = init_pars.values
+            init_pars = init_pars[['x', 'y', 'width']].values
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
-        if np.any(init_pars[:, 0] < -.5*np.pi):
-            raise ValueError('All angles should be more than -1/2 pi radians')
+        if np.any(init_pars[:, 0] < self.min_x):
+            raise ValueError(f'All x-values should not be less than {self.min_x}')
 
-        if np.any(init_pars[:, 0] > .5*np.pi):
-            raise ValueError('All angles should be less than 1/2 pi radians')
+        if np.any(init_pars[:, 0] > self.max_x):
+            raise ValueError(f'All x-values should not be more than {self.max_x}')
 
-        if np.any(np.abs(init_pars[:, 1]) > self.max_radius):
-            raise ValueError(
-                f'All radiuses should be within (-{self.max_radius}, {self.max_radius})')
+        if np.any(init_pars[:, 1] < self.min_y):
+            raise ValueError(f'All y-values should not be less than {self.min_y}')
+
+        if np.any(init_pars[:, 1] > self.max_y):
+            raise ValueError(f'All y-values should not be more than {self.max_y}')
 
         if np.any(np.abs(init_pars[:, 2]) < 0.0):
             raise ValueError('All widths should be positive')
@@ -134,36 +164,29 @@ class BarStimulusFitter(StimulusFitter):
         if (relevant_frames is not None) and (len(init_pars) > len(relevant_frames)):
             init_pars = init_pars[relevant_frames, :]
 
-        init_pars[:, 0] = tf.clip_by_value(
-            init_pars[:, 0], -.5*np.pi + 1e-6, .5 * np.pi-1e-6)
-        init_pars[:, 1] = tf.clip_by_value(
-            init_pars[:, 1], -self.max_radius + 1e-6, self.max_radius - 1e-6)
-        init_pars[:, 2] = tf.clip_by_value(
-            init_pars[:, 2], 1e-6, self.max_width - 1e-6)
 
-        radius_bijector = Periodic(low=np.float32(-self.max_radius),
-                                      high=np.float32(self.max_radius))
+        x_bijector = Periodic(low=np.float32(self.min_x - self.max_width/2.),
+                              high=np.float32(self.max_x + self.max_width/2.))
+
+        y_bijector = Periodic(low=np.float32(self.min_y - self.max_width/2.),
+                              high=np.float32(self.max_y + self.max_width/2.))
 
         width_bijector = tfb.Sigmoid(low=np.float32(0.0),
                                      high=np.float32(self.max_width))
 
-        orient_x = tf.Variable(name='orient_x',
-                               shape=len(init_pars),
-                               initial_value=np.cos(init_pars[:, 0]))
+        x_ = tf.Variable(name='x',
+                        shape=len(init_pars),
+                        initial_value=init_pars[:, 0])
 
-        orient_y = tf.Variable(name='orient_y',
-                               shape=len(init_pars),
-                               initial_value=np.sin(init_pars[:, 0]))
-
-        radius_ = tf.Variable(name='radius',
-                              shape=len(init_pars),
-                              initial_value=radius_bijector.inverse(init_pars[:, 1]))
+        y_ = tf.Variable(name='y',
+                        shape=len(init_pars),
+                        initial_value=init_pars[:, 1])
 
         width_ = tf.Variable(name='width',
                              shape=len(init_pars),
-                             initial_value=radius_bijector.inverse(init_pars[:, 2]))
+                             initial_value=width_bijector.inverse(init_pars[:, 2]))
 
-        trainable_vars = [orient_x, orient_y, radius_, width_]
+        trainable_vars = [x_, y_, width_]
 
         pbar = tqdm(range(max_n_iterations))
         self.costs = np.ones(max_n_iterations) * 1e12
@@ -173,11 +196,11 @@ class BarStimulusFitter(StimulusFitter):
         for step in pbar:
             with tf.GradientTape() as tape:
 
-                radius = radius_bijector.forward(radius_)
+                x = x_bijector.forward(x_)
+                y = y_bijector.forward(y_)
                 width = width_bijector.forward(width_)
-                angle = tf.math.atan(orient_y / orient_x)
 
-                ll = likelihood(orient_x, orient_y, radius, width)[0]
+                ll = likelihood(x, y, width)[0]
                 cost = -ll
 
             gradients = tape.gradient(cost,
@@ -198,26 +221,23 @@ class BarStimulusFitter(StimulusFitter):
                     else:
                         if (cost / previous_cost) < 1 - rtol:
                             break
-        fitted_pars_ = np.concatenate([angle.numpy()[:, np.newaxis],
-                                       radius.numpy()[:, np.newaxis],
+        fitted_pars_ = np.concatenate([x.numpy()[:, np.newaxis],
+                                       y.numpy()[:, np.newaxis],
                                        width.numpy()[:, np.newaxis]], axis=1)
 
         if relevant_frames is None:
-            fitted_pars = pd.DataFrame(fitted_pars_, columns=['angle', 'radius', 'width'],
+            fitted_pars = pd.DataFrame(fitted_pars_, columns=['x', 'y', 'width'],
                                        index=self.data.index,
                                        dtype=np.float32)
         else:
 
-            fitted_pars = pd.DataFrame(np.nan * np.zeros((self.data.shape[0], 3)), columns=['angle', 'radius', 'width'],
+            fitted_pars = pd.DataFrame(np.nan * np.zeros((self.data.shape[0], 3)), columns=['x', 'y', 'width'],
                                        index=self.data.index,
                                        dtype=np.float32)
             fitted_pars.iloc[relevant_frames, :] = fitted_pars_
 
-        if include_xy:
-            fitted_pars['x'] = np.cos(
-                fitted_pars['angle']) * fitted_pars['radius']
-            fitted_pars['y'] = np.sin(
-                fitted_pars['angle']) * fitted_pars['radius']
+        fitted_pars['angle'] = np.arctan2(fitted_pars['y'], fitted_pars['x'])
+        fitted_pars['radius'] = np.sqrt(fitted_pars['y']**2 + fitted_pars['x']**2)
 
         return fitted_pars
 
@@ -231,14 +251,12 @@ class BarStimulusFitter(StimulusFitter):
 
         if relevant_frames is None:
             @tf.function
-            def likelihood(orient_x, orient_y, radius, width):
-
-                angle = tf.math.atan(orient_y/orient_x)
+            def likelihood(x, y, width):
 
                 bars = make_bar_stimuli(
                     grid_coordinates,
-                    angle[tf.newaxis, ...],
-                    radius[tf.newaxis, ...],
+                    x[tf.newaxis, ...],
+                    y[tf.newaxis, ...],
                     width[tf.newaxis, ...],
                     falloff_speed=falloff_speed,
                     intensity=self.max_intensity)
@@ -260,14 +278,12 @@ class BarStimulusFitter(StimulusFitter):
             indices[..., 1] = time_ix
 
             @tf.function
-            def likelihood(orient_x,
-                           orient_y,
-                           radius,
+            def likelihood(x,
+                           y,
                            width):
 
-                angle = tf.math.atan(orient_y/orient_x)
-                bars = make_bar_stimuli(
-                    grid_coordinates.values, angle, radius, width, 
+                bars = make_bar_stimuli2(
+                    grid_coordinates.values, x, y, width,
                     falloff_speed=falloff_speed,
                     intensity=self.max_intensity)
 
@@ -297,36 +313,23 @@ class BarStimulusFitter(StimulusFitter):
                          target_accept_prob=0.85):
 
         init_pars = init_pars.astype(np.float32)
-        init_pars['orient_x'] = np.cos(init_pars['angle'])
-        init_pars['orient_y'] = np.sin(init_pars['angle'])
 
         if (relevant_frames is not None) and (len(init_pars) > len(relevant_frames)):
             init_pars = init_pars.iloc[relevant_frames, :]
 
-        unconstraining_bjs = [tfb.Identity(),
-                              tfb.Identity(),
-                              Periodic(low=-self.max_radius,
-                                          high=self.max_radius),  # radius
+        bijectors = [Periodic(low=self.min_x - self.max_width/2.,
+                                  high=self.max_x + self.max_width/2.),  # x
+                              Periodic(low=self.min_y - self.max_width/2.,
+                                  high=self.max_y + self.max_width/2.),
                               tfb.Sigmoid(low=np.float32(0.0), high=self.max_width)]  # width
 
-        state_mu = []
-        state_std = []
-        for ix, key in enumerate(['orient_x', 'orient_y', 'radius', 'width']):
-            state_mu.append(tf.reduce_mean(
-                unconstraining_bjs[ix].inverse(init_pars[key])))
-            state_std.append(tf.math.reduce_std(
-                unconstraining_bjs[ix].inverse(init_pars[key])))
-
-        bijectors = [tfb.Chain([cb, tfb.Shift(sh), tfb.Scale(sc)])
-                     for cb, sh, sc in zip(unconstraining_bjs, state_mu, state_std)]
-
-        init_pars = init_pars[['orient_x', 'orient_y', 'radius', 'width']]
+        init_pars = init_pars[['x', 'y', 'width']]
 
         initial_state = list(
             np.repeat(init_pars.values.T[:, np.newaxis, :], n_chains, 1))
 
         likelihood = self.build_likelihood_function(
-            relevant_frames ,falloff_speed=falloff_speed, n_batches=n_chains)
+            relevant_frames, falloff_speed=falloff_speed, n_batches=n_chains)
 
         step_size = [tf.fill([n_chains] + [1] * (len(s.shape) - 1),
                              tf.constant(step_size, np.float32)) for s in initial_state]
@@ -335,26 +338,48 @@ class BarStimulusFitter(StimulusFitter):
             target_accept_prob=target_accept_prob, unrolled_leapfrog_steps=unrolled_leapfrog_steps,
             max_tree_depth=max_tree_depth)
 
-        angle = tf.math.atan(samples[1] / samples[0]).numpy()
-        radius = samples[2].numpy()
-        width = samples[3].numpy()
+        print(samples)
+
+        x = samples[0].numpy()
+        y = samples[1].numpy()
+        width = samples[2].numpy()
 
         if relevant_frames is None:
             frame_index = self.data.index
         else:
             frame_index = self.data.index[relevant_frames]
 
-        angle = cleanup_chain(angle, 'angle', frame_index)
+        x = cleanup_chain(x, 'x', frame_index)
+        y = cleanup_chain(y, 'y', frame_index)
         width = cleanup_chain(width, 'width', frame_index)
-        radius = cleanup_chain(radius, 'radius', frame_index)
 
-        samples = pd.concat((angle, width, radius), 1)
+        samples = pd.concat((x, y, width), 1)
 
         return samples, stats
 
+@tf.function
+def make_bar_stimuli(grid_coordinates, x, y, width, falloff_speed=1000., intensity=1.0):
+
+    x_ = grid_coordinates[:, 0]
+    y_ = grid_coordinates[:, 1]
+
+    radius2 = x**2 + y**2
+    radius = tf.math.sqrt(radius2)
+    a = x / radius
+    b = y / radius
+    c = -radius2 / radius
+
+    distance = tf.abs(a[..., tf.newaxis] * x_[tf.newaxis, tf.newaxis, ...] +
+                      b[..., tf.newaxis] * y_[tf.newaxis, tf.newaxis, ...] +
+                      c[..., tf.newaxis]) / tf.sqrt(a[..., tf.newaxis]**2 + b[..., tf.newaxis]**2)
+
+    bar = tf.math.sigmoid(
+        (-distance + width[..., tf.newaxis] / 2) * falloff_speed) * intensity
+
+    return bar
 
 @tf.function
-def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=1000., intensity=1.0):
+def make_bar_stimuli2(grid_coordinates, angle, radius, width, falloff_speed=1000., intensity=1.0):
 
     # batch x stimulus x stimulus_dimension
 
@@ -373,3 +398,4 @@ def make_bar_stimuli(grid_coordinates, angle, radius, width, falloff_speed=1000.
         (-distance + width[..., tf.newaxis] / 2) * falloff_speed) * intensity
 
     return bar
+
