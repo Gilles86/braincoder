@@ -212,9 +212,9 @@ class EncodingModel(object):
     def get_residual_dist(self, n_voxels, omega_chol, dof):
 
         if dof is None:
-            residual_dist = tfd.MultivariateNormalFullCovariance(
+            residual_dist = tfd.MultivariateNormalTriL(
                 tf.zeros(n_voxels),
-                omega_chol, allow_nan_stats=False)
+                scale_tril=omega_chol, allow_nan_stats=False)
         else:
             residual_dist = tfd.MultivariateStudentTLinearOperator(
                 dof,
