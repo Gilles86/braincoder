@@ -554,6 +554,7 @@ def make_bar_stimuli2(grid_coordinates, angle, radius, width, falloff_speed=1000
 def get_angle_radius_from_xy(d):
     d['angle'] = np.arctan2(d['y'], d['x'])
     d['radius'] = np.sqrt(d['y']**2 + d['x']**2)
+    d['ecc'] = np.abs(d['radius'])
 
     return constrain_angle(d)
 
