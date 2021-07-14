@@ -12,7 +12,9 @@ from .utils.mcmc import cleanup_chain, sample_hmc, Periodic
 class BarStimulusFitter(StimulusFitter):
 
     def __init__(self, data, model, grid_coordinates, omega, dof=None,
-                 max_radius=None, max_width=None, max_intensity=1.0):
+                 max_radius=None, max_width=None, bar_intensity=1.0,
+                 max_intensity=None,
+                 baseline_image=None):
 
         self.data = data
         self.model = model
@@ -21,7 +23,18 @@ class BarStimulusFitter(StimulusFitter):
         self.model.omega = omega
         self.model.omega_chol = tf.linalg.cholesky(omega).numpy()
         self.model.dof = dof
-        self.max_intensity = max_intensity
+        self.bar_intensity = bar_intensity
+
+        if max_intensity is None:
+            self.max_intensity = self.bar_intensity
+        else:
+            self.max_intensity = max_intensity
+
+
+        if baseline_image is None:
+            self.baseline_image = None
+        else:
+            self.baseline_image = baseline_image.reshape(len(self.grid_coordinates))
 
         self.min_x, self.max_x = self.grid_coordinates['x'].min(
         ), self.grid_coordinates['x'].max()
@@ -58,7 +71,11 @@ class BarStimulusFitter(StimulusFitter):
                                     grid['x'].values[np.newaxis, ...],
                                     grid['y'].values[np.newaxis, ...],
                                     grid['width'].values[np.newaxis, ...],
-                                    intensity=self.max_intensity)[0]
+                                    intensity=self.bar_intensity)[0]
+
+            if self.baseline_image is not None:
+                bars = bars + self.baseline_image[tf.newaxis, ...]
+                bars = tf.clip_by_value(bars, 0, self.max_intensity)
 
         else:
             raise NotImplementedError
@@ -311,6 +328,18 @@ class BarStimulusFitter(StimulusFitter):
         parameters = self.model.parameters.values[tf.newaxis, ...]
         weights = None if model.weights is None else model.weights.values[tf.newaxis, ...]
 
+        if self.baseline_image is None:
+            @tf.function
+            def add_baseline(bars):
+                return bars
+        else:
+            print('Including base image (e.g., fixation image) into estimation')
+            @tf.function
+            def add_baseline(bars):
+                bars = bars + self.baseline_image[tf.newaxis, :]
+                bars = tf.clip_by_value(bars, 0, self.max_intensity)
+                return bars
+
         if relevant_frames is None:
 
             if parameterization == 'xy':
@@ -323,7 +352,9 @@ class BarStimulusFitter(StimulusFitter):
                         y[tf.newaxis, ...],
                         width[tf.newaxis, ...],
                         falloff_speed=falloff_speed,
-                        intensity=self.max_intensity)
+                        intensity=self.bar_intensity)
+
+                    bars = add_baseline(bars)
 
                     ll = self.model._likelihood(
                         bars, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
@@ -342,7 +373,9 @@ class BarStimulusFitter(StimulusFitter):
                         radius[tf.newaxis, ...],
                         width[tf.newaxis, ...],
                         falloff_speed=falloff_speed,
-                        intensity=self.max_intensity)
+                        intensity=self.bar_intensity)
+
+                    bars = add_baseline(bars)
 
                     ll = self.model._likelihood(
                         bars, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
@@ -372,7 +405,9 @@ class BarStimulusFitter(StimulusFitter):
                     bars = make_bar_stimuli(
                         grid_coordinates.values, x, y, width,
                         falloff_speed=falloff_speed,
-                        intensity=self.max_intensity)
+                        intensity=self.bar_intensity)
+
+                    bars = add_baseline(bars)
 
                     stimulus = tf.scatter_nd(indices,
                                              bars,
@@ -401,7 +436,9 @@ class BarStimulusFitter(StimulusFitter):
                         radius[tf.newaxis, ...],
                         width[tf.newaxis, ...],
                         falloff_speed=falloff_speed,
-                        intensity=self.max_intensity)
+                        intensity=self.bar_intensity)
+
+                    bars = add_baseline(bars)
 
                     stimulus = tf.scatter_nd(indices,
                                              bars,
