@@ -6,12 +6,15 @@ def get_map(p):
     return stimuli.groupby(level=0).apply(lambda d: (p * d.values).sum(1) / p.sum(1)).T
 
 
-def get_rsq(data, predictions, zerovartonan=True):
+def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=True):
 
     resid = data - predictions
 
     ssq_data = np.clip(((data - data.mean(0))**2).sum(0), 1e-5, None)
-    ssq_resid = np.clip((resid**2).sum(0), 1e-5, None)
+    if allow_biased_residuals:
+        ssq_resid = np.clip(((resid - resid.mean(0))**2).sum(0), 1e-5, None)
+    else:
+        ssq_resid = np.clip((resid**2).sum(0), 1e-5, None)
 
     r2 = (1 - (ssq_resid / ssq_data))
 
