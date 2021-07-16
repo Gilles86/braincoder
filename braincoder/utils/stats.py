@@ -6,7 +6,7 @@ def get_map(p):
     return stimuli.groupby(level=0).apply(lambda d: (p * d.values).sum(1) / p.sum(1)).T
 
 
-def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=True):
+def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
 
     resid = data - predictions
 
