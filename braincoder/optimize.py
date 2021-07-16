@@ -1,4 +1,4 @@
-import pandas as pd
+Import pandas as pd
 import numpy as np
 import datetime
 import tensorflow as tf
@@ -18,8 +18,8 @@ class ParameterFitter(object):
 
     def __init__(self, model, data, paradigm, memory_limit=666666666, log_dir=False, progressbar=True):
         self.model = model
-        self.data = data
-        self.paradigm = paradigm
+        self.data = data.astype(np.float32)
+        self.paradigm = paradigm.astype(np.float32)
 
         self.memory_limit = memory_limit  # 8 GB?
         self.progressbar = True
@@ -43,14 +43,15 @@ class ParameterFitter(object):
             store_intermediate_parameters=True,
             r2_atol=0.000001,
             lag=100,
-            learning_rate=0.01):
+            learning_rate=0.01,
+            **kwargs):
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
 
         y = self.data.values
 
         if optimizer is None:
-            opt = tf.optimizers.Adam(learning_rate=learning_rate)
+            opt = tf.optimizers.Adam(learning_rate=learning_rate, **kwargs)
 
         if init_pars is None:
             init_pars = self.model.get_init_pars(
@@ -61,13 +62,24 @@ class ParameterFitter(object):
 
         init_pars = self.model._transform_parameters_backward(init_pars)
 
-        parameters = tf.Variable(initial_value=init_pars,
-                                 shape=(n_voxels, n_pars), name='estimated_parameters', dtype=tf.float32)
-
-        trainable_variables = [parameters]
 
         ssq_data = tf.reduce_sum(
             (y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
+
+        # Voxels with no variance to explain can confuse the optimizer to a large degree,
+        # since the gradient landscape is completely flat.
+        # Therefore, we only optimize voxels where there is variance to explain
+        meaningful_ts = ssq_data > 1
+
+        print(f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int16))}')
+
+        trainable_parameters = tf.Variable(initial_value=init_pars[meaningful_ts],
+                                     shape=(tf.reduce_sum(tf.cast(meaningful_ts, tf.int16)), n_pars),
+                                     name='estimated_parameters', dtype=tf.float32)
+
+        trainable_variables = [trainable_parameters]
+
+
 
         if confounds is not None:
             # n_voxels x 1 x n_timepoints x n variables
@@ -87,7 +99,6 @@ class ParameterFitter(object):
 
                 residuals = y - predictions[0]
 
-                # ssq = tf.clip_by_value( tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
                 ssq = tf.reduce_sum(residuals**2, 0)
                 return ssq
 
@@ -114,12 +125,14 @@ class ParameterFitter(object):
         if optimizer is None:
             pbar = tqdm(range(max_n_iterations))
             best_r2 = tf.zeros(y.shape[1])
-            best_parameters = tf.zeros(parameters.shape)
+            best_parameters = tf.zeros(init_pars.shape)
 
             for step in pbar:
                 # try:
                 with tf.GradientTape() as t:
 
+
+                    parameters = tf.tensor_scatter_nd_update(init_pars, tf.where(meaningful_ts), trainable_parameters)
                     untransformed_parameters = self.model._transform_parameters_forward(
                         parameters)
 
@@ -128,15 +141,13 @@ class ParameterFitter(object):
 
                 gradients = t.gradient(cost, trainable_variables)
                 r2 = (1 - (ssq / ssq_data))
-                r2 = tf.where(ssq == 0, 1, r2)
-                r2 = tf.where(ssq_data == 0, 0, r2)
 
                 improved_r2s = r2 > best_r2
                 best_parameters = tf.where(improved_r2s[:, tf.newaxis], untransformed_parameters, best_parameters)
                 best_r2 = tf.where(improved_r2s, r2, best_r2)
 
-                mean_current_r2 = r2.numpy().mean()
-                mean_best_r2 = best_r2.numpy().mean()
+                mean_current_r2 = r2[meaningful_ts].numpy().mean()
+                mean_best_r2 = best_r2[meaningful_ts].numpy().mean()
 
                 if step >= min_n_iterations:
                     r2_diff = mean_best_r2 - mean_best_r2s[np.max((step - lag, 0))]
