@@ -552,9 +552,9 @@ def make_bar_stimuli2(grid_coordinates, angle, radius, width, falloff_speed=1000
 
 
 def get_angle_radius_from_xy(d):
-    d['angle'] = np.arctan2(d['y'], d['x'])
-    d['radius'] = np.sqrt(d['y']**2 + d['x']**2)
-    d['ecc'] = np.abs(d['radius'])
+    d = d.assign(angle=np.arctan2(d['y'], d['x']))
+    d = d.assign(radius=np.sqrt(d['y']**2 + d['x']**2))
+    d = d.assign(ecc=np.abs(d['radius']))
 
     return constrain_angle(d)
 
@@ -563,8 +563,8 @@ def get_angle_radius_from_xy(d):
 def constrain_angle(d):
 
     pi5 = .5 * np.pi
-    d['radius'].where(d['angle'].abs() < pi5, -d['radius'], inplace=True)
-    d['angle'].where(d['angle'] < pi5, d['angle'] - np.pi, inplace=True)
-    d['angle'].where(d['angle'] > -pi5, d['angle'] + np.pi, inplace=True)
+    d = d.assign(radius=d['radius'].where(d['angle'].abs() < pi5, -d['radius']))
+    d = d.assign(angle=d['angle'].where(d['angle'] < pi5, d['angle'] - np.pi))
+    d = d.assign(angle=d['angle'].where(d['angle'] > -pi5, d['angle'] + np.pi))
     
     return d
