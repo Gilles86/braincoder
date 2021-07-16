@@ -77,7 +77,7 @@ class ParameterFitter(object):
         if store_intermediate_parameters:
             intermediate_parameters = []
 
-        mean_r2s = []
+        mean_best_r2s = []
 
         if confounds is None:
             @tf.function
@@ -113,46 +113,53 @@ class ParameterFitter(object):
 
         if optimizer is None:
             pbar = tqdm(range(max_n_iterations))
+            best_r2 = tf.zeros(y.shape[1])
+            best_parameters = tf.zeros(parameters.shape)
+
             for step in pbar:
-                try:
-                    with tf.GradientTape() as t:
+                # try:
+                with tf.GradientTape() as t:
 
-                        untransformed_parameters = self.model._transform_parameters_forward(
-                            parameters)
+                    untransformed_parameters = self.model._transform_parameters_forward(
+                        parameters)
 
-                        ssq = get_ssq(untransformed_parameters)
-                        cost = tf.reduce_sum(ssq)
+                    ssq = get_ssq(untransformed_parameters)
+                    cost = tf.reduce_sum(ssq)
 
-                    gradients = t.gradient(cost, trainable_variables)
-                    r2 = (1 - (ssq / ssq_data)).numpy()
-                    r2[~np.isfinite(r2)] = 0.0
-                    mean_r2 = r2.mean()
+                gradients = t.gradient(cost, trainable_variables)
+                r2 = (1 - (ssq / ssq_data))
+                r2 = tf.where(ssq == 0, 1, r2)
+                r2 = tf.where(ssq_data == 0, 0, r2)
 
-                    if step >= min_n_iterations:
-                        r2_diff = mean_r2 - mean_r2s[np.max((step - lag, 0))]
-                        if (r2_diff >= 0.0) & (r2_diff < r2_atol):
-                            pbar.close()
-                            break
+                improved_r2s = r2 > best_r2
+                best_parameters = tf.where(improved_r2s[:, tf.newaxis], untransformed_parameters, best_parameters)
+                best_r2 = tf.where(improved_r2s, r2, best_r2)
 
-                    mean_r2s.append(mean_r2)
+                mean_current_r2 = r2.numpy().mean()
+                mean_best_r2 = best_r2.numpy().mean()
 
-                    if hasattr(self, 'summary_write'):
-                        with self.summary_writer.as_default():
-                            tf.summary.scalar('mean R2', mean_r2, step=step)
+                if step >= min_n_iterations:
+                    r2_diff = mean_best_r2 - mean_best_r2s[np.max((step - lag, 0))]
+                    if (r2_diff >= 0.0) & (r2_diff < r2_atol):
+                        pbar.close()
+                        break
 
-                    if store_intermediate_parameters:
-                        p = untransformed_parameters.numpy().T
-                        intermediate_parameters.append(
-                            np.reshape(p, np.prod(p.shape)))
-                        intermediate_parameters[-1] = np.concatenate(
-                            (intermediate_parameters[-1], r2), 0)
+                mean_best_r2s.append(mean_best_r2)
 
-                    opt.apply_gradients(zip(gradients, trainable_variables))
+                if hasattr(self, 'summary_write'):
+                    with self.summary_writer.as_default():
+                        tf.summary.scalar('mean R2', mean_r2, step=step)
 
-                    pbar.set_description(f'Mean R2: {mean_r2:0.5f}')
+                if store_intermediate_parameters:
+                    p = untransformed_parameters.numpy().T
+                    intermediate_parameters.append(
+                        np.reshape(p, np.prod(p.shape)))
+                    intermediate_parameters[-1] = np.concatenate(
+                        (intermediate_parameters[-1], r2), 0)
 
-                except Exception as e:
-                    logging.log(f'Exception at step {step}: {e}')
+                opt.apply_gradients(zip(gradients, trainable_variables))
+
+                pbar.set_description(f'Current R2: {mean_current_r2:0.5f}/Best R2: {mean_best_r2:0.5f}')
 
             if store_intermediate_parameters:
                 columns = pd.MultiIndex.from_product([self.model.parameter_labels + ['r2'],
@@ -165,7 +172,7 @@ class ParameterFitter(object):
                                                                            name='step'))
 
             self.estimated_parameters = format_parameters(
-                untransformed_parameters.numpy(), self.model.parameter_labels)
+                best_parameters.numpy(), self.model.parameter_labels)
 
         elif optimizer.endswith('bfgs'):
 
@@ -187,13 +194,13 @@ class ParameterFitter(object):
                 optim_results.position, self.model.parameter_labels)
 
             ssq = get_ssq(optim_results.position)
-            r2 = (1 - (ssq / ssq_data))
+            r2 = (1 - (ssq / ssq_data)).numpy()
 
         self.estimated_parameters.index = self.data.columns
 
         self.predictions = self.model.predict(
             self.paradigm, self.estimated_parameters, self.model.weights)
-        self.r2 = pd.Series(r2.numpy(), index=self.data.columns)
+        self.r2 = pd.Series(r2, index=self.data.columns)
 
         return self.estimated_parameters
 
