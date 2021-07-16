@@ -374,7 +374,7 @@ class ResidualFitter(object):
             WWT = self.model.get_WWT()
         
         if hasattr(WWT, 'values'):
-                WWT = WWT.values
+            WWT = WWT.values
 
         WWT = tf.clip_by_value(WWT, -1e10, 1e10)
         print(f'WWT max: {np.max(WWT)}')
