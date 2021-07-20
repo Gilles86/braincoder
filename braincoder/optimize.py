@@ -62,14 +62,13 @@ class ParameterFitter(object):
 
         init_pars = self.model._transform_parameters_backward(init_pars)
 
-
         ssq_data = tf.reduce_sum(
             (y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
 
         # Voxels with no variance to explain can confuse the optimizer to a large degree,
         # since the gradient landscape is completely flat.
         # Therefore, we only optimize voxels where there is variance to explain
-        meaningful_ts = ssq_data > 1
+        meaningful_ts = ssq_data > 0.0
 
         print(f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int16))}')
 
@@ -184,6 +183,7 @@ class ParameterFitter(object):
 
             self.estimated_parameters = format_parameters(
                 best_parameters.numpy(), self.model.parameter_labels)
+
 
         elif optimizer.endswith('bfgs'):
 
