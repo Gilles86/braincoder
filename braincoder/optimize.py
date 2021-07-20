@@ -206,13 +206,12 @@ class ParameterFitter(object):
                 optim_results.position, self.model.parameter_labels)
 
             ssq = get_ssq(optim_results.position)
-            r2 = (1 - (ssq / ssq_data)).numpy()
 
         self.estimated_parameters.index = self.data.columns
 
         self.predictions = self.model.predict(
             self.paradigm, self.estimated_parameters, self.model.weights)
-        self.r2 = pd.Series(r2, index=self.data.columns)
+        self.r2 = pd.Series(best_r2.numpy(), index=self.data.columns)
 
         return self.estimated_parameters
 
