@@ -70,10 +70,11 @@ class ParameterFitter(object):
         # Therefore, we only optimize voxels where there is variance to explain
         meaningful_ts = ssq_data > 0.0
 
-        print(f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int16))}')
+        print(f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int32))}')
+        print(f'Number of voxels remaining (mask): {tf.reduce_sum(tf.cast(meaningful_ts == True, tf.int32))}')
 
         trainable_parameters = tf.Variable(initial_value=init_pars[meaningful_ts],
-                                     shape=(tf.reduce_sum(tf.cast(meaningful_ts, tf.int16)), n_pars),
+                                     shape=(tf.reduce_sum(tf.cast(meaningful_ts, tf.int32)), n_pars),
                                      name='estimated_parameters', dtype=tf.float32)
 
         trainable_variables = [trainable_parameters]
