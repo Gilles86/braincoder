@@ -301,8 +301,8 @@ class GaussianPRF(EncodingModel):
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
     parameter_transforms = [None, 'softplus', None, None]
 
-    def basis_predictions(self, paradigm):
-        parameters = np.array(self.parameters)
+    def basis_predictions(self, paradigm, parameters):
+        # parameters = np.array(self.parameters)
 
         if paradigm.ndim == 1:
             paradigm = paradigm[:, np.newaxis]
