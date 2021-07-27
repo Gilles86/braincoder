@@ -246,9 +246,12 @@ class ParameterFitter(object):
 
         logging.info('Built grid of {len(par_grid)} parameter settings...')
 
+        data = self.data.values
+        paradigm = self.paradigm.values
+
         @tf.function
-        def _get_ssq_for_predictions(par_grid, data, model, paradigm):
-            grid_predictions = model._predict(paradigm[tf.newaxis, ...],
+        def _get_ssq_for_predictions(par_grid):
+            grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
                                               par_grid[tf.newaxis, ...], None)
 
             # time x voxels x parameters
@@ -262,8 +265,7 @@ class ParameterFitter(object):
                            columns=pd.MultiIndex.from_frame(par_grid.reset_index('chunk')))
 
         for chunk, pg in tqdm(par_grid.groupby('chunk')):
-            ssq[chunk] = _get_ssq_for_predictions(pg.values, self.data.values,
-                                                  self.model, self.paradigm.values).numpy()
+            ssq[chunk] = _get_ssq_for_predictions(pg.values).numpy()
 
         ssq = ssq.droplevel('chunk', axis=1,).fillna(np.inf)
 
