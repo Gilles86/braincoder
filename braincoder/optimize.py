@@ -238,11 +238,18 @@ class ParameterFitter(object):
             return parameters
 
         grid_args = [kwargs[key] for key in self.model.parameter_labels]
+
+        # n_permutations x n_pars
         par_grid = _create_grid(self.model, *grid_args).astype(np.float32)
 
-        # Add chunks to the parameter columns, to process them chunk-wise and save memory
+
+        # # Add chunks to the parameter columns, to process them chunk-wise and save memory
         par_grid = par_grid.set_index(
             pd.Index(par_grid.index // chunk_size, name='chunk'), append=True)
+
+        n_chunks = ((len(par_grid) - 1) // chunk_size) + 1
+        n_pars = par_grid.shape[1]
+        n_features = self.data.shape[1]
 
         logging.info('Built grid of {len(par_grid)} parameter settings...')
 
@@ -252,29 +259,34 @@ class ParameterFitter(object):
         @tf.function
         def _get_ssq_for_predictions(par_grid):
             grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
-                                              par_grid[tf.newaxis, ...], None)
+                                                   par_grid[tf.newaxis, ...], None)
 
-            # time x voxels x parameters
+            # time x features x parameters
             ssq = tf.math.reduce_sum(
                 (grid_predictions[0, :, tf.newaxis, :] - data[:, :, tf.newaxis])**2, 0)
-            return ssq
 
-        # n_voxels x n_parameters
-        ssq = pd.DataFrame(np.zeros((self.data.shape[1], len(par_grid)), dtype=np.float32),
-                           index=self.data.columns,
-                           columns=pd.MultiIndex.from_frame(par_grid.reset_index('chunk')))
+            best_ixs = tf.argmin(ssq, 1)
 
+            return ssq, best_ixs
+
+        # n features x n_chunks x n_pars
+        best_pars = np.zeros((n_features, n_chunks, n_pars))
+        best_ssq = np.zeros((n_features, n_chunks))
+
+        vox_ix = tf.range(n_features, dtype=tf.int64)
+        
         for chunk, pg in tqdm(par_grid.groupby('chunk')):
-            ssq[chunk] = _get_ssq_for_predictions(pg.values).numpy()
+            ssq_, best_ix = _get_ssq_for_predictions(pg.values)
 
-        ssq = ssq.droplevel('chunk', axis=1,).fillna(np.inf)
+            gather_ix = tf.stack((vox_ix, best_ix), 1)
+            best_ssq[:, chunk] = tf.gather_nd(ssq_, gather_ix)
+            best_pars[:, chunk] = tf.gather(pg.values, best_ix)
 
-        # best_pars = ssq.columns.to_frame(
-            # index=False).iloc[ssq.values.argmin(1)]
+        best_chunks = tf.argmin(best_ssq, 1)
+        best_pars = tf.gather_nd(best_pars, tf.stack((vox_ix, best_chunks), axis=1))
 
-        best_pars = ssq.columns.to_frame(
-            index=False).iloc[tf.math.argmin(ssq, 1)]
-        best_pars.index = self.data.columns
+        best_pars = pd.DataFrame(best_pars.numpy(), index=self.data.columns,
+                columns=self.model.parameter_labels)
 
         return best_pars
 
