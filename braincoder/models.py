@@ -338,7 +338,6 @@ class GaussianPRF(EncodingModel):
     parameter_transforms = [None, 'softplus', None, None]
 
     def basis_predictions(self, paradigm, parameters):
-        # parameters = np.array(self.parameters)
 
         if paradigm.ndim == 1:
             paradigm = paradigm[:, np.newaxis]
@@ -376,6 +375,23 @@ class GaussianPRF(EncodingModel):
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
         return norm(paradigm, parameters[..., 0], parameters[..., 1]) * parameters[..., 2] + parameters[..., 3]
+
+
+    def init_pseudoWWT(self, stimulus_range, parameters):
+        W = self.basis_predictions(stimulus_range, parameters)
+        # print(W.shape)
+        # print(f'Number of NANS in W: {np.sum(np.isnan(W.numpy()))}')
+
+        pseudoWWT = tf.tensordot(W, W, (0, 0))
+        self._pseudoWWT = tf.where(tf.math.is_nan(pseudoWWT), tf.zeros_like(pseudoWWT),
+                 pseudoWWT)
+        return self._pseudoWWT
+
+    def get_pseudoWWT(self):
+        if hasattr(self, '_pseudoWWT'):
+            return self._pseudoWWT
+        else:
+            raise ValueError('First initialize WWT for a specific stimulus range using init_pseudoWWT!')
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
