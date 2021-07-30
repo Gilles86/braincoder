@@ -195,6 +195,42 @@ class EncodingModel(object):
 
         return likelihood
 
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, omega=None,
+            dof=None):
+
+
+        if hasattr(data, 'values'):
+            time_index = data.index
+            data = data.values
+        else:
+            time_index = pd.Index(np.arange(len(data)), name='frame')
+
+        if parameters is None:
+            parameters = self.parameters
+
+        if hasattr(parameters, 'values'):
+            paramaters = parameters.values
+
+        if omega is None:
+            omega = self.omega
+
+        ll = self._likelihood(stimulus_range[:, np.newaxis, np.newaxis],
+                data[np.newaxis, :, :],
+                parameters.values[np.newaxis, :, :],
+                None,
+                omega,
+                dof,
+                logp=True,
+                normalize=False).numpy()
+
+        ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(stimulus_range, name='stimulus'))
+
+        # Normalize, working from log likelihoods (otherwise we get numerical issues)
+        ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
+        ll = ll.apply(lambda d: d/d.sum(), axis=1)
+
+        return ll
+
     def apply_mask(self, mask):
 
         if self.data is not None:
