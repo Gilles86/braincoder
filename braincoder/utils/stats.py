@@ -10,11 +10,12 @@ def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
 
     resid = data - predictions
 
-    ssq_data = np.clip(((data - data.mean(0))**2).sum(0), 1e-5, None)
+    # ssq_data = np.clip(((data - data.mean(0))**2).sum(0), 1e-5, None)
+    ssq_data = ((data - data.mean(0))**2).sum(0)
     if allow_biased_residuals:
-        ssq_resid = np.clip(((resid - resid.mean(0))**2).sum(0), 1e-5, None)
+        ssq_resid = ((resid - resid.mean(0))**2).sum(0)
     else:
-        ssq_resid = np.clip((resid**2).sum(0), 1e-5, None)
+        ssq_resid = (resid**2).sum(0)
 
     r2 = (1 - (ssq_resid / ssq_data))
 
