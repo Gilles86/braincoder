@@ -42,11 +42,23 @@ class EncodingModel(object):
             weights_ = None
         else:
             weights_ = weights.values[np.newaxis, ...]
+        
+        if paradigm is None:
+            if self.paradigm is None:
+                raise Exception('Need to set paradigm')
+            else:
+                paradigm = self.paradigm
+
+        if parameters is None:
+            if self.parameters is none:
+                raise Exception('Need to set parameters')
+            else:
+                parameters = self.parameters
 
         predictions = self._predict(
-            self.paradigm.values[np.newaxis, ...], self.parameters.values[np.newaxis, ...], weights_)[0]
+            paradigm.values[np.newaxis, ...], parameters.values[np.newaxis, ...], weights_)[0]
 
-        return pd.DataFrame(predictions.numpy(), index=self.paradigm.index, columns=self.parameters.index)
+        return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=parameters.index)
 
     def _fit_weights(self, y, paradigm, parameters, l2_cost=0.0):
         return tf.linalg.lstsq(self._basis_predictions(paradigm, parameters),
