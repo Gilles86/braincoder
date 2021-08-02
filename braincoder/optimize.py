@@ -129,7 +129,6 @@ class ParameterFitter(object):
             best_parameters = tf.zeros(init_pars.shape)
 
             for step in pbar:
-                # try:
                 with tf.GradientTape() as t:
 
                     parameters = tf.tensor_scatter_nd_update(
@@ -293,6 +292,41 @@ class ParameterFitter(object):
 
         return best_pars
 
+    def refine_baseline_and_amplitude(self, parameters, n_iterations=2):
+
+        data = self.model.data
+        predictions = self.model.predict(parameters=parameters)
+        parameters = parameters.copy()
+
+        assert(('baseline' in parameters.columns) and (
+            'amplitude' in parameters)), "Need parameters with amplitude and baseline"
+
+        orig_r2 = get_rsq(data, predictions)
+        print(f"Original mean r2: {orig_r2.mean()}")
+
+        # n batches (voxels) x n_timepoints x regressors (2)
+        X = np.stack((np.ones(
+            (predictions.shape[1], predictions.shape[0])), predictions.values.T[:, :]), 2)
+
+        # n batches (voxels) x n_timepoints x 1
+        Y = data.T.values[..., np.newaxis]
+        beta = tf.linalg.lstsq(X, Y, fast=False).numpy()[..., 0]
+        Y_ = tf.reduce_sum(beta[:, tf.newaxis, :] * X, 2).numpy().T
+
+        new_r2 = get_rsq(data, Y_)
+        ix = (new_r2 > orig_r2) & (orig_r2 > 1e-3)
+
+        parameters.loc[ix, 'baseline'] += beta[ix.values, 0]
+        parameters.loc[ix, 'amplitude'] *= beta[ix.values, 1]
+
+        r2 = get_rsq(self.model.data, self.model.predict(parameters=parameters))
+        print(f"New mean r2 after OLS: {r2.mean()}")
+
+        if n_iterations == 1:
+            return parameters
+        else:
+            return self.refine_baseline_and_amplitude(parameters, n_iterations - 1)
+
     def get_predictions(self, parameters=None):
 
         if parameters is None:
@@ -412,7 +446,7 @@ class ResidualFitter(object):
                 rho = sigmoid(rho_)
                 sigma2 = softplus(sigma2_)
 
-                omega = self._get_omega(tau, rho, sigma2, WWT) 
+                omega = self._get_omega(tau, rho, sigma2, WWT)
 
                 return omega
 
@@ -446,7 +480,6 @@ class ResidualFitter(object):
                 sigma2 = softplus(sigma2_)
                 alpha = sigmoid(alpha_)
 
-
                 omega = self._get_omega_distance(
                     tau, rho, sigma2, WWT, alpha, beta, D)
 
@@ -463,7 +496,6 @@ class ResidualFitter(object):
                 mean_tau = tf.reduce_mean(tau).numpy()
 
                 return f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}, alpha: {alpha.numpy():0.3f}, beta: {beta.numpy():0.3f}'
-
 
         if method == 'gauss':
             @tf.function
@@ -510,7 +542,6 @@ class ResidualFitter(object):
         pbar = tqdm(range(max_n_iterations))
         self.costs = np.zeros(max_n_iterations)
 
-
         def copy_variables(traiable_variables):
             return [tf.identity(e) for e in trainable_variables]
 
@@ -526,7 +557,7 @@ class ResidualFitter(object):
                     cost = -fit_stat(omega)
 
                     gradients = tape.gradient(cost,
-                                          trainable_variables)
+                                              trainable_variables)
 
                     opt.apply_gradients(zip(gradients, trainable_variables))
                     self.costs[step] = cost.numpy()
@@ -542,9 +573,8 @@ class ResidualFitter(object):
                     trainable_variables = copy_variables(best_variables)
                     self.costs[step] = np.inf
 
-
-                pbar.set_description(get_pbar_description(cost, best_cost, best_variables))
-
+                pbar.set_description(get_pbar_description(
+                    cost, best_cost, best_variables))
 
                 previous_cost = self.costs[np.max((step-lag, 0))]
                 if (step > min_n_iterations) & (np.sign(previous_cost) == np.sign(cost)):
@@ -554,8 +584,8 @@ class ResidualFitter(object):
                     else:
                         if (cost / previous_cost) > 1 - rtol:
                             break
-        
-        omega = best_omega 
+
+        omega = best_omega
 
         if method == 't':
             return omega, trainable_variabless[-1].numpy()
