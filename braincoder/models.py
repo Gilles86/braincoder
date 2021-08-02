@@ -38,19 +38,10 @@ class EncodingModel(object):
 
     def predict(self, paradigm=None, parameters=None, weights=None):
 
-        if paradigm is not None:
-            self.paradigm = paradigm
-
-        if parameters is not None:
-            self.parameters = parameters
-
-        if weights is not None:
-            self.weights = weights
-
         if self.weights is None:
             weights_ = None
         else:
-            weights_ = self.weights.values[np.newaxis, ...]
+            weights_ = weights.values[np.newaxis, ...]
 
         predictions = self._predict(
             self.paradigm.values[np.newaxis, ...], self.parameters.values[np.newaxis, ...], weights_)[0]
@@ -63,16 +54,8 @@ class EncodingModel(object):
                                l2_regularizer=l2_cost)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
-        if paradigm is not None:
-            self.paradigm = paradigm
 
-        if parameters is not None:
-            self.parameters = parameters
-
-        if weights is not None:
-            self.weights = weights
-
-        if self.weights is None:
+        if weights is None:
             weights_ = None
         else:
             weights_ = self.weights.values[np.newaxis, ...]
