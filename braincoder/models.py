@@ -50,7 +50,7 @@ class EncodingModel(object):
                 paradigm = self.paradigm
 
         if parameters is None:
-            if self.parameters is none:
+            if self.parameters is None:
                 raise Exception('Need to set parameters')
             else:
                 parameters = self.parameters
@@ -549,27 +549,34 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis],
                           logit(parameters[:, 5][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis])], axis=1)
+                          tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis] - 1)], axis=1)
 
     @tf.function
     def _get_rf(self, grid_coordinates, parameters):
-        # n_populations x n_grid_spaces
-        x = grid_coordinates[:, 0][tf.newaxis, :]
-        y = grid_coordinates[:, 1][tf.newaxis, :]
 
-        mu_x = parameters[:, 0, tf.newaxis]
-        mu_y = parameters[:, 1, tf.newaxis]
-        sd = parameters[:, 2, tf.newaxis]
-        amplitude = parameters[:, 4, tf.newaxis]
+        # n_batches x n_populations x  n_grid_spaces
+        x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
+        y = grid_coordinates[:, 1][tf.newaxis, tf.newaxis, :]
 
-        srf_amplitude = parameters[:, 5, tf.newaxis]
-        srf_size = parameters[:, 6, tf.newaxis]
+        # n_batches x n_populations x n_grid_spaces (broadcast)
+        mu_x = parameters[:, :, 0, tf.newaxis]
+        mu_y = parameters[:, :, 1, tf.newaxis]
+        sd = parameters[:, :, 2, tf.newaxis]
+        amplitude = parameters[:, :, 4, tf.newaxis]
+
+        srf_amplitude = parameters[:, :, 5, tf.newaxis]
+        srf_size = parameters[:, :, 6, tf.newaxis]
 
         standard_prf = super()._get_rf(grid_coordinates, parameters)
-        srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*srf_size*sd**2)
-                     ) * amplitude * srf_amplitude / srf_size**2
 
-        return standard_prf - srf
+
+        srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*(srf_size*sd)**2)
+                     ) * amplitude * srf_amplitude# / srf_size**2
+
+
+        # return (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
+
+        return (1+srf_amplitude)*standard_prf - srf
 
 
 class DifferenceOfGaussiansPRF2DWithHRF(DifferenceOfGaussiansPRF2D, HRFEncodingModel):
