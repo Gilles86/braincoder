@@ -436,27 +436,29 @@ class ResidualFitter(object):
 
         trainable_variables = [tau_, rho_, sigma2_]
 
+
+
         if D is None:
 
             @tf.function
-            def get_omega(trainable_variables):
+            def transform_variables(trainable_variables):
                 tau_, rho_, sigma2_ = trainable_variables[:3]
 
                 tau = softplus(tau_)
                 rho = sigmoid(rho_)
                 sigma2 = softplus(sigma2_)
 
+                return tau, rho, sigma2
+
+            @tf.function
+            def get_omega(trainable_variables):
+                tau, rho, sigma2 = transform_variables(trainable_variables)
                 omega = self._get_omega(tau, rho, sigma2, WWT)
 
                 return omega
 
             def get_pbar_description(cost, best_cost, trainable_variables):
-
-                tau_, rho_, sigma2_ = trainable_variables[:3]
-                tau = softplus(tau_)
-                rho = sigmoid(rho_)
-                sigma2 = softplus(sigma2_)
-
+                tau, rho, sigma2 = transform_variables(trainable_variables)
                 mean_tau = tf.reduce_mean(tau).numpy()
 
                 return f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f} '
@@ -471,14 +473,19 @@ class ResidualFitter(object):
             trainable_variables += [alpha_, beta]
 
             @tf.function
-            def get_omega(trainable_variables):
-
+            def transform_variables(trainable_variables):
                 tau_, rho_, sigma2_, alpha_, beta = trainable_variables[:5]
 
                 tau = softplus(tau_)
                 rho = sigmoid(rho_)
                 sigma2 = softplus(sigma2_)
                 alpha = sigmoid(alpha_)
+
+                return tau, rho, sigma2, alpha, beta
+
+            @tf.function
+            def get_omega(trainable_variables):
+                tau, rho, sigma2, alpha, beta = transform_variables(trainable_variables)
 
                 omega = self._get_omega_distance(
                     tau, rho, sigma2, WWT, alpha, beta, D)
@@ -487,11 +494,7 @@ class ResidualFitter(object):
 
             def get_pbar_description(cost, best_cost, trainable_variables):
 
-                tau_, rho_, sigma2_, alpha_, beta = trainable_variables[:5]
-                tau = softplus(tau_)
-                rho = sigmoid(rho_)
-                sigma2 = softplus(sigma2_)
-                alpha = sigmoid(alpha_)
+                tau, rho, sigma2, alpha, beta = transform_variables(trainable_variables)
 
                 mean_tau = tf.reduce_mean(tau).numpy()
 
@@ -587,8 +590,16 @@ class ResidualFitter(object):
 
         omega = best_omega
 
+        fitted_parameters = [e.numpy() for e in transform_variables(best_variables)]
+        self.fitted_omega_parameters = dict(zip(['tau', 'rho', 'sigma2'], fitted_parameters[:3]))
+
+        if D is not None:
+            self.fitted_omega_parameters['alpha'] = fitted_parameters[3]
+            self.fitted_omega_parameters['beta'] = fitted_parameters[4]
+
         if method == 't':
-            return omega, trainable_variabless[-1].numpy()
+            self.fitted_omega_parameters['dof'] = fitted_parameters[-1]
+            return omega, trainable_variables[-1].numpy()
         else:
             return omega, None
 
