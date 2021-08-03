@@ -40,7 +40,7 @@ class ParameterFitter(object):
             init_pars=None,
             confounds=None,
             optimizer=None,
-            store_intermediate_parameters=True,
+            store_intermediate_parameters=False,
             r2_atol=0.000001,
             lag=100,
             learning_rate=0.01,
