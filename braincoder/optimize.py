@@ -40,7 +40,7 @@ class ParameterFitter(object):
             init_pars=None,
             confounds=None,
             optimizer=None,
-            store_intermediate_parameters=True,
+            store_intermediate_parameters=False,
             r2_atol=0.000001,
             lag=100,
             learning_rate=0.01,
@@ -217,13 +217,17 @@ class ParameterFitter(object):
 
         return self.estimated_parameters
 
-    def fit_grid(self, *args, **kwargs):
+    def fit_grid(self, *args, fixed_pars=None, **kwargs):
 
         # Calculate a proper chunk size for cutting up the parameter grid
         n_timepoints, n_voxels = self.data.shape
         chunk_size = self.memory_limit / n_voxels / n_timepoints
         chunk_size = int(kwargs.pop('chunk_size', chunk_size))
         print(f'Working with chunk size of {chunk_size}')
+
+        if fixed_pars is not None:
+            return self._partly_fit_grid(fixed_pars, n_timepoints, n_voxels,
+                                         chunk_size, **kwargs)
 
         # Make sure that ranges for all parameters are given ing
         # *args or **kwargs
@@ -326,6 +330,82 @@ class ParameterFitter(object):
             return parameters
         else:
             return self.refine_baseline_and_amplitude(parameters, n_iterations - 1)
+
+    def _partly_fit_grid(self, fixed_pars, n_timepoints, n_voxels, chunk_size, **kwargs):
+
+        for key in kwargs.keys():
+            if key in fixed_pars:
+                print(
+                    f'Dropping {key} from fixed_pars since it is in the grid parameters')
+                fixed_pars = fixed_pars.drop(key, 1)
+
+        if not set(list(kwargs.keys()) + fixed_pars.columns.tolist()) == set(self.model.parameter_labels):
+            raise ValueError(
+                f'Please provide parameter ranges for all these parameters: {self.model.parameter_labels},'
+                'either in the grid or in the fixed_pars')
+
+        grid_key_ixs = [self.model.parameter_labels.index(
+            key) for key in kwargs.keys()]
+        init_par_ixs = [self.model.parameter_labels.index(
+            key) for key in fixed_pars.columns]
+
+        # n_permutations x n_pars
+        par_grid1 = pd.MultiIndex.from_product(
+            kwargs.values(), names=kwargs.keys()).to_frame(index=False)
+        par_grid1 = np.repeat(par_grid1.values[np.newaxis, :, :], n_voxels, 0)
+
+        n_par_permutations = par_grid1.shape[1]
+        n_chunks = ((n_par_permutations - 1) // chunk_size) + 1
+        n_features = self.data.shape[1]
+        n_pars = len(self.model.parameter_labels)
+
+        par_grid = np.zeros(
+            (n_features, n_par_permutations, n_pars), dtype=np.float32)
+
+        for old_ix, new_ix in enumerate(grid_key_ixs):
+            par_grid[:, :, new_ix] = par_grid1[:, :, old_ix]
+
+        for old_ix, new_ix in enumerate(init_par_ixs):
+            par_grid[:, :, new_ix] = fixed_pars.values[:, np.newaxis, old_ix]
+
+        # n features x n_chunks x n_pars
+        best_pars = np.zeros((n_features, n_chunks, n_pars))
+        best_ssq = np.zeros((n_features, n_chunks))
+
+        vox_ix = tf.range(n_features, dtype=tf.int64)
+
+        data = self.data.values
+        paradigm = self.paradigm.values
+
+        @tf.function
+        def _get_ssq_for_predictions(par_grid):
+            grid_predictions = self.model._predict(paradigm[..., tf.newaxis],
+                                                   par_grid, None)
+
+            resid = data[..., tf.newaxis] - grid_predictions
+
+            ssq = tf.reduce_sum(resid**2, 0)
+
+            return ssq, tf.argmin(ssq, 1)
+
+        for chunk in tqdm(range(n_chunks)):
+            pg = par_grid[:, chunk*chunk_size:(chunk+1)*chunk_size, :]
+
+            ssq_, best_ix = _get_ssq_for_predictions(pg)
+
+            gather_ix = tf.stack((vox_ix, best_ix), 1)
+            best_ssq[:, chunk] = tf.gather_nd(ssq_, gather_ix)
+            best_pars[:, chunk, :] = tf.gather_nd(pg, gather_ix)
+
+        best_chunks = tf.argmin(best_ssq, 1)
+        best_pars = tf.gather_nd(
+            best_pars, tf.stack((vox_ix, best_chunks), axis=1))
+
+        best_pars = pd.DataFrame(best_pars.numpy(), index=self.data.columns,
+                                 columns=self.model.parameter_labels).astype(np.float32)
+
+        return best_pars
+
 
     def get_predictions(self, parameters=None):
 
@@ -536,10 +616,10 @@ class ResidualFitter(object):
             fit_stat = likelihood
 
         elif method == 'ssq_cov':
-            raise NotImplementederror()
+            raise NotImplementedError()
 
         elif method == 'slogsq_cov':
-            raise NotImplementederror()
+            raise NotImplementedError()
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
         pbar = tqdm(range(max_n_iterations))
@@ -587,7 +667,6 @@ class ResidualFitter(object):
                     else:
                         if (cost / previous_cost) > 1 - rtol:
                             break
-
         omega = best_omega
 
         fitted_parameters = [e.numpy() for e in transform_variables(best_variables)]
