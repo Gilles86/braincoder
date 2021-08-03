@@ -533,10 +533,10 @@ class ResidualFitter(object):
             fit_stat = likelihood
 
         elif method == 'ssq_cov':
-            raise NotImplementederror()
+            raise NotImplementedError()
 
         elif method == 'slogsq_cov':
-            raise NotImplementederror()
+            raise NotImplementedError()
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
         pbar = tqdm(range(max_n_iterations))
@@ -585,10 +585,10 @@ class ResidualFitter(object):
                         if (cost / previous_cost) > 1 - rtol:
                             break
 
-        omega = best_omega
+        omega = best_omega 
 
         if method == 't':
-            return omega, trainable_variabless[-1].numpy()
+            return omega, trainable_variables[-1].numpy()
         else:
             return omega, None
 
