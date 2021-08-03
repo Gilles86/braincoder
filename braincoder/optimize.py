@@ -664,8 +664,7 @@ class ResidualFitter(object):
                     else:
                         if (cost / previous_cost) > 1 - rtol:
                             break
-
-        omega = best_omega 
+        omega = best_omega
 
         if method == 't':
             return omega, trainable_variables[-1].numpy()
