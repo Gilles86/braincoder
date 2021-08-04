@@ -340,10 +340,19 @@ class GaussianPRF(EncodingModel):
 
     def basis_predictions(self, paradigm, parameters):
 
+        if hasattr(paradigm, 'values'):
+            paradigm = paradigm.values
+
+        if hasattr(parameters, 'values'):
+            parameters = parameters.values
+
+        paradigm = np.float32(paradigm)
+        parameters = np.float32(parameters)
+
         if paradigm.ndim == 1:
             paradigm = paradigm[:, np.newaxis]
 
-        return self._basis_predictions(paradigm, parameters)
+        return self._basis_predictions(paradigm[np.newaxis, ...], parameters[np.newaxis, ...])[0]
 
     def get_init_pars(self, data, paradigm, confounds=None):
 
@@ -387,9 +396,8 @@ class GaussianPRF(EncodingModel):
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
     def init_pseudoWWT(self, stimulus_range, parameters):
+
         W = self.basis_predictions(stimulus_range, parameters)
-        # print(W.shape)
-        # print(f'Number of NANS in W: {np.sum(np.isnan(W.numpy()))}')
 
         pseudoWWT = tf.tensordot(W, W, (0, 0))
         self._pseudoWWT = tf.where(tf.math.is_nan(pseudoWWT), tf.zeros_like(pseudoWWT),
