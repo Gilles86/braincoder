@@ -575,12 +575,11 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
 
         srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*(srf_size*sd)**2)
-                     ) * amplitude * srf_amplitude# / srf_size**2
+                     ) * amplitude / srf_size**2
 
 
-        # return (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
 
-        return (1+srf_amplitude)*standard_prf - srf
+        return standard_prf - srf_amplitude * srf
 
 
 class DifferenceOfGaussiansPRF2DWithHRF(DifferenceOfGaussiansPRF2D, HRFEncodingModel):
