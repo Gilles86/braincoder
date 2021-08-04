@@ -76,6 +76,10 @@ class ParameterFitter(object):
         else:
             parameter_ix = [ix for ix, label in enumerate(self.model.parameter_labels) if label not in fixed_pars]
 
+            print('*** Only fitting: ***')
+            for ix in parameter_ix:
+                print(f' * {self.model.parameter_labels[ix]}')
+
         parameter_ix = tf.constant(parameter_ix, dtype=tf.int32)
 
         n_meaningful_ts = tf.reduce_sum(tf.cast(meaningful_ts, tf.int32))
