@@ -40,6 +40,7 @@ class ParameterFitter(object):
             init_pars=None,
             confounds=None,
             optimizer=None,
+            fixed_pars=None,
             store_intermediate_parameters=False,
             r2_atol=0.000001,
             lag=100,
@@ -70,14 +71,27 @@ class ParameterFitter(object):
         # Therefore, we only optimize voxels where there is variance to explain
         meaningful_ts = ssq_data > 0.0
 
+        if fixed_pars is None:
+            parameter_ix = range(n_pars)
+        else:
+            parameter_ix = [ix for ix, label in enumerate(self.model.parameter_labels) if label not in fixed_pars]
+
+        parameter_ix = tf.constant(parameter_ix, dtype=tf.int32)
+
+        n_meaningful_ts = tf.reduce_sum(tf.cast(meaningful_ts, tf.int32))
+        n_trainable_pars = len(parameter_ix)
+
+        update_feature_ix, update_parameter_ix = tf.meshgrid(tf.cast(tf.where(meaningful_ts), tf.int32), parameter_ix)
+        update_ix = tf.stack((tf.reshape(update_feature_ix, tf.size(update_feature_ix)),
+                              tf.reshape(update_parameter_ix, tf.size(update_parameter_ix))), 1)
+
         print(
             f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int32))}')
         print(
             f'Number of voxels remaining (mask): {tf.reduce_sum(tf.cast(meaningful_ts == True, tf.int32))}')
 
-        trainable_parameters = tf.Variable(initial_value=init_pars[meaningful_ts],
-                                           shape=(tf.reduce_sum(
-                                               tf.cast(meaningful_ts, tf.int32)), n_pars),
+        trainable_parameters = tf.Variable(initial_value=tf.gather_nd(init_pars, update_ix),
+                                           shape=(n_meaningful_ts*n_trainable_pars),
                                            name='estimated_parameters', dtype=tf.float32)
 
         trainable_variables = [trainable_parameters]
@@ -130,9 +144,8 @@ class ParameterFitter(object):
 
             for step in pbar:
                 with tf.GradientTape() as t:
-
                     parameters = tf.tensor_scatter_nd_update(
-                        init_pars, tf.where(meaningful_ts), trainable_parameters)
+                        init_pars, update_ix, trainable_parameters)
                     untransformed_parameters = self.model._transform_parameters_forward(
                         parameters)
 
