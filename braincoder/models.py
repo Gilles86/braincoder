@@ -17,7 +17,7 @@ class EncodingModel(object):
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
 
-        if (self.parameter_labels is not None) & (type(parameters) is pd.DataFrame): 
+        if (self.parameter_labels is not None) & (type(parameters) is pd.DataFrame):
             parameters = parameters[self.parameter_labels]
 
         self.paradigm = paradigm
@@ -35,6 +35,9 @@ class EncodingModel(object):
         # paradigm: n_batch x n_timepoints x n_stimulus_features
         # parameters: n_batch x n_units x n_parameters
         # weights: n_batch x n_basis_functions x n_units
+
+
+        # returns: n_batch x n_timepoints x n_units
         if weights is None:
             return self._basis_predictions(paradigm, parameters)
         else:
@@ -46,7 +49,7 @@ class EncodingModel(object):
             weights_ = None
         else:
             weights_ = weights.values[np.newaxis, ...]
-        
+
         if paradigm is None:
             if self.paradigm is None:
                 raise Exception('Need to set paradigm')
@@ -178,7 +181,6 @@ class EncodingModel(object):
             if value is None:
                 raise Exception('Please set {}'.format(name))
 
-         
         omega_chol = tf.linalg.cholesky(omega).numpy()
 
         likelihood = self._likelihood(stimuli.values, data.values, parameters.values,
@@ -195,8 +197,7 @@ class EncodingModel(object):
         return likelihood
 
     def get_stimulus_pdf(self, data, stimulus_range, parameters=None, omega=None,
-            dof=None):
-
+                         dof=None):
 
         if hasattr(data, 'values'):
             time_index = data.index
@@ -214,15 +215,16 @@ class EncodingModel(object):
             omega = self.omega
 
         ll = self._likelihood(stimulus_range[:, np.newaxis, np.newaxis],
-                data[np.newaxis, :, :],
-                parameters.values[np.newaxis, :, :],
-                None,
-                omega,
-                dof,
-                logp=True,
-                normalize=False).numpy()
+                              data[np.newaxis, :, :],
+                              parameters.values[np.newaxis, :, :],
+                              None,
+                              omega,
+                              dof,
+                              logp=True,
+                              normalize=False).numpy()
 
-        ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(stimulus_range, name='stimulus'))
+        ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
+            stimulus_range, name='stimulus'))
 
         # Normalize, working from log likelihoods (otherwise we get numerical issues)
         ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
@@ -373,8 +375,16 @@ class GaussianPRF(EncodingModel):
 
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
-        return norm(paradigm, parameters[..., 0], parameters[..., 1]) * parameters[..., 2] + parameters[..., 3]
+        # paradigm: n_batches x n_timepoints x n_stimulus_features
+        # parameters:: n_batches x n_voxels x n_parameters
 
+        # norm: n_batches x n_timepoints x n_voxels
+
+        # output: n_batches x n_timepoints x n_voxels
+        return norm(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
     def init_pseudoWWT(self, stimulus_range, parameters):
         W = self.basis_predictions(stimulus_range, parameters)
@@ -383,14 +393,15 @@ class GaussianPRF(EncodingModel):
 
         pseudoWWT = tf.tensordot(W, W, (0, 0))
         self._pseudoWWT = tf.where(tf.math.is_nan(pseudoWWT), tf.zeros_like(pseudoWWT),
-                 pseudoWWT)
+                                   pseudoWWT)
         return self._pseudoWWT
 
     def get_pseudoWWT(self):
         if hasattr(self, '_pseudoWWT'):
             return self._pseudoWWT
         else:
-            raise ValueError('First initialize WWT for a specific stimulus range using init_pseudoWWT!')
+            raise ValueError(
+                'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
@@ -464,8 +475,9 @@ class GaussianPRF2D(EncodingModel):
     def _basis_predictions(self, paradigm, parameters):
         rf = self._get_rf(self.grid_coordinates, parameters)
 
-        baseline = parameters[..., 3]
-        result = tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :] + baseline
+        baseline = parameters[:, tf.newaxis, :, 3]
+
+        result = tf.reduce_sum(paradigm[:, :, tf.newaxis, :] * rf[:, tf.newaxis, :, :], 3) + baseline
 
         return result
 
@@ -552,7 +564,8 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
                               parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis],
-                          tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 5][:, tf.newaxis]),
                           tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis] - 1)], axis=1)
 
     @tf.function
@@ -573,11 +586,8 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
         standard_prf = super()._get_rf(grid_coordinates, parameters)
 
-
         srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*(srf_size*sd)**2)
                      ) * amplitude / srf_size**2
-
-
 
         return standard_prf - srf_amplitude * srf
 

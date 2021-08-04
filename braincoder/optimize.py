@@ -380,14 +380,13 @@ class ParameterFitter(object):
         n_features = self.data.shape[1]
         n_pars = len(self.model.parameter_labels)
 
-        par_grid = np.zeros(
-            (n_features, n_par_permutations, n_pars), dtype=np.float32)
+        par_grid = np.zeros((n_par_permutations, n_features, n_pars), dtype=np.float32)
 
         for old_ix, new_ix in enumerate(grid_key_ixs):
-            par_grid[:, :, new_ix] = par_grid1[:, :, old_ix]
+            par_grid[:, :, new_ix] = par_grid1[:, :, old_ix].T
 
         for old_ix, new_ix in enumerate(init_par_ixs):
-            par_grid[:, :, new_ix] = fixed_pars.values[:, np.newaxis, old_ix]
+            par_grid[:, :, new_ix] = fixed_pars.values[np.newaxis, :, old_ix]
 
         # n features x n_chunks x n_pars
         best_pars = np.zeros((n_features, n_chunks, n_pars))
@@ -400,21 +399,28 @@ class ParameterFitter(object):
 
         @tf.function
         def _get_ssq_for_predictions(par_grid):
-            grid_predictions = self.model._predict(paradigm[:, tf.newaxis, :],
+
+            # paradigm: n_batches x n_timepoints x n_stimulus_features
+            # parameters:: n_batches x n_voxels x n_parameters
+            # norm: n_batches x n_timepoints x n_voxels
+
+            grid_predictions = self.model._predict(paradigm[tf.newaxis, :, :],
                                                    par_grid, None)
 
-            resid = data[..., tf.newaxis] - grid_predictions
+            resid = data[tf.newaxis, ...] - grid_predictions
 
-            ssq = tf.reduce_sum(resid**2, 0)
+            ssq = tf.reduce_sum(resid**2, 1)
 
-            return ssq, tf.argmin(ssq, 1)
+            return ssq, tf.argmin(ssq, 0)
 
         for chunk in tqdm(range(n_chunks)):
-            pg = par_grid[:, chunk*chunk_size:(chunk+1)*chunk_size, :]
+
+            pg = par_grid[chunk*chunk_size:(chunk+1)*chunk_size, :, :]
+            print(pg.shape)
 
             ssq_, best_ix = _get_ssq_for_predictions(pg)
 
-            gather_ix = tf.stack((vox_ix, best_ix), 1)
+            gather_ix = tf.stack((best_ix, vox_ix), 1)
             best_ssq[:, chunk] = tf.gather_nd(ssq_, gather_ix)
             best_pars[:, chunk, :] = tf.gather_nd(pg, gather_ix)
 
