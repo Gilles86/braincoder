@@ -379,7 +379,7 @@ class ParameterFitter(object):
 
         @tf.function
         def _get_ssq_for_predictions(par_grid):
-            grid_predictions = self.model._predict(paradigm[..., tf.newaxis],
+            grid_predictions = self.model._predict(paradigm[:, tf.newaxis, :],
                                                    par_grid, None)
 
             resid = data[..., tf.newaxis] - grid_predictions
