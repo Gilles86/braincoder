@@ -12,6 +12,8 @@ def format_paradigm(paradigm):
 
     if paradigm.ndim == 1:
         paradigm = paradigm[:, np.newaxis]
+    elif paradigm.ndim > 2:
+        paradigm = paradigm.reshape((paradigm.shape[0], -1))
 
     return pd.DataFrame(paradigm, index=pd.Index(range(len(paradigm)), name='time'),
                         columns=pd.Index(range(paradigm.shape[1]), name='stimulus dimension')).astype(np.float32)

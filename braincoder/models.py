@@ -7,6 +7,7 @@ from tqdm import tqdm
 from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
+import pandas as pd
 
 
 class EncodingModel(object):
@@ -15,6 +16,9 @@ class EncodingModel(object):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
+
+        if (self.parameter_labels is not None) & (type(parameters) is pd.DataFrame): 
+            parameters = parameters[self.parameter_labels]
 
         self.paradigm = paradigm
         self.data = data
