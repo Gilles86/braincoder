@@ -344,6 +344,10 @@ class ParameterFitter(object):
                 f'Please provide parameter ranges for all these parameters: {self.model.parameter_labels},'
                 'either in the grid or in the fixed_pars')
 
+        # Note that we have way more to calculate than in hte 
+        # fit_grid case
+        chunk_size = chunk_size // self.data.shape[1] + 1
+
         grid_key_ixs = [self.model.parameter_labels.index(
             key) for key in kwargs.keys()]
         init_par_ixs = [self.model.parameter_labels.index(
