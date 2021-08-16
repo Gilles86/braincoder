@@ -246,10 +246,10 @@ class EncodingModel(object):
         if self.data is not None:
             self.data = self.data.loc[:, mask]
 
-        if self.parameters is not None:
-            self.parameters = self.parameters.loc[mask]
-
-        if self.weights is not None:
+        if self.weights is None:
+            if self.parameters is not None:
+                self.parameters = self.parameters.loc[mask]
+        else:
             self.weights = self.weights.loc[:, mask]
 
     def get_WWT(self):
