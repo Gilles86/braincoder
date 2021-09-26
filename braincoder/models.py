@@ -36,7 +36,6 @@ class EncodingModel(object):
         # parameters: n_batch x n_units x n_parameters
         # weights: n_batch x n_basis_functions x n_units
 
-
         # returns: n_batch x n_timepoints x n_units
         if weights is None:
             return self._basis_predictions(paradigm, parameters)
@@ -45,10 +44,7 @@ class EncodingModel(object):
 
     def predict(self, paradigm=None, parameters=None, weights=None):
 
-        if self.weights is None:
-            weights_ = None
-        else:
-            weights_ = weights.values[np.newaxis, ...]
+        weights, weights_ = self._get_weights(weights)
 
         if paradigm is None:
             if self.paradigm is None:
@@ -65,26 +61,38 @@ class EncodingModel(object):
         predictions = self._predict(
             paradigm.values[np.newaxis, ...], parameters.values[np.newaxis, ...], weights_)[0]
 
-        return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=parameters.index)
+        print(predictions.shape)
 
-    def _fit_weights(self, y, paradigm, parameters, l2_cost=0.0):
-        return tf.linalg.lstsq(self._basis_predictions(paradigm, parameters),
-                               y,
-                               l2_regularizer=l2_cost)
+        if weights is None:
+            return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=parameters.index)
+        else:
+            return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=weights.columns)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
 
-        if weights is None:
-            weights_ = None
+        weights, weights_ = self._get_weights(weights)
+
+        if paradigm is None:
+            paradigm = self.paradigm
         else:
-            weights_ = self.weights.values[np.newaxis, ...]
+            paradigm = format_paradigm(paradigm)
+
+        if parameters is None:
+            parameters = self.parameters
+        else:
+            parameters = format_parameters(parameters)
 
         simulated_data = self._simulate(
-            self.paradigm.values[np.newaxis, ...],
-            self.parameters.values[np.newaxis, ...],
+            paradigm.values[np.newaxis, ...],
+            parameters.values[np.newaxis, ...],
             weights_, noise).numpy()
 
-        return format_data(simulated_data[0])
+        print(simulated_data.shape)
+
+        if weights is None:
+            return pd.DataFrame(simulated_data[0], index=paradigm.index, columns=parameters.index)
+        else:
+            return pd.DataFrame(simulated_data[0], index=paradigm.index, columns=weights.columns)
 
     def _simulate(self, paradigm, parameters, weights, noise=1.):
 
@@ -196,8 +204,7 @@ class EncodingModel(object):
 
         return likelihood
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, omega=None,
-                         dof=None):
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None):
 
         if hasattr(data, 'values'):
             time_index = data.index
@@ -214,10 +221,12 @@ class EncodingModel(object):
         if omega is None:
             omega = self.omega
 
+        weights, weights_ = self._get_weights(weights)
+
         ll = self._likelihood(stimulus_range[:, np.newaxis, np.newaxis],
                               data[np.newaxis, :, :],
                               parameters.values[np.newaxis, :, :],
-                              None,
+                              weights_,
                               omega,
                               dof,
                               logp=True,
@@ -237,10 +246,10 @@ class EncodingModel(object):
         if self.data is not None:
             self.data = self.data.loc[:, mask]
 
-        if self.parameters is not None:
-            self.parameters = self.parameters.loc[mask]
-
-        if self.weights is not None:
+        if self.weights is None:
+            if self.parameters is not None:
+                self.parameters = self.parameters.loc[mask]
+        else:
             self.weights = self.weights.loc[:, mask]
 
     def get_WWT(self):
@@ -297,6 +306,20 @@ class EncodingModel(object):
 
         return p
 
+    def _get_weights(self, weights=None):
+
+        if (weights is None) and (self.weights is not None):
+            weights = self.weights
+
+        weights = format_weights(weights)
+
+        if weights is None:
+            weights_ = weights
+        else:
+            weights_ = weights.values[np.newaxis, ...]
+
+        return weights, weights_
+
 
 class HRFEncodingModel(EncodingModel):
 
@@ -340,10 +363,19 @@ class GaussianPRF(EncodingModel):
 
     def basis_predictions(self, paradigm, parameters):
 
+        if hasattr(paradigm, 'values'):
+            paradigm = paradigm.values
+
+        if hasattr(parameters, 'values'):
+            parameters = parameters.values
+
+        paradigm = np.float32(paradigm)
+        parameters = np.float32(parameters)
+
         if paradigm.ndim == 1:
             paradigm = paradigm[:, np.newaxis]
 
-        return self._basis_predictions(paradigm, parameters)
+        return self._basis_predictions(paradigm[np.newaxis, ...], parameters[np.newaxis, ...])[0]
 
     def get_init_pars(self, data, paradigm, confounds=None):
 
@@ -387,9 +419,8 @@ class GaussianPRF(EncodingModel):
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
     def init_pseudoWWT(self, stimulus_range, parameters):
+
         W = self.basis_predictions(stimulus_range, parameters)
-        # print(W.shape)
-        # print(f'Number of NANS in W: {np.sum(np.isnan(W.numpy()))}')
 
         pseudoWWT = tf.tensordot(W, W, (0, 0))
         self._pseudoWWT = tf.where(tf.math.is_nan(pseudoWWT), tf.zeros_like(pseudoWWT),
@@ -397,6 +428,10 @@ class GaussianPRF(EncodingModel):
         return self._pseudoWWT
 
     def get_pseudoWWT(self):
+
+        if self.weights is not None:
+            return self.weights.T.dot(self.weights).values
+
         if hasattr(self, '_pseudoWWT'):
             return self._pseudoWWT
         else:
@@ -477,7 +512,8 @@ class GaussianPRF2D(EncodingModel):
 
         baseline = parameters[:, tf.newaxis, :, 3]
 
-        result = tf.reduce_sum(paradigm[:, :, tf.newaxis, :] * rf[:, tf.newaxis, :, :], 3) + baseline
+        result = tf.reduce_sum(
+            paradigm[:, :, tf.newaxis, :] * rf[:, tf.newaxis, :, :], 3) + baseline
 
         return result
 

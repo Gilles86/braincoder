@@ -8,11 +8,29 @@ from tqdm import tqdm
 from .utils import format_data, format_parameters, format_paradigm, logit, get_rsq
 import logging
 from tensorflow.math import softplus, sigmoid
+from tensorflow.linalg import lstsq
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
 
 softplus_inverse = tfp.math.softplus_inverse
 
+
+class WeightFitter(object):
+
+    def __init__(self, model, parameters, data, paradigm):
+
+        self.model = model
+        self.parameters = format_parameters(parameters)
+        self.data = format_data(data)
+        self.paradigm = format_paradigm(paradigm)
+
+    def fit(self, alpha=0.0):
+        basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...],
+                self.parameters.values[np.newaxis, :])
+
+        weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
+
+        return weights
 
 class ParameterFitter(object):
 
@@ -313,10 +331,10 @@ class ParameterFitter(object):
 
         return best_pars
 
-    def refine_baseline_and_amplitude(self, parameters, n_iterations=2):
+    def refine_baseline_and_amplitude(self, parameters, n_iterations=2, positive_amplitude=True):
 
-        data = self.model.data
-        predictions = self.model.predict(parameters=parameters)
+        data = self.data
+        predictions = self.model.predict(parameters=parameters, paradigm=self.paradigm)
         parameters = parameters.copy()
 
         assert(('baseline' in parameters.columns) and (
@@ -331,17 +349,27 @@ class ParameterFitter(object):
 
         # n batches (voxels) x n_timepoints x 1
         Y = data.T.values[..., np.newaxis]
-        beta = tf.linalg.lstsq(X, Y, fast=False).numpy()[..., 0]
+        beta = tf.linalg.lstsq(X, Y, fast=False).numpy()[..., 0].astype(np.float32)
         Y_ = tf.reduce_sum(beta[:, tf.newaxis, :] * X, 2).numpy().T
 
-        new_r2 = get_rsq(data, Y_)
-        ix = (new_r2 > orig_r2) & (orig_r2 > 1e-3)
+        new_parameters = parameters.copy().astype(np.float32)
+        new_parameters.loc[:, 'baseline'] += beta[:, 0]
+        new_parameters.loc[:, 'amplitude'] *= beta[:, 1]
 
-        parameters.loc[ix, 'baseline'] += beta[ix.values, 0]
-        parameters.loc[ix, 'amplitude'] *= beta[ix.values, 1]
+        if positive_amplitude:
+            new_parameters['amplitude'] = np.clip(new_parameters['amplitude'], 0.0, np.inf)
 
-        r2 = get_rsq(self.model.data, self.model.predict(parameters=parameters))
-        print(f"New mean r2 after OLS: {r2.mean()}")
+        new_pred = self.model.predict(parameters=new_parameters, paradigm=self.paradigm)
+        new_r2 = get_rsq(data, new_pred)
+
+        ix = (new_r2 > orig_r2) & (data.std() != 0.0)
+
+        print(f'{ix.mean()*100:.2f}% of time lines improved')
+        parameters.loc[ix] = new_parameters.loc[ix]
+
+        combined_pred = self.model.predict(parameters=parameters, paradigm=self.paradigm)
+        combined_r2 = get_rsq(data, combined_pred)
+        print(f"New mean r2 after OLS: {combined_r2.mean()}")
 
         if n_iterations == 1:
             return parameters
