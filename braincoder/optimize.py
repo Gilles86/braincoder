@@ -746,7 +746,8 @@ class StimulusFitter(object):
             self.model.weights
 
     def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6,
-            spike_and_slab_prior=False, sigma_prior=1., alpha=.5):
+            spike_and_slab_prior=False, sigma_prior=1., alpha=.5,
+            positive_only=True):
 
         size_stimulus_var = (1, len(self.data), self.stimulus_size)
 
@@ -754,12 +755,13 @@ class StimulusFitter(object):
             init_stimulus = np.zeros(size_stimulus_var)
 
         if len(init_stimulus.shape) == 2:
-            init_stimulus = init_stimulus[:, np.newaxis, :]
+            init_stimulus = init_stimulus[np.newaxis, :, :]
 
-        decoded_stimulus = tf.Variable(initial_value=init_stimulus, shape=size_stimulus_var,
+        decoded_stimulus_ = tf.Variable(initial_value=init_stimulus, 
                                        name='decoded_stimulus', dtype=tf.float32)
 
-        trainable_variables = [decoded_stimulus]
+        trainable_variables = [decoded_stimulus_]
+
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
@@ -784,6 +786,11 @@ class StimulusFitter(object):
 
         for step in pbar:
             with tf.GradientTape() as tape:
+                if positive_only:
+                    decoded_stimulus = softplus(decoded_stimulus_)
+                else:
+                    decoded_stimulus = decoded_stimulus_
+
                 ll = self.model._likelihood(decoded_stimulus,
                                             data_, parameters,
                                             weights, self.model.omega, self.model.dof, logp=True, normalize=False)
