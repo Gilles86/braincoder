@@ -36,20 +36,15 @@ class MutualInformationEstimator(object):
 
         noise = resid_dist.sample(n)
 
-        print('NOISE', noise)
 
         predictions = self.model._predict(self.stimulus_range[np.newaxis, ...],
                                           self.model.parameters.values[np.newaxis, ...],
                                           self.weights_)
 
-        print('PREDICTIONS', predictions)
         # n samples x actual_stimuli x n_voxels
         neural_data = predictions + noise[:, tf.newaxis, :]
 
-        print('NEURAL DATA', neural_data)
         p_stimulus = self.p_stimulus
-
-        print('P_STIMULUS', p_stimulus)
 
         if uselog:
 
@@ -64,9 +59,7 @@ class MutualInformationEstimator(object):
             logp_joint = resid_dist.log_prob(noise)[:, tf.newaxis]
 
             # n x n_stimuli
-            print('logp_joint', logp_joint)
             p_joint = np.exp(logp_joint, dtype=np.float128) * p_stimulus
-            print('p_joint', p_joint)
 
             residuals = neural_data[:, :, tf.newaxis, :] - \
                 predictions[:, tf.newaxis, :, :]
@@ -75,28 +68,25 @@ class MutualInformationEstimator(object):
             # n x n_stimuli x n_hypothetical stimuli
             logp_data = resid_dist.log_prob(residuals)
             p_data = np.exp(logp_data, dtype=np.float128)
-            print('logp_data', logp_data)
-            print('p_data', p_data)
             p_data = np.sum(p_data, 2) / p_data.shape[2]
 
-            print(p_joint / p_data)
+            print(p_joint / (p_data * np.float128(p_stimulus)))
 
             mi = 1. / n * np.sum(p_joint * np.log2(p_joint / (p_data * np.float128(p_stimulus))))
-
-            print(mi)
 
             return np.array([mi])
 
 
         else:
-            p_joint = self.model._likelihood(self.stimulus_range[np.newaxis, :, :],
-                                             neural_data,
-                                             self.model.parameters.values[np.newaxis, ...],
-                                             self.weights_,
-                                             self.omega_chol,
-                                             self.dof) * p_stimulus
-            print('p_joint', p_joint)
+            # p_joint = self.model._likelihood(self.stimulus_range[np.newaxis, :, :],
+                                             # neural_data,
+                                             # self.model.parameters.values[np.newaxis, ...],
+                                             # self.weights_,
+                                             # self.omega_chol,
+                                             # self.dof) * p_stimulus
 
+
+            p_joint = resid_dist.prob(noise)[:, tf.newaxis] * p_stimulus
             # n samples x n_simulated x n_hypothetical x n_voxels
             residuals = neural_data[:, :, tf.newaxis, :] - \
                 predictions[:, tf.newaxis, :, :]
