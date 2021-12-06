@@ -243,6 +243,57 @@ class CustomStimulusFitter(StimulusFitter):
         return likelihood
 
 
+    def sample_posterior(self,
+                         init_pars,
+                         n_chains,
+                         relevant_frames=None,
+                         step_size=0.0001,
+                         n_burnin=10,
+                         n_samples=10,
+                         max_tree_depth=10,
+                         unrolled_leapfrog_steps=1,
+                         falloff_speed=1000.,
+                         target_accept_prob=0.85,
+                         parameterization='xy'):
+
+        init_pars = init_pars.astype(np.float32)
+
+
+        if (relevant_frames is not None) and (len(init_pars) > len(relevant_frames)):
+            init_pars = init_pars.iloc[relevant_frames, :]
+
+        initial_state = list(np.repeat(init_pars.values.T[:, np.newaxis, :], n_chains, 1))
+
+        bijectors = self.stimulus.bijectors
+
+
+        likelihood = self.build_likelihood_function(relevant_frames, falloff_speed=falloff_speed,
+                                                    n_batches=n_chains)
+
+
+
+        step_size = [tf.fill([n_chains] + [1] * (len(s.shape) - 1),
+                             tf.constant(step_size, np.float32)) for s in initial_state]
+
+        samples, stats = sample_hmc(
+            initial_state, step_size, likelihood,
+            bijectors,
+            num_steps=n_samples, burnin=n_burnin,
+            target_accept_prob=target_accept_prob, unrolled_leapfrog_steps=unrolled_leapfrog_steps,
+            max_tree_depth=max_tree_depth)
+
+        if relevant_frames is None:
+            frame_index = self.data.index
+        else:
+            frame_index = self.data.index[relevant_frames]
+
+        cleaned_up_chains = [cleanup_chain(chain.numpy(), init_pars.columns[ix], frame_index) for ix, chain in enumerate(samples)]
+
+        samples = pd.concat(cleaned_up_chains, 1)
+
+        return samples, stats
+
+
 class SzinteStimulus(object):
 
     parameter_labels = ['x', 'width', 'height']
@@ -282,6 +333,40 @@ class SzinteStimulus(object):
         return make_aperture_stimuli(self.grid_coordinates.values,
                                      x, width, height, falloff_speed, self.intensity)
 
+class SzinteStimulus2(object):
+
+    parameter_labels = ['x', 'height']
+
+    def __init__(self, grid_coordinates, bar_width=1.4111355368411007,
+                 max_height=None, intensity=1.0):
+
+        self.grid_coordinates = pd.DataFrame(
+            grid_coordinates, columns=['x', 'y'])
+        self.intensity = intensity
+
+        self.min_x, self.max_x = self.grid_coordinates['x'].min(
+        ), self.grid_coordinates['x'].max()
+
+
+        if max_height is None:
+            max_height = self.grid_coordinates['y'].max(
+            ) - self.grid_coordinates['y'].min()
+
+        self.bar_width = np.array([bar_width])
+        self.max_height = max_height
+
+        self.bijectors = [Periodic(low=self.min_x - self.bar_width/2.,
+                                   high=self.max_x + self.bar_width/2.),  # x
+                          tfb.Sigmoid(low=np.float32(0.0), high=self.max_height)]  # height
+
+    def generate_images(self, parameters, falloff_speed=1000):
+        return self._generate_images(parameters['x'].values,
+                                     parameters['height'].values,
+                                     falloff_speed)
+
+    def _generate_images(self, x, height, falloff_speed=1000):
+        return make_aperture_stimuli(self.grid_coordinates.values,
+                                     x, self.bar_width, height, falloff_speed, self.intensity)
 
 def make_aperture_stimuli(grid_coordinates, x, width, height, falloff_speed=1000., intensity=1.0):
 
@@ -300,3 +385,5 @@ def make_aperture_stimuli(grid_coordinates, x, width, height, falloff_speed=1000
         falloff_speed)
 
     return bar_x*bar_y*intensity
+
+
