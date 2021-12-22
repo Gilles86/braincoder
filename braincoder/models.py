@@ -508,12 +508,16 @@ class GaussianPRF2D(EncodingModel):
 
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
+        # paradigm: n_batches x n_timepoints x n_stimulus_features
+        # parameters:: n_batches x n_voxels x n_parameters
+
+        # norm: n_batches x n_timepoints x n_voxels
+
+        # output: n_batches x n_timepoints x n_voxels
+
         rf = self._get_rf(self.grid_coordinates, parameters)
-
         baseline = parameters[:, tf.newaxis, :, 3]
-
-        result = tf.reduce_sum(
-            paradigm[:, :, tf.newaxis, :] * rf[:, tf.newaxis, :, :], 3) + baseline
+        result = tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :] + baseline
 
         return result
 
