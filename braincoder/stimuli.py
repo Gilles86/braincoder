@@ -324,6 +324,10 @@ class SzinteStimulus(object):
                           tfb.Sigmoid(low=np.float32(0.0), high=self.max_height)]  # height
 
     def generate_images(self, parameters, falloff_speed=1000):
+
+        if not hasattr(parameters, 'values'):
+            parameters = pd.DataFrame(parameters, columns=['x', 'width', 'height'])
+
         return self._generate_images(parameters['x'].values,
                                      parameters['width'].values,
                                      parameters['height'].values,
@@ -360,6 +364,10 @@ class SzinteStimulus2(object):
                           tfb.Sigmoid(low=np.float32(0.0), high=self.max_height)]  # height
 
     def generate_images(self, parameters, falloff_speed=1000):
+
+        if not hasattr(parameters, 'values'):
+            parameters = pd.DataFrame(parameters, columns=['x', 'width', 'height'])
+
         return self._generate_images(parameters['x'].values,
                                      parameters['height'].values,
                                      falloff_speed)
