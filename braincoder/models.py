@@ -51,6 +51,8 @@ class EncodingModel(object):
                 raise Exception('Need to set paradigm')
             else:
                 paradigm = self.paradigm
+        else:
+            paradigm = format_paradigm(paradigm)
 
         if parameters is None:
             if self.parameters is None:
@@ -481,12 +483,14 @@ class GaussianPRF2D(EncodingModel):
         self.n_x = len(self.grid_coordinates['x'].unique())
         self.n_y = len(self.grid_coordinates['y'].unique())
 
-        paradigm = np.reshape(paradigm, (len(paradigm), -1))
+        if paradigm is not None:
+            paradigm = np.reshape(paradigm, (len(paradigm), -1))
 
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, verbosity=logging.INFO, **kwargs)
 
-        self.paradigm.columns = pd.MultiIndex.from_frame(self.grid_coordinates)
+        if paradigm is not None:
+            self.paradigm.columns = pd.MultiIndex.from_frame(self.grid_coordinates)
 
     def get_rf(self, as_frame=False, unpack=False):
 
