@@ -332,16 +332,20 @@ class EncodingModel(object):
                                                                  tf.transpose(
                                                                      self.tau_),
                                                                  axes=1) + \
-                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                                                                         (1 - self.rho_) * tf.linalg.tensor_diag(self.tau_[:, 0]**2) + \
                     self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
                                                            self.weights_, axes=(-2, -2)))
 
             else:
+                if len(self.tau_.shape) > 1:
+                    tau__ = tf.squeeze(self.tau_)
+                else:
+                    tau__ = self.tau_
                 self.sigma0_ = self.rho_ * tf.tensordot(self.tau_,
                                                         tf.transpose(
                                                             self.tau_),
                                                         axes=1) + \
-                    (1 - self.rho_) * tf.linalg.tensor_diag(tf.squeeze(self.tau_**2)) + \
+                                                                (1 - self.rho_) * tf.linalg.tensor_diag(self.tau_[:, 0]**2) + \
                     self.sigma2_ * tf.squeeze(tf.tensordot(self.weights_,
                                                            self.weights_, axes=(-2, -2)))
 
