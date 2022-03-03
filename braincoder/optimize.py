@@ -343,9 +343,11 @@ class ParameterFitter(object):
         orig_r2 = get_rsq(data, predictions)
         print(f"Original mean r2: {orig_r2.mean()}")
 
+        demeaned_predictions = (predictions - parameters.loc[:, 'baseline'].T) / parameters.loc[:, 'amplitude']
+
         # n batches (voxels) x n_timepoints x regressors (2)
         X = np.stack((np.ones(
-            (predictions.shape[1], predictions.shape[0])), predictions.values.T[:, :]), 2)
+            (predictions.shape[1], predictions.shape[0])), demeaned_predictions.values.T[:, :]), 2)
 
         # n batches (voxels) x n_timepoints x 1
         Y = data.T.values[..., np.newaxis]
@@ -353,8 +355,8 @@ class ParameterFitter(object):
         Y_ = tf.reduce_sum(beta[:, tf.newaxis, :] * X, 2).numpy().T
 
         new_parameters = parameters.copy().astype(np.float32)
-        new_parameters.loc[:, 'baseline'] += beta[:, 0]
-        new_parameters.loc[:, 'amplitude'] *= beta[:, 1]
+        new_parameters.loc[:, 'baseline'] = beta[:, 0]
+        new_parameters.loc[:, 'amplitude'] = beta[:, 1]
 
         if positive_amplitude:
             new_parameters['amplitude'] = np.clip(new_parameters['amplitude'], 0.0, np.inf)
