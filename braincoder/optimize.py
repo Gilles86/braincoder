@@ -252,7 +252,8 @@ class ParameterFitter(object):
 
         return self.estimated_parameters
 
-    def fit_grid(self, *args, fixed_pars=None, **kwargs):
+    def fit_grid(self, *args, fixed_pars=None,
+            use_correlation_cost=False, **kwargs):
 
         # Calculate a proper chunk size for cutting up the parameter grid
         n_timepoints, n_voxels = self.data.shape
@@ -296,33 +297,54 @@ class ParameterFitter(object):
         data = self.data.values
         paradigm = self.paradigm.values
 
-        @tf.function
-        def _get_ssq_for_predictions(par_grid):
-            grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
-                                                   par_grid[tf.newaxis, ...], None)
 
-            # time x features x parameters
-            ssq = tf.math.reduce_sum(
-                (grid_predictions[0, :, tf.newaxis, :] - data[:, :, tf.newaxis])**2, 0)
+        if use_correlation_cost:
 
-            best_ixs = tf.argmin(ssq, 1)
+            print("Using correlation cost!")
 
-            return ssq, best_ixs
+            data_demeaned = data - tf.reduce_mean(data, 0, True)
+            ssq_data = tf.reduce_sum(data_demeaned**2, 0,True)
+
+            @tf.function
+            def _cost(par_grid):
+                grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
+                                                       par_grid[tf.newaxis, ...], None)
+
+                grid_predictions_demeaned = grid_predictions[0] -  tf.reduce_mean(grid_predictions[0], 0, True)
+                ssq_predictions = tf.reduce_sum(grid_predictions_demeaned**2, 0,True)
+
+                r = tf.reduce_sum(grid_predictions_demeaned[:, tf.newaxis, :]*data_demeaned[:, :, tf.newaxis], 0,True) / tf.math.sqrt(ssq_predictions[:, tf.newaxis,:]*ssq_data[:, :, tf.newaxis])
+                r = tf.squeeze(r)
+                best_ixs = tf.argmax(r, 1)
+
+                return -r, best_ixs
+        else:
+            @tf.function
+            def _cost(par_grid):
+                grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
+                                                       par_grid[tf.newaxis, ...], None)
+
+                # time x features x parameters
+                ssq = tf.math.reduce_sum(
+                    (grid_predictions[0, :, tf.newaxis, :] - data[:, :, tf.newaxis])**2, 0)
+
+                best_ixs = tf.argmin(ssq, 1)
+
+                return ssq, best_ixs
 
         # n features x n_chunks x n_pars
         best_pars = np.zeros((n_features, n_chunks, n_pars))
-        best_ssq = np.zeros((n_features, n_chunks))
+        best_cost = np.zeros((n_features, n_chunks))
 
         vox_ix = tf.range(n_features, dtype=tf.int64)
 
         for chunk, pg in tqdm(par_grid.groupby('chunk')):
-            ssq_, best_ix = _get_ssq_for_predictions(pg.values)
-
+            cost_, best_ix = _cost(pg.values)
             gather_ix = tf.stack((vox_ix, best_ix), 1)
-            best_ssq[:, chunk] = tf.gather_nd(ssq_, gather_ix)
+            best_cost[:, chunk] = tf.gather_nd(cost_, gather_ix)
             best_pars[:, chunk] = tf.gather(pg.values, best_ix)
 
-        best_chunks = tf.argmin(best_ssq, 1)
+        best_chunks = tf.argmin(best_cost, 1)
         best_pars = tf.gather_nd(
             best_pars, tf.stack((vox_ix, best_chunks), axis=1))
 
@@ -776,10 +798,14 @@ class StimulusFitter(object):
             self.model.weights
 
     def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6,
-            spike_and_slab_prior=False, sigma_prior=1., alpha=.5,
+            spike_and_slab_prior=False, sigma_prior=1., alpha=.5, default_mask=None, default_value=None,
             positive_only=True):
 
         size_stimulus_var = (1, len(self.data), self.stimulus_size)
+
+        if default_mask is None:
+            default_mask = np.zeros(len(self.data), np.bool)
+            default_value = 0
 
         if init_stimulus is None:
             init_stimulus = np.zeros(size_stimulus_var)
@@ -787,11 +813,13 @@ class StimulusFitter(object):
         if len(init_stimulus.shape) == 2:
             init_stimulus = init_stimulus[np.newaxis, :, :]
 
-        decoded_stimulus_ = tf.Variable(initial_value=init_stimulus, 
-                                       name='decoded_stimulus', dtype=tf.float32)
+        decoded_stimulus_ = tf.Variable(initial_value=init_stimulus,
+                                    shape=size_stimulus_var,
+                                   name='decoded_stimulus_', dtype=tf.float32)
 
         trainable_variables = [decoded_stimulus_]
 
+        decoded_stimulus = tf.where(default_mask[:, tf.newaxis, :], default_value, decoded_stimulus)
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
