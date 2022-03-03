@@ -23,3 +23,14 @@ def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
         r2[data.var() == 0] = np.nan
 
     return r2
+
+
+def get_r(data, predictions):
+
+    data_ = data - data.mean(0)
+    predictions_ = predictions - predictions.mean(0)
+
+    r = (data_*predictions_ ).sum(0)
+    r = r / (np.sqrt((data_**2).sum(0) * (predictions_**2).sum(0)))
+
+    return r
