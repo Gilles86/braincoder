@@ -2,6 +2,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow_probability import bijectors as tfb
 import pandas as pd
+from timeit import default_timer as timer
 
 def cleanup_chain(chain, name, frames):
 
@@ -63,13 +64,17 @@ def sample_hmc(
         step_size_getter_fn=lambda pkr: pkr.inner_results.step_size,
         log_accept_prob_getter_fn=lambda pkr: pkr.inner_results.log_accept_ratio,
     )
-
+    
+    start = timer()
     # Sampling from the chain.
     samples, stats = tfp.mcmc.sample_chain(
         num_results=burnin + num_steps,
         current_state=init_state,
         kernel=adaptive_sampler,
         trace_fn=trace_fn)
+
+    duration = timer() - start
+    stats['elapsed_time'] = duration
 
     return samples, stats
 
