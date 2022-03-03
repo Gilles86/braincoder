@@ -302,6 +302,10 @@ class SzinteStimulus(object):
 
         self.grid_coordinates = pd.DataFrame(
             grid_coordinates, columns=['x', 'y'])
+
+
+        self.image_size = len(self.grid_coordinates['x'].unique()), len(self.grid_coordinates['y'].unique())
+        
         self.intensity = intensity
 
         self.min_x, self.max_x = self.grid_coordinates['x'].min(
@@ -323,15 +327,23 @@ class SzinteStimulus(object):
                                       high=self.max_width),  # width
                           tfb.Sigmoid(low=np.float32(0.0), high=self.max_height)]  # height
 
-    def generate_images(self, parameters, falloff_speed=1000):
+    def generate_images(self, parameters, falloff_speed=1000, return_3dimage=True):
 
         if not hasattr(parameters, 'values'):
             parameters = pd.DataFrame(parameters, columns=['x', 'width', 'height'])
 
-        return self._generate_images(parameters['x'].values,
+        ims = self._generate_images(parameters['x'].values,
                                      parameters['width'].values,
                                      parameters['height'].values,
                                      falloff_speed)
+
+        if return_3dimage:
+            return pd.DataFrame(ims.numpy().reshape(ims.shape[1], width*height),
+                     index=parameters.index,
+                     columns=pd.MultiIndex.from_array(self.grid_coordinates, 
+                         names=['x', 'y']))
+
+        return ims
 
     def _generate_images(self, x, width, height, falloff_speed=1000):
         return make_aperture_stimuli(self.grid_coordinates.values,
@@ -346,6 +358,8 @@ class SzinteStimulus2(object):
 
         self.grid_coordinates = pd.DataFrame(
             grid_coordinates, columns=['x', 'y'])
+        self.image_size = len(self.grid_coordinates['x'].unique()), len(self.grid_coordinates['y'].unique())
+
         self.intensity = intensity
 
         self.min_x, self.max_x = self.grid_coordinates['x'].min(
@@ -363,14 +377,21 @@ class SzinteStimulus2(object):
                                    high=self.max_x + self.bar_width/2.),  # x
                           tfb.Sigmoid(low=np.float32(0.0), high=self.max_height)]  # height
 
-    def generate_images(self, parameters, falloff_speed=1000):
+    def generate_images(self, parameters, falloff_speed=1000, return_df=True):
 
         if not hasattr(parameters, 'values'):
-            parameters = pd.DataFrame(parameters, columns=['x', 'width', 'height'])
+            parameters = pd.DataFrame(parameters, columns=['x', 'height'])
 
-        return self._generate_images(parameters['x'].values,
+        ims = self._generate_images(parameters['x'].values,
                                      parameters['height'].values,
                                      falloff_speed)
+
+        if return_df:
+            return pd.DataFrame(ims.numpy().reshape(ims.shape[1], -1),
+                     index=parameters.index,
+                     columns=pd.MultiIndex.from_frame(self.grid_coordinates, 
+                         names=['x', 'y']))
+        return ims
 
     def _generate_images(self, x, height, falloff_speed=1000):
         return make_aperture_stimuli(self.grid_coordinates.values,
