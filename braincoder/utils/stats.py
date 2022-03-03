@@ -5,13 +5,6 @@ def get_map(p):
     stimuli = p.columns.to_frame(index=False).T
     return stimuli.groupby(level=0).apply(lambda d: (p * d.values).sum(1) / p.sum(1)).T
 
-def get_r(data, predictions):
-
-    data_ = data - data.mean(0)
-    predictions_ = predictions - predictions.mean(0)
-
-    return (data_*predictions_).sum(0) / np.sqrt((data_**2).sum(0) * (predictions_**2).sum(0))
-
 def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
 
     resid = data - predictions
