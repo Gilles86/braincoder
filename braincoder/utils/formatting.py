@@ -10,6 +10,9 @@ def format_paradigm(paradigm):
     if isinstance(paradigm, pd.DataFrame):
         return paradigm
 
+    if isinstance(paradigm, pd.Series):
+        return paradigm.to_frame()
+
     if paradigm.ndim == 1:
         paradigm = paradigm[:, np.newaxis]
     elif paradigm.ndim > 2:
