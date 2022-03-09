@@ -756,8 +756,9 @@ class ResidualFitter(object):
             self.fitted_omega_parameters['beta'] = fitted_parameters[4]
 
         if method == 't':
-            self.fitted_omega_parameters['dof'] = fitted_parameters[-1]
-            return omega, trainable_variables[-1].numpy()
+            dof = softplus(best_variables[-1]).numpy()
+            self.fitted_omega_parameters['dof'] = dof
+            return omega, dof
         else:
             return omega, None
 
