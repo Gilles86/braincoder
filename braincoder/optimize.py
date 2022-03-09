@@ -620,7 +620,13 @@ class ResidualFitter(object):
                 tau, rho, sigma2 = transform_variables(trainable_variables)
                 mean_tau = tf.reduce_mean(tau).numpy()
 
-                return f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f} '
+                print_str = f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}'
+
+                if len(trainable_variables) == 4:
+                    dof = softplus(trainable_variables[3]).numpy()
+                    print_str += f', dof: {dof:0.1f}'
+
+                return print_str
 
         else:
 
@@ -657,7 +663,13 @@ class ResidualFitter(object):
 
                 mean_tau = tf.reduce_mean(tau).numpy()
 
-                return f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}, alpha: {alpha.numpy():0.3f}, beta: {beta.numpy():0.3f}'
+                print_str = f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}, alpha: {alpha.numpy():0.3f}, beta: {beta.numpy():0.3f}'
+
+                if len(trainable_variables) == 6:
+                    dof = softplus(trainable_variables[5]).numpy()
+                    print_str += f', dof: {dof:0.1f}'
+
+                return print_str
 
         if method == 'gauss':
             @tf.function
