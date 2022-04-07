@@ -16,3 +16,9 @@ def logit(x):
 @tf.function
 def log2(x):
     return tf.math.log(x) / tf.math.log(2.)
+
+@tf.function
+def restrict_radians(x):
+    x = x+np.pi
+    return x - tf.floor(x / (2*np.pi)) * 2*np.pi - np.pi
+

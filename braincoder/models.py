@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit
+from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
@@ -567,14 +567,73 @@ class GaussianPRF2D(EncodingModel):
     def unpack_stimulus(self, stimulus):
         return np.reshape(stimulus, (-1, self.n_x, self.n_y))
 
+class GaussianPRF2DAngle(GaussianPRF2D):
+
+    parameter_labels = ['theta', 'ecc', 'sd', 'baseline', 'amplitude']
+
+    @tf.function
+    def _get_rf(self, grid_coordinates, parameters):
+
+        # n_batches x n_populations x  n_grid_spaces
+        x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
+        y = grid_coordinates[:, 1][tf.newaxis, tf.newaxis, :]
+
+        # n_batches x n_populations x n_grid_spaces (broadcast)
+        theta = parameters[:, :, 0, tf.newaxis]
+        ecc = parameters[:, :, 1, tf.newaxis]
+        mu_x = tf.math.cos(theta) * ecc
+        mu_y = tf.math.sin(theta) * ecc
+        sd = parameters[:, :, 2, tf.newaxis]
+        amplitude = parameters[:, :, 4, tf.newaxis]
+
+        return (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        return tf.concat([restrict_radians(parameters[:, 0][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 1][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
+
+    def get_pseudoWWT(self):
+        rf = self.get_rf()
+        return rf.dot(rf.T)
+
+    def to_linear_model(self):
+        return LinearModelWithBaseline(self.paradigm, self.data, self.parameters[['baseline']], weights=self.get_rf().T)
+
+    def unpack_stimulus(self, stimulus):
+        return np.reshape(stimulus, (-1, self.n_x, self.n_y))
+
+    def to_xy_model(self):
+        parameters = self.parameters.copy()
+        parameters['x'] = np.cos(parameters['theta']) * parameters['ecc']
+        parameters['y'] = np.sin(parameters['theta']) * parameters['ecc']
+        parameters = parameters[['x', 'y', 'sd', 'baseline', 'amplitude']]
+
+        return GaussianPRF2D(grid_coordinates=self.grid_coordinates,
+                paradigm=self.paradigm, data=self.data, parameters=parameters,
+                     weights=self.weights, omega=self.omega)
+
 
 class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
-                 weights=None, hrf_model=None, verbosity=logging.INFO):
+                 weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
 
         super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
-                         hrf_model=hrf_model)
+                         hrf_model=hrf_model, **kwargs)
 
     def to_linear_model(self):
         return LinearModelWithBaselineHRF(self.paradigm, self.data,
@@ -582,6 +641,28 @@ class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
                                               'baseline']], weights=self.get_rf().T,
                                           hrf_model=self.hrf_model)
 
+class GaussianPRF2DAngleWithHRF(GaussianPRF2DAngle, HRFEncodingModel):
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
+                 weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
+
+        super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
+                         hrf_model=hrf_model, **kwargs)
+
+    def to_linear_model(self):
+        return LinearModelWithBaselineHRF(self.paradigm, self.data,
+                                          self.parameters[[
+                                              'baseline']], weights=self.get_rf().T,
+                                          hrf_model=self.hrf_model)
+
+    def to_xy_model(self):
+
+        no_hrf_model = super().to_xy_model()
+
+        return GaussianPRF2DWithHRF(grid_coordinates=self.grid_coordinates,
+                paradigm=self.paradigm, data=self.data, parameters=no_hrf_model.parameters,
+                     weights=self.weights, omega=self.omega,
+                     hrf_model=self.hrf_model)
 
 class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
