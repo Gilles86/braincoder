@@ -361,7 +361,20 @@ class HRFEncodingModel(EncodingModel):
 class GaussianPRF(EncodingModel):
 
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
-    parameter_transforms = [None, 'softplus', None, None]
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, allow_neg_amplitudes=False verbosity=logging.INFO,
+                 **kwargs):
+    
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                         weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
+
+        if allow_neg_amplitudes:
+            self._transform_parameters_forward = self._transform_parameters_forward1
+            self._transform_parameters_backward = self._transform_parameters_backward1
+        else:
+            self._transform_parameters_forward = self._transform_parameters_forward2
+            self._transform_parameters_backward = self._transform_parameters_backward2
 
     def basis_predictions(self, paradigm, parameters):
 
@@ -441,14 +454,29 @@ class GaussianPRF(EncodingModel):
                 'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
 
     @tf.function
-    def _transform_parameters_forward(self, parameters):
+    def _transform_parameters_forward1(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward1(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_forward2(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
                           tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
     @tf.function
-    def _transform_parameters_backward(self, parameters):
+    def _transform_parameters_backward2(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           tfp.math.softplus_inverse(
                               parameters[:, 1][:, tf.newaxis]),
