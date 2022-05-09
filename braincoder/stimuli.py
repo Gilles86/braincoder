@@ -41,7 +41,7 @@ class CustomStimulusFitter(StimulusFitter):
 
         logging.info(f'Built grid of {len(grid)} bar settings...')
 
-        images = self.stimulus.generate_images(grid)[0]
+        images = self.stimulus.generate_images(grid, return_df=False)[0]
 
         return self._fit_grid(grid, images)
 
