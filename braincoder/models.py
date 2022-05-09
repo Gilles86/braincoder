@@ -363,7 +363,7 @@ class GaussianPRF(EncodingModel):
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
     def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, allow_neg_amplitudes=False verbosity=logging.INFO,
+                 weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  **kwargs):
     
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
