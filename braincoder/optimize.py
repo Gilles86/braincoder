@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import datetime
-import tensorflow as tf
 import os.path as op
 import os
 from tqdm import tqdm
@@ -11,6 +10,7 @@ from tensorflow.math import softplus, sigmoid
 from tensorflow.linalg import lstsq
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
+import tensorflow as tf
 
 softplus_inverse = tfp.math.softplus_inverse
 
