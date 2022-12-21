@@ -322,6 +322,52 @@ class EncodingModel(object):
 
         return weights, weights_
 
+    def get_fisher_information(self, stimuli, omega=None, dof=None, weights=None, parameters=None, n=1000):
+
+        if omega is None:
+            omega = self.omega
+
+        if omega is None:
+            raise ValueError("Need noise covariance matrix omega!")
+
+        weights, weights_ = self._get_weights(weights)
+
+        if parameters is None:
+            if self.parameters is None:
+                raise Exception('Need to set parameters')
+            else:
+                parameters = self.parameters
+
+
+        parameters_ = parameters.values[np.newaxis, ...].astype(np.float32)
+
+        if stimuli.ndim == 1:
+            stimuli = stimuli[:, np.newaxis]
+
+        stimuli_ = tf.repeat(stimuli[np.newaxis, ...], n, axis=0)
+        stimuli_ = tf.Variable(stimuli_, name='stimuli')
+
+        omega_chol = tf.linalg.cholesky(omega)
+
+        dist = self.get_residual_dist(omega.shape[0], omega_chol, dof)
+        pred = self._predict(stimuli_, parameters_, weights_)
+        noise = dist.sample(n)
+
+        # Batches (noise) x stimuli x n_voxels
+        data = pred + noise[:, tf.newaxis, :]
+
+        with tf.GradientTape() as tape:
+            ll = self._likelihood(stimuli_, data, parameters_, weights_, omega_chol, dof, False)
+
+        dy_dx = tape.gradient(ll, stimuli_)
+
+        fisher_info = tf.reduce_mean(dy_dx**2, 0)[..., 0]
+
+        if stimuli.shape[1] == 1:
+            return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'))
+        else:
+            return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)))
+
 
 class HRFEncodingModel(EncodingModel):
 
