@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians
+from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
@@ -357,16 +357,16 @@ class EncodingModel(object):
         data = pred + noise[:, tf.newaxis, :]
 
         with tf.GradientTape() as tape:
-            ll = self._likelihood(stimuli_, data, parameters_, weights_, omega_chol, dof, False)
+            ll = self._likelihood(stimuli_, data, parameters_, weights_, omega_chol, dof, logp=True, normalize=False)
 
         dy_dx = tape.gradient(ll, stimuli_)
 
         fisher_info = tf.reduce_mean(dy_dx**2, 0)[..., 0]
 
         if stimuli.shape[1] == 1:
-            return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'))
+            return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
         else:
-            return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)))
+            return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
 
 
 class HRFEncodingModel(EncodingModel):
@@ -530,6 +530,43 @@ class GaussianPRF(EncodingModel):
                               parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
+
+class LogGaussianPRF(GaussianPRF):
+
+    @tf.function
+    def _transform_parameters_forward1(self, parameters):
+        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward1(self, parameters):
+        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+    @tf.function
+    def _transform_parameters_forward2(self, parameters):
+        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward2(self, parameters):
+        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 1][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
     pass

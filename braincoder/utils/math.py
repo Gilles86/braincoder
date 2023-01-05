@@ -22,3 +22,12 @@ def restrict_radians(x):
     x = x+np.pi
     return x - tf.floor(x / (2*np.pi)) * 2*np.pi - np.pi
 
+def lognormalpdf_n(x, mu_n, sigma_n):
+
+    denom = 1+sigma_n**2/mu_n**2
+
+    part1 = 1. / (x*tf.sqrt(2*np.pi*tf.math.log(denom)))
+
+    part2 = tf.exp(-((tf.math.log(x)- tf.math.log(mu_n / tf.sqrt(denom)))**2 / (2*tf.math.log(denom))))
+
+    return part1*part2
