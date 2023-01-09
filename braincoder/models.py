@@ -571,6 +571,8 @@ class LogGaussianPRF(GaussianPRF):
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
     pass
 
+class LogGaussianPRFWithHRF(LogGaussianPRF, HRFEncodingModel):
+    pass
 
 class GaussianPRF2D(EncodingModel):
 
