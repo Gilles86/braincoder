@@ -4,21 +4,25 @@ from tensorflow_probability import bijectors as tfb
 import pandas as pd
 from timeit import default_timer as timer
 
-def cleanup_chain(chain, name, frames):
+def cleanup_chain(chain, name, time_index):
 
     n_chains = chain.shape[1]
     n_samples = chain.shape[0]
 
     chain_index = pd.Index(range(n_chains), name='chain')
-    time_index = pd.Index(frames, name='frame')
+
+    if not issubclass(type(time_index), pd.core.indexes.base.Index):
+        time_index = pd.Index(frames, name='frame')
+    else:
+        time_index = time_index
+        
     sample_index = pd.Index(range(n_samples), name='sample')
 
     chain = [pd.DataFrame(chain[:, ix, :], index=sample_index,
                           columns=time_index) for ix in range(n_chains)]
     chain = pd.concat(chain, keys=chain_index)
 
-    return chain.stack('frame').to_frame(name).reorder_levels(['sample', 'chain', 'frame']).sort_index()
-
+    return chain.stack(list(range(chain.columns.nlevels))).to_frame(name).sort_index()
 
 @tf.function
 def sample_hmc(

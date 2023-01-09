@@ -314,7 +314,7 @@ class ParameterFitter(object):
                 ssq_predictions = tf.reduce_sum(grid_predictions_demeaned**2, 0,True)
 
                 r = tf.reduce_sum(grid_predictions_demeaned[:, tf.newaxis, :]*data_demeaned[:, :, tf.newaxis], 0,True) / tf.math.sqrt(ssq_predictions[:, tf.newaxis,:]*ssq_data[:, :, tf.newaxis])
-                r = tf.squeeze(r)
+                r = r[0]
                 best_ixs = tf.argmax(r, 1)
 
                 return -r, best_ixs
