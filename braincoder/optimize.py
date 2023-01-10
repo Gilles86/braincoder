@@ -741,16 +741,18 @@ class ResidualFitter(object):
                         best_cost = self.costs[step]
                         best_variables = copy_variables(trainable_variables)
 
+
                 except Exception as e:
                     learning_rate = 0.9 * learning_rate
                     opt = tf.optimizers.Adam(learning_rate=learning_rate)
                     trainable_variables = copy_variables(best_variables)
                     self.costs[step] = np.inf
+                    cost = tf.constant(np.inf)
 
                 pbar.set_description(get_pbar_description(
                     cost, best_cost, best_variables))
-
                 previous_cost = self.costs[np.max((step-lag, 0))]
+
                 if (step > min_n_iterations) & (np.sign(previous_cost) == np.sign(cost)):
                     if np.sign(cost) == -1:
                         if (cost / previous_cost) < 1 + rtol:
