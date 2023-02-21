@@ -18,15 +18,14 @@ softplus_inverse = tfp.math.softplus_inverse
 class WeightFitter(object):
 
     def __init__(self, model, parameters, data, paradigm):
-
         self.model = model
         self.parameters = format_parameters(parameters)
         self.data = format_data(data)
         self.paradigm = format_paradigm(paradigm)
 
     def fit(self, alpha=0.0):
-        basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...],
-                self.parameters.values[np.newaxis, :])
+        parameters, parameters_ = self.model._get_parameters(self.parameters)
+        basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
 
         weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
 

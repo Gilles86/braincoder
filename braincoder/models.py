@@ -54,14 +54,10 @@ class EncodingModel(object):
         else:
             paradigm = format_paradigm(paradigm)
 
-        if parameters is None:
-            if self.parameters is None:
-                raise Exception('Need to set parameters')
-            else:
-                parameters = self.parameters
+        parameters, parameters_ = self._get_parameters(parameters)
 
         predictions = self._predict(
-            paradigm.values[np.newaxis, ...], parameters.values[np.newaxis, ...], weights_)[0]
+            paradigm.values[np.newaxis, ...], parameters_, weights_)[0]
 
         print(predictions.shape)
 
@@ -321,6 +317,20 @@ class EncodingModel(object):
             weights_ = weights.values[np.newaxis, ...]
 
         return weights, weights_
+
+    def _get_parameters(self, parameters=None):
+
+        if (parameters is None) and (self.parameters is not None):
+            parameters = self.parameters
+
+        parameters = format_parameters(parameters)
+
+        if parameters is None:
+            parameters_ = parameters
+        else:
+            parameters_ = parameters.values[np.newaxis, ...]
+
+        return parameters, parameters_
 
 
 class HRFEncodingModel(EncodingModel):
