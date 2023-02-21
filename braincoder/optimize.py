@@ -353,7 +353,7 @@ class ParameterFitter(object):
 
         return best_pars
 
-    def refine_baseline_and_amplitude(self, parameters, n_iterations=2, positive_amplitude=True):
+    def refine_baseline_and_amplitude(self, parameters, n_iterations=2, positive_amplitude=True, l2_alpha=1.0):
 
         data = self.data
         predictions = self.model.predict(parameters=parameters, paradigm=self.paradigm)
@@ -373,7 +373,7 @@ class ParameterFitter(object):
 
         # n batches (voxels) x n_timepoints x 1
         Y = data.T.values[..., np.newaxis]
-        beta = tf.linalg.lstsq(X, Y, fast=False).numpy()[..., 0].astype(np.float32)
+        beta = tf.linalg.lstsq(X, Y, fast=True, l2_regularizer=l2_alpha).numpy()[..., 0].astype(np.float32)
         Y_ = tf.reduce_sum(beta[:, tf.newaxis, :] * X, 2).numpy().T
 
         new_parameters = parameters.copy().astype(np.float32)
