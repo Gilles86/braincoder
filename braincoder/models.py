@@ -54,14 +54,10 @@ class EncodingModel(object):
         else:
             paradigm = format_paradigm(paradigm)
 
-        if parameters is None:
-            if self.parameters is None:
-                raise Exception('Need to set parameters')
-            else:
-                parameters = self.parameters
+        parameters, parameters_ = self._get_parameters(parameters)
 
         predictions = self._predict(
-            paradigm.values[np.newaxis, ...], parameters.values[np.newaxis, ...], weights_)[0]
+            paradigm.values[np.newaxis, ...], parameters_, weights_)[0]
 
         print(predictions.shape)
 
@@ -367,6 +363,19 @@ class EncodingModel(object):
             return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
         else:
             return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
+    def _get_parameters(self, parameters=None):
+
+        if (parameters is None) and (self.parameters is not None):
+            parameters = self.parameters
+
+        parameters = format_parameters(parameters)
+
+        if parameters is None:
+            parameters_ = parameters
+        else:
+            parameters_ = parameters.values[np.newaxis, ...]
+
+        return parameters, parameters_
 
 
 class HRFEncodingModel(EncodingModel):
