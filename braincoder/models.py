@@ -189,7 +189,14 @@ class EncodingModel(object):
 
         omega_chol = tf.linalg.cholesky(omega).numpy()
 
-        likelihood = self._likelihood(stimuli.values, data.values, parameters.values,
+        # stimuli: n_batches x n_timepoints x n_stimulus_features
+        # data: n_batches x n_timepoints x n_units
+        # parameters: n_batches x n_subpops x n_parmeters
+        # weights: n_batches x n_subpops x n_units
+        # omega: n_units x n_units
+
+        # n_batches * n_timepoints x n_stimulus_features
+        likelihood = self._likelihood(stimuli.values, data.values, parameters.values[np.newaxis, ...],
                                       weights if not hasattr(
                                           weights, 'values') else weights.values,
                                       omega_chol,
@@ -214,24 +221,47 @@ class EncodingModel(object):
             parameters = self.parameters
 
         if hasattr(parameters, 'values'):
-            paramaters = parameters.values
+            parameters = parameters.values
+
+        if hasattr(stimulus_range, 'values'):
+            stimulus_range = stimulus_range.values
 
         if omega is None:
             omega = self.omega
 
         weights, weights_ = self._get_weights(weights)
 
-        ll = self._likelihood(stimulus_range[:, np.newaxis, np.newaxis],
+        # stimuli: n_batches x n_timepoints x n_stimulus_features
+        # data: n_batches x n_timepoints x n_units
+        # parameters: n_batches x n_subpops x n_parmeters
+        # weights: n_batches x n_subpops x n_units
+        # omega: n_units x n_units
+
+        if stimulus_range.ndim == 1:
+            stimulus_range = stimulus_range[:, np.newaxis, np.newaxis]
+        elif stimulus_range.ndim == 2:
+            stimulus_range = stimulus_range[:, np.newaxis, :]
+        else:
+            raise Exception('Stimulus range needs to be either 1D or 2D')
+
+        # n_batches * n_timepoints x n_stimulus_features
+        ll = self._likelihood(stimulus_range,
                               data[np.newaxis, :, :],
-                              parameters.values[np.newaxis, :, :],
+                              parameters[np.newaxis, :, :],
                               weights_,
                               omega,
                               dof,
                               logp=True,
                               normalize=False).numpy()
 
-        ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
-            stimulus_range, name='stimulus'))
+        
+        if stimulus_range.shape[-1] == 1:
+            ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
+                stimulus_range[:, 0, 0], name='stimulus'))
+        else:
+            index = pd.MultiIndex.from_frame(pd.DataFrame(stimulus_range[:, 0, :],
+                                             columns=[f'stim_dim{i+1}' for i in range(stimulus_range.shape[-1])]))
+            ll = pd.DataFrame(ll.T, index=time_index, columns=index)
 
         # Normalize, working from log likelihoods (otherwise we get numerical issues)
         ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
@@ -582,6 +612,47 @@ class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
 
 class LogGaussianPRFWithHRF(LogGaussianPRF, HRFEncodingModel):
     pass
+
+class GaussianPRFOnGaussianSignal(GaussianPRF):
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, allow_neg_amplitudes=False,
+                  stimulus_grid=None, verbosity=logging.INFO,
+                 **kwargs):
+
+        if stimulus_grid is None:
+            raise Exception('Need stimulus_grid!')
+
+        if paradigm is not None:
+            assert('mu' in paradigm.columns), 'Need mean of Gaussian in paradigm'
+            assert('sd' in paradigm.columns), 'Need sd of Gaussian in paradigm'
+
+            paradigm = paradigm[['mu', 'sd']]
+
+        self.stimulus_grid = stimulus_grid.astype(np.float32)
+    
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                         weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+                         verbosity=logging.INFO, **kwargs)
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # n_stim-grid x n-batches x n-timepoints x n_voxels
+        rf_field = norm(self.stimulus_grid[:, tf.newaxis, tf.newaxis, tf.newaxis],  #grid to evaluate on
+                        parameters[tf.newaxis, :, tf.newaxis, :, 0],
+                        parameters[tf.newaxis, :, tf.newaxis, :, 1])
+
+        print('rf_field', rf_field.shape)
+
+        print(paradigm.shape, paradigm[tf.newaxis, tf.newaxis, :, 0, tf.newaxis])
+
+        input_stimulus = norm(self.stimulus_grid[:, tf.newaxis, tf.newaxis, tf.newaxis],  #grid to evaluate on
+                        paradigm[tf.newaxis, ..., 0, tf.newaxis],
+                        paradigm[tf.newaxis, ..., 1, tf.newaxis])
+        
+        print(input_stimulus.shape)
+
+        return tf.reduce_sum(rf_field * input_stimulus, axis=0)
 
 class GaussianPRF2D(EncodingModel):
 
