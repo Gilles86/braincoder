@@ -33,3 +33,13 @@ def lognormalpdf_n(x, mu_n, sigma_n, normalize=False):
         return part1*part2
     else:
         return part2
+
+def von_mises_pdf(x, mu, kappa):
+    # Constants
+    PI = tf.constant(np.pi)
+    TWO_PI = tf.constant(2 * np.pi)
+
+    # Calculate the PDF formula
+    pdf = tf.exp(kappa * tf.cos(x - mu)) / (TWO_PI * tf.math.bessel_i0(kappa))
+
+    return pdf

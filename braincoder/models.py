@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n
+from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
@@ -569,6 +569,22 @@ class GaussianPRF(EncodingModel):
                               parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
+class VonMisesPRF(GaussianPRF):
+
+    parameter_labels = ['mu', 'kappa', 'amplitude', 'baseline']
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # paradigm: n_batches x n_timepoints x n_stimulus_features
+        # parameters:: n_batches x n_voxels x n_parameters
+
+        # norm: n_batches x n_timepoints x n_voxels
+
+        # output: n_batches x n_timepoints x n_voxels
+        return von_mises_pdf(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
 class LogGaussianPRF(GaussianPRF):
 
