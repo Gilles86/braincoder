@@ -1,30 +1,42 @@
-import os
+#!/usr/bin/env python
+
+"""The setup script."""
+
 from setuptools import setup, find_packages
-PACKAGES = find_packages()
 
-# Get version and release info, which is all stored in braincoder/version.py
-ver_file = os.path.join('braincoder', 'version.py')
-with open(ver_file) as f:
-    exec(f.read())
-
-opts = dict(name=NAME,
-            maintainer=MAINTAINER,
-            maintainer_email=MAINTAINER_EMAIL,
-            description=DESCRIPTION,
-            long_description=LONG_DESCRIPTION,
-            url=URL,
-            download_url=DOWNLOAD_URL,
-            license=LICENSE,
-            classifiers=CLASSIFIERS,
-            author=AUTHOR,
-            author_email=AUTHOR_EMAIL,
-            platforms=PLATFORMS,
-            version=VERSION,
-            packages=PACKAGES,
-            package_data=PACKAGE_DATA,
-            install_requires=REQUIRES,
-            requires=REQUIRES)
+with open('README.rst') as readme_file:
+    readme = readme_file.read()
 
 
-if __name__ == '__main__':
-    setup(**opts)
+requirements = ['tqdm', 'pandas']
+
+test_requirements = []
+
+setup(
+    author="Gilles de Hollander",
+    author_email='giles.de.hollander@gmail.com',
+    python_requires='>=3.6',
+    classifiers=[
+        'Development Status :: 2 - Pre-Alpha',
+        'Intended Audience :: Developers',
+        'License :: OSI Approved :: MIT License',
+        'Natural Language :: English',
+        'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
+    ],
+    description="Bayesian encoding/decoding of fMRI data",
+    install_requires=requirements,
+    license="MIT license",
+    long_description=readme,
+    keywords='braincoder',
+    name='braincoder',
+    packages=find_packages(include=['braincoder', 'braincoder.*']),
+    include_package_data=True,
+    test_suite='tests',
+    tests_require=test_requirements,
+    url='https://github.com/Gilles86/braincoder',
+    version='0.1.0',
+    zip_safe=False,
+)
