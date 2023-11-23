@@ -26,7 +26,7 @@ Note that you need a environment with both `tensorflow-probability` and
 `tensorflow`.
 
 I reccomend to use `miniforge <https://github.com/conda-forge/miniforge>`_,
-make sure you use the `mamba`-solver strict !
+make sure you use the ``mamba``-solver and set ``channel-priority``!
 
 .. code-block:: bash
 
