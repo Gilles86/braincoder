@@ -13,12 +13,19 @@ to then *invert* those model to decode stimulus information from neural data.
 Usage
 =====
 
+Important links
+---------------
+
+- Official source code repo: https://github.com/Gilles86/braincoder/tree/main
+- HTML documentation (stable release): https://braincoder-devs.github.io/
+
+
 Installation
 ------------
 Note that you need a environment with both `tensorflow-probability` and
 `tensorflow`.
 
-I reccomend to use `miniforge <https://github.com/conda-forge/miniforge>`,
+I reccomend to use `miniforge <https://github.com/conda-forge/miniforge>`_,
 make sure you use the `mamba`-solver strict !
 
 .. code-block:: bash
