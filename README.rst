@@ -6,27 +6,28 @@
 Welcome to Braincoder's documentation!
 ======================================
 
-
 **Braincoder** is a package to fit encoding models to neural data (for now fMRI) and
 to then *invert* those model to decode stimulus information from neural data.
 
-Usage
-=====
-
 Important links
----------------
+===============
 
 - Official source code repo: https://github.com/Gilles86/braincoder/tree/main
 - HTML documentation (stable release): https://braincoder-devs.github.io/
 
 
 Installation
-------------
+============
+
 Note that you need a environment with both `tensorflow-probability` and
 `tensorflow`.
 
+Set up miniforge
+-----------------
+
+(Only do this if you don't have conda installed)
 I reccomend to use `miniforge <https://github.com/conda-forge/miniforge>`_,
-make sure you use the ``mamba``-solver and set ``channel-priority``!
+make sure you use the ``mamba``-solver and set ``channel-priority`` to ``strict``:
 
 .. code-block:: bash
 
@@ -35,8 +36,16 @@ make sure you use the ``mamba``-solver and set ``channel-priority``!
         conda config --set channel_priority strict.
 
 
+Install braincoder
+------------------
+
 Here we create a new environment called `braincoder` with the required packages:
 
 .. code-block:: bash
 
     conda create --name braincoder tensorflow-probability tensorflow -c conda-forge
+
+Usage
+=====
+
+Please have a look at the `tutorials` <https://braincoder-devs.github.io/tutorial/index.html>`_ to get started.
