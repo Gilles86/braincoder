@@ -8,7 +8,7 @@ with open('README.rst') as readme_file:
     readme = readme_file.read()
 
 
-requirements = ['tqdm', 'pandas']
+requirements = ['tqdm', 'pandas', 'matplotlib', 'seaborn']
 
 test_requirements = []
 

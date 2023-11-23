@@ -8,6 +8,7 @@ from .utils import norm, format_data, format_paradigm, format_parameters, format
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
+import scipy.stats as ss
 
 
 class EncodingModel(object):
@@ -59,8 +60,6 @@ class EncodingModel(object):
         predictions = self._predict(
             paradigm.values[np.newaxis, ...], parameters_, weights_)[0]
 
-        print(predictions.shape)
-
         if weights is None:
             return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=parameters.index)
         else:
@@ -80,17 +79,21 @@ class EncodingModel(object):
         else:
             parameters = format_parameters(parameters)
 
-        simulated_data = self._simulate(
-            paradigm.values[np.newaxis, ...],
-            parameters.values[np.newaxis, ...],
-            weights_, noise).numpy()
-
-        print(simulated_data.shape)
+        if np.isscalar(noise):
+            simulated_data = self._simulate(
+                paradigm.values[np.newaxis, ...],
+                parameters.values[np.newaxis, ...],
+                weights_, noise).numpy()[0]
+        else:
+            assert(noise.ndim == 2), 'noise should be either a scalar or a square covariance matrix'
+            pred = self.predict(paradigm, parameters, weights)
+            noise = ss.multivariate_normal(np.zeros(pred.shape[1]), cov=noise).rvs(len(pred)).astype(np.float32)
+            simulated_data = pred + noise
 
         if weights is None:
-            return pd.DataFrame(simulated_data[0], index=paradigm.index, columns=parameters.index)
+            return pd.DataFrame(simulated_data, index=paradigm.index, columns=parameters.index)
         else:
-            return pd.DataFrame(simulated_data[0], index=paradigm.index, columns=weights.columns)
+            return pd.DataFrame(simulated_data, index=paradigm.index, columns=weights.columns)
 
     def _simulate(self, paradigm, parameters, weights, noise=1.):
 
@@ -178,6 +181,9 @@ class EncodingModel(object):
         else:
             parameters = format_parameters(parameters)
 
+        if weights is not None:
+            weights = weights if not hasattr(weights, 'values') else weights.values
+
         if not isinstance(stimuli, pd.DataFrame):
             stimuli = pd.DataFrame(stimuli)
             stimuli.index.name = 'stimulus'
@@ -187,7 +193,7 @@ class EncodingModel(object):
             if value is None:
                 raise Exception('Please set {}'.format(name))
 
-        omega_chol = tf.linalg.cholesky(omega).numpy()
+        omega_chol = np.linalg.cholesky(omega)
 
         # stimuli: n_batches x n_timepoints x n_stimulus_features
         # data: n_batches x n_timepoints x n_units
@@ -196,9 +202,10 @@ class EncodingModel(object):
         # omega: n_units x n_units
 
         # n_batches * n_timepoints x n_stimulus_features
-        likelihood = self._likelihood(stimuli.values, data.values, parameters.values[np.newaxis, ...],
-                                      weights if not hasattr(
-                                          weights, 'values') else weights.values,
+        likelihood = self._likelihood(stimuli.values[np.newaxis, ...],
+                                      data.values[np.newaxis, ...],
+                                      parameters.values[np.newaxis, ...],
+                                      weights[np.newaxis, ...] if weights else None,
                                       omega_chol,
                                       dof,
                                       logp,
@@ -658,16 +665,10 @@ class GaussianPRFOnGaussianSignal(GaussianPRF):
                         parameters[tf.newaxis, :, tf.newaxis, :, 0],
                         parameters[tf.newaxis, :, tf.newaxis, :, 1])
 
-        print('rf_field', rf_field.shape)
-
-        print(paradigm.shape, paradigm[tf.newaxis, tf.newaxis, :, 0, tf.newaxis])
-
         input_stimulus = norm(self.stimulus_grid[:, tf.newaxis, tf.newaxis, tf.newaxis],  #grid to evaluate on
                         paradigm[tf.newaxis, ..., 0, tf.newaxis],
                         paradigm[tf.newaxis, ..., 1, tf.newaxis])
         
-        print(input_stimulus.shape)
-
         return tf.reduce_sum(rf_field * input_stimulus, axis=0)
 
 class GaussianPRF2D(EncodingModel):

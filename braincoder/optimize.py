@@ -33,13 +33,12 @@ class WeightFitter(object):
 
 class ParameterFitter(object):
 
-    def __init__(self, model, data, paradigm, memory_limit=666666666, log_dir=False, progressbar=True):
+    def __init__(self, model, data, paradigm, memory_limit=666666666, log_dir=False):
         self.model = model
         self.data = data.astype(np.float32)
         self.paradigm = paradigm.astype(np.float32)
 
         self.memory_limit = memory_limit  # 8 GB?
-        self.progressbar = True
 
         self.log_dir = log_dir
 
@@ -62,6 +61,7 @@ class ParameterFitter(object):
             r2_atol=0.000001,
             lag=100,
             learning_rate=0.01,
+            progressbar=True,
             **kwargs):
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
@@ -159,7 +159,10 @@ class ParameterFitter(object):
                 return ssq
 
         if optimizer is None:
-            pbar = tqdm(range(max_n_iterations))
+            pbar = range(max_n_iterations)
+            if progressbar:
+                pbar = tqdm(pbar)
+
             best_r2 = tf.zeros(y.shape[1])
             best_parameters = tf.zeros(init_pars.shape)
 
@@ -188,7 +191,8 @@ class ParameterFitter(object):
                     r2_diff = mean_best_r2 - \
                         mean_best_r2s[np.max((step - lag, 0))]
                     if (r2_diff >= 0.0) & (r2_diff < r2_atol):
-                        pbar.close()
+                        if progressbar:
+                            pbar.close()
                         break
 
                 mean_best_r2s.append(mean_best_r2)
@@ -206,8 +210,9 @@ class ParameterFitter(object):
 
                 opt.apply_gradients(zip(gradients, trainable_variables))
 
-                pbar.set_description(
-                    f'Current R2: {mean_current_r2:0.5f}/Best R2: {mean_best_r2:0.5f}')
+                if progressbar:
+                    pbar.set_description(
+                        f'Current R2: {mean_current_r2:0.5f}/Best R2: {mean_best_r2:0.5f}')
 
             if store_intermediate_parameters:
                 columns = pd.MultiIndex.from_product([self.model.parameter_labels + ['r2'],
@@ -557,7 +562,8 @@ class ResidualFitter(object):
             normalize_WWT=True,
             learning_rate=0.02, rtol=1e-6, lag=100,
             init_alpha=0.99,
-            init_beta=0.0):
+            init_beta=0.0,
+            progressbar=True):
 
         n_voxels = self.data.shape[1]
 
@@ -712,7 +718,12 @@ class ResidualFitter(object):
             raise NotImplementedError()
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
-        pbar = tqdm(range(max_n_iterations))
+        
+        pbar = range(max_n_iterations)
+
+        if progressbar:
+            pbar = tqdm(pbar)
+
         self.costs = np.zeros(max_n_iterations)
 
         def copy_variables(traiable_variables):
@@ -748,8 +759,9 @@ class ResidualFitter(object):
                     self.costs[step] = np.inf
                     cost = tf.constant(np.inf)
 
-                pbar.set_description(get_pbar_description(
-                    cost, best_cost, best_variables))
+                if progressbar:
+                    pbar.set_description(get_pbar_description(
+                        cost, best_cost, best_variables))
                 previous_cost = self.costs[np.max((step-lag, 0))]
 
                 if (step > min_n_iterations) & (np.sign(previous_cost) == np.sign(cost)):
@@ -813,7 +825,7 @@ class StimulusFitter(object):
 
     def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6,
             spike_and_slab_prior=False, sigma_prior=1., alpha=.5, default_mask=None, default_value=None,
-            positive_only=True):
+            positive_only=True, progressbar=True):
 
         size_stimulus_var = (1, len(self.data), self.stimulus_size)
 
@@ -821,23 +833,10 @@ class StimulusFitter(object):
             default_mask = np.zeros(len(self.data), np.bool)
             default_value = 0
 
-        if init_stimulus is None:
-            init_stimulus = np.zeros(size_stimulus_var)
+        pbar = range(max_n_iterations)
 
-        if len(init_stimulus.shape) == 2:
-            init_stimulus = init_stimulus[np.newaxis, :, :]
-
-        decoded_stimulus_ = tf.Variable(initial_value=init_stimulus,
-                                    shape=size_stimulus_var,
-                                   name='decoded_stimulus_', dtype=tf.float32)
-
-        trainable_variables = [decoded_stimulus_]
-
-        decoded_stimulus = tf.where(default_mask[:, tf.newaxis, :], default_value, decoded_stimulus)
-
-        opt = tf.optimizers.Adam(learning_rate=learning_rate)
-
-        pbar = tqdm(range(max_n_iterations))
+        if progressbar:
+            pbar = tqdm(pbar)
 
         self.costs = np.ones(max_n_iterations) * 1e12
 

@@ -1,20 +1,18 @@
-.. Braincoder documentation master file, created by
-   sphinx-quickstart on Tue Nov 21 10:10:09 2023.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+===========
+Tutorial
+===========
 
-Welcome to Braincoder's documentation!
-======================================
+For an in-depth introduction to encoding/decoding models and
+the ``braincoder``-package follow the :doc:`tutorial/index`.
 
+===========
+Quick start
+===========
 
-**Braincoder** is a package to fit encoding models to neural data (for now fMRI) and
-to then *invert* those model to decode stimulus information from neural data.
+.. include:: ../README.rst
 
 
 .. toctree::
-   :hidden:
-   :includehidden:
-   :titlesonly:
 
-   quickstart.md
+   tutorial/index.rst
    auto_examples/index.rst

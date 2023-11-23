@@ -13,27 +13,23 @@ to then *invert* those model to decode stimulus information from neural data.
 Usage
 =====
 
-.. _installation:
-
 Installation
 ------------
 Note that you need a environment with both `tensorflow-probability` and
 `tensorflow`.
 
-I reccomend to use conda (with `strict channel priority on conda-forge <https://conda-forge.org/docs/user/tipsandtricks.html#how-to-fix-it>` 
-and `mamba <https://mamba.readthedocs.io/en/latest/installation/mamba-installation.html>`):
+I reccomend to use `miniforge <https://github.com/conda-forge/miniforge>`,
+make sure you use the `mamba`-solver strict !
+
 .. code-block:: bash
 
-   conda create --name braincoder tensorflow-probability tensorflow -c conda-forge
+        # Install mamba solver and set channel priority
+        conda install mamba -n base -c conda-forge
+        conda config --set channel_priority strict.
 
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+Here we create a new environment called `braincoder` with the required packages:
 
-.. toctree::
-   :hidden:
-   :includehidden:
-   :titlesonly:
+.. code-block:: bash
 
-   auto_examples/index.rst
+    conda create --name braincoder tensorflow-probability tensorflow -c conda-forge
