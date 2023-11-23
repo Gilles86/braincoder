@@ -48,4 +48,4 @@ Here we create a new environment called `braincoder` with the required packages:
 Usage
 =====
 
-Please have a look at the `tutorials` <https://braincoder-devs.github.io/tutorial/index.html>`_ to get started.
+Please have a look at the `tutorials <https://braincoder-devs.github.io/tutorial/index.html>`_ to get started.
