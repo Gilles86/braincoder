@@ -1,3 +1,4 @@
+import tensorflow_probability as tfp
 from tqdm import tqdm
 import tensorflow as tf
 import numpy as np
@@ -7,6 +8,103 @@ import logging
 import tensorflow_probability as tfp
 from tensorflow_probability import bijectors as tfb
 from .utils.mcmc import cleanup_chain, sample_hmc, Periodic
+
+class Stimulus(object):
+
+    dimension_labels = ['x']
+
+    def __init__(self):
+        self.bijectors = [tfp.bijectors.Identity(name=label) for label in self.dimension_labels]
+
+    def clean_paradigm(self, paradigm):
+
+        if (not isinstance(paradigm, pd.DataFrame)) and (paradigm is not None):
+
+            if paradigm.ndim == 1:
+                paradigm = paradigm[:, np.newaxis]
+
+            paradigm = pd.DataFrame(paradigm, columns=pd.Index(self.dimension_labels, name='stimulus dimensions'),
+            index=pd.Index(np.arange(len(paradigm)), name='frame')).astype(np.float32)
+
+        if isinstance(paradigm, pd.DataFrame):
+            paradigm = paradigm.astype(np.float32)
+
+        return paradigm
+
+    def _clean_paradigm(self, paradigm):
+        if paradigm is not None:
+            if isinstance(paradigm, pd.DataFrame):
+                return paradigm.values.astype(np.float32)
+            elif isinstance(paradigm, np.ndarray):
+                return paradigm.astype(np.float32)
+
+            return paradigm
+
+    def _generate_stimulus(self, paradigm):
+        return self._clean_paradigm(paradigm)
+
+    def generate_stimulus(self, paradigm):
+        return self.clean_paradigm(paradigm)
+
+    def generate_empty_stimulus(self, size):
+        stimulus = np.ones((size, len(self.dimension_labels))) * 1e-6
+
+        if self.bijectors is not None:
+            stimulus = np.stack([bijector.forward(stimulus[:, ix]).numpy() for ix, bijector in enumerate(self.bijectors)], axis=1)
+
+        return stimulus.astype(np.float32)
+
+
+class OneDimensionalStimulusWithAmplitude(Stimulus):
+    dimension_labels = ['x', 'amplitude']
+
+    def __init__(self, positive_only=True):
+        
+        return super().__init__()
+
+        if positive_only:
+            self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='amplitude')]
+
+class OneDimensionalRadialStimulus(Stimulus):
+    dimension_labels = ['x (radians)']
+
+    def __init__(self):
+        
+        super().__init__()
+        self.bijectors = [Periodic(low=0.0, high=2*np.pi, name='x')]
+
+
+class OneDimensionalRadialStimulusWithAmplitude(OneDimensionalStimulusWithAmplitude):
+    dimension_labels = ['x (radians)', 'amplitude']
+
+    def __init__(self, positive_only=True):
+        
+        super().__init__()
+
+        if positive_only:
+            self.bijectors = [Periodic(low=0.0, high=2*np.pi, name='x'), tfp.bijectors.Softplus(name='amplitude')]
+        else:
+            self.bijectors = [Periodic(low=0.0, high=2*np.pi, name='x'), tfp.bijectors.Identity(name='amplitude')]
+
+class OneDimensionalGaussianStimulus(Stimulus):
+    dimension_labels = ['x', 'sd']
+
+    def __init__(self, positive_only=True):
+        super().__init__()
+
+        self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd')]
+
+
+class OneDimensionalGaussianStimulusWithAmplitude(Stimulus):
+    dimension_labels = ['x', 'sd', 'amplitude']
+
+    def __init__(self, positive_only=True):
+        super().__init__()
+
+        if positive_only:
+            self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd'), tfp.bijectors.Softplus(name='amplitude')]
+        else:
+            self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd'), tfp.bijectors.Identity(name='amplitude')]
 
 
 class CustomStimulusFitter(StimulusFitter):

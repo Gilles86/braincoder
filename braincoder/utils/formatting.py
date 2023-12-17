@@ -37,7 +37,7 @@ def format_parameters(parameters, parameter_labels=None):
     return pd.DataFrame(parameters,
                         columns=pd.Index(
                             parameter_labels, name='parameter'),
-                        index=pd.Index(range(len(parameters)), name='unit')).astype(np.float32)
+                        index=pd.Index(range(len(parameters)), name='source')).astype(np.float32)
 
 
 def format_weights(weights):

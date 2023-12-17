@@ -9,11 +9,12 @@ from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
 import scipy.stats as ss
-
+from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude
 
 class EncodingModel(object):
 
     parameter_labels = None
+    stimulus_type = Stimulus
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
@@ -21,7 +22,9 @@ class EncodingModel(object):
         if (self.parameter_labels is not None) & (type(parameters) is pd.DataFrame):
             parameters = parameters[self.parameter_labels]
 
-        self.paradigm = paradigm
+        self.stimulus = self._get_stimulus()
+        self.paradigm = self.stimulus.clean_paradigm(paradigm)
+
         self.data = data
         self.parameters = parameters
         self.weights = weights
@@ -43,22 +46,22 @@ class EncodingModel(object):
         else:
             return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (2, 1))[:, :, 0, :]
 
+    def _get_stimulus_type(self, **kwargs):
+        return self.stimulus_type
+
+    def _get_stimulus(self, **kwargs):
+        return self.stimulus_type(**kwargs)
+
     def predict(self, paradigm=None, parameters=None, weights=None):
 
         weights, weights_ = self._get_weights(weights)
-
-        if paradigm is None:
-            if self.paradigm is None:
-                raise Exception('Need to set paradigm')
-            else:
-                paradigm = self.paradigm
-        else:
-            paradigm = format_paradigm(paradigm)
+        
+        paradigm = self.get_paradigm(paradigm)
+        paradigm_ = self._get_paradigm(paradigm)[np.newaxis, ...]
 
         parameters, parameters_ = self._get_parameters(parameters)
 
-        predictions = self._predict(
-            paradigm.values[np.newaxis, ...], parameters_, weights_)[0]
+        predictions = self._predict(paradigm_, parameters_, weights_)[0]
 
         if weights is None:
             return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=parameters.index)
@@ -68,11 +71,8 @@ class EncodingModel(object):
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
 
         weights, weights_ = self._get_weights(weights)
-
-        if paradigm is None:
-            paradigm = self.paradigm
-        else:
-            paradigm = format_paradigm(paradigm)
+        paradigm = self.get_paradigm(paradigm)
+        paradigm_ = self._get_paradigm(paradigm)
 
         if parameters is None:
             parameters = self.parameters
@@ -81,7 +81,7 @@ class EncodingModel(object):
 
         if np.isscalar(noise):
             simulated_data = self._simulate(
-                paradigm.values[np.newaxis, ...],
+                self.stimulus._generate_stimulus(paradigm_)[np.newaxis, ...],
                 parameters.values[np.newaxis, ...],
                 weights_, noise).numpy()[0]
         else:
@@ -110,7 +110,9 @@ class EncodingModel(object):
                                  stddev=noise,
                                  dtype=tf.float32)
 
-        return self._predict(paradigm, parameters, weights) + noise
+        paradigm_ = self._get_paradigm(paradigm)
+
+        return self._predict(paradigm_, parameters, weights) + noise
 
     @property
     def data(self):
@@ -122,14 +124,6 @@ class EncodingModel(object):
             self._data = None
         else:
             self._data = format_data(data)
-
-    @property
-    def paradigm(self):
-        return self._paradigm
-
-    @paradigm.setter
-    def paradigm(self, paradigm):
-        self._paradigm = format_paradigm(paradigm)
 
     @property
     def parameters(self):
@@ -244,6 +238,8 @@ class EncodingModel(object):
         # weights: n_batches x n_subpops x n_units
         # omega: n_units x n_units
 
+        stimulus_range = self.stimulus._clean_paradigm(stimulus_range)
+
         if stimulus_range.ndim == 1:
             stimulus_range = stimulus_range[:, np.newaxis, np.newaxis]
         elif stimulus_range.ndim == 2:
@@ -267,14 +263,14 @@ class EncodingModel(object):
                 stimulus_range[:, 0, 0], name='stimulus'))
         else:
             index = pd.MultiIndex.from_frame(pd.DataFrame(stimulus_range[:, 0, :],
-                                             columns=[f'stim_dim{i+1}' for i in range(stimulus_range.shape[-1])]))
+                                             columns=self.stimulus.dimension_labels))
             ll = pd.DataFrame(ll.T, index=time_index, columns=index)
 
         # Normalize, working from log likelihoods (otherwise we get numerical issues)
-        ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
-        ll = ll.apply(lambda d: d/d.sum(), axis=1)
+        # ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
+        # ll = ll.apply(lambda d: d/d.sum(), axis=1)
 
-        return ll
+        return np.exp(ll)
 
     def apply_mask(self, mask):
 
@@ -414,6 +410,27 @@ class EncodingModel(object):
 
         return parameters, parameters_
 
+    def get_paradigm(self, paradigm):
+            
+        if paradigm is None:
+            if self.paradigm is not None:
+                return self.paradigm
+            else:
+                raise ValueError('Please provide paradigm!')
+
+        paradigm = self.stimulus.clean_paradigm(paradigm)
+
+        return paradigm
+
+    def _get_paradigm(self, paradigm):
+            
+        if paradigm is None:
+            paradigm = self.get_paradigm(paradigm)
+
+        paradigm = self.stimulus._clean_paradigm(paradigm)
+
+        return paradigm
+
 
 class HRFEncodingModel(EncodingModel):
 
@@ -445,7 +462,7 @@ class HRFEncodingModel(EncodingModel):
 
         padding = [[paradigm_shift, 0], [0, 0]]
 
-        paradigm = tf.pad(paradigm, padding)[:-paradigm_shift]
+        paradigm = tf.pad(self.stimulus._generate_stimulus(paradigm.values), padding)[:-paradigm_shift]
 
         return super().get_init_pars(data, paradigm, confounds)
 
@@ -456,10 +473,8 @@ class GaussianPRF(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
+                 model_stimulus_amplitude=False,
                  **kwargs):
-    
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
 
         if allow_neg_amplitudes:
             self._transform_parameters_forward = self._transform_parameters_forward1
@@ -468,23 +483,41 @@ class GaussianPRF(EncodingModel):
             self._transform_parameters_forward = self._transform_parameters_forward2
             self._transform_parameters_backward = self._transform_parameters_backward2
 
-    def basis_predictions(self, paradigm, parameters):
+        self.stimulus_type = self._get_stimulus_type(model_stimulus_amplitude=model_stimulus_amplitude)
+        self._basis_predictions = self._get_basis_predictions(model_stimulus_amplitude=model_stimulus_amplitude)
 
-        if hasattr(paradigm, 'values'):
-            paradigm = paradigm.values
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                         weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
+
+
+    def _get_stimulus_type(self, model_stimulus_amplitude=False):
+        if model_stimulus_amplitude:
+            return OneDimensionalStimulusWithAmplitude
+        else:
+            return Stimulus
+
+    def _get_basis_predictions(self, model_stimulus_amplitude=False):
+        if model_stimulus_amplitude:
+            return self._basis_predictions_with_amplitude
+        else:
+            return self._basis_predictions_without_amplitude
+
+    def basis_predictions(self, paradigm=None, parameters=None):
+
+        paradigm = self.get_paradigm(paradigm)
+        parameters = self._get_parameters(parameters)[0]
 
         if hasattr(parameters, 'values'):
             parameters = parameters.values
 
-        paradigm = np.float32(paradigm)
         parameters = np.float32(parameters)
 
-        if paradigm.ndim == 1:
-            paradigm = paradigm[:, np.newaxis]
-
-        return self._basis_predictions(paradigm[np.newaxis, ...], parameters[np.newaxis, ...])[0]
+        return self._basis_predictions(self.stimulus._generate_stimulus(paradigm.values), parameters[np.newaxis, ...])[0]
 
     def get_init_pars(self, data, paradigm, confounds=None):
+
+        paradigm = self._get_paradigm(paradigm)
+        data = format_data(data)
 
         if confounds is not None:
             beta = tf.linalg.lstsq(confounds, data)
@@ -494,14 +527,11 @@ class GaussianPRF(EncodingModel):
         if hasattr(data, 'values'):
             data = data.values
 
-        if hasattr(paradigm, 'values'):
-            paradigm = paradigm.values
-
         baselines = tf.reduce_min(data, 0)
         data_ = (data - baselines)
 
-        mus = tf.reduce_sum((data_ * paradigm), 0) / tf.reduce_sum(data_, 0)
-        sds = tf.sqrt(tf.reduce_sum(data_ * (paradigm - mus)
+        mus = tf.reduce_sum((data_ * self.stimulus._generate_stimulus(paradigm.values)), 0) / tf.reduce_sum(data_, 0)
+        sds = tf.sqrt(tf.reduce_sum(data_ * (self.stimulus._generate_stimulus(paradigm.values) - mus)
                                     ** 2, 0) / tf.reduce_sum(data_, 0))
         amplitudes = tf.reduce_max(data_, 0)
 
@@ -513,7 +543,7 @@ class GaussianPRF(EncodingModel):
         return parameters
 
     @tf.function
-    def _basis_predictions(self, paradigm, parameters):
+    def _basis_predictions_without_amplitude(self, paradigm, parameters):
         # paradigm: n_batches x n_timepoints x n_stimulus_features
         # parameters:: n_batches x n_voxels x n_parameters
 
@@ -525,8 +555,23 @@ class GaussianPRF(EncodingModel):
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
+    @tf.function
+    def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        # paradigm: n_batches x n_timepoints x n_stimulus_features
+        # parameters:: n_batches x n_voxels x n_parameters
+
+        # norm: n_batches x n_timepoints x n_voxels
+
+        # output: n_batches x n_timepoints x n_voxels
+        return norm(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] * paradigm[:, :, tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
+
+
     def init_pseudoWWT(self, stimulus_range, parameters):
 
+        stimulus_range = stimulus_range.astype(np.float32)
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = tf.tensordot(W, W, (0, 0))
@@ -544,6 +589,9 @@ class GaussianPRF(EncodingModel):
         else:
             raise ValueError(
                 'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
+
+    def get_WWT(self):
+        return self.get_pseudoWWT()
 
     @tf.function
     def _transform_parameters_forward1(self, parameters):
@@ -579,9 +627,26 @@ class GaussianPRF(EncodingModel):
 class VonMisesPRF(GaussianPRF):
 
     parameter_labels = ['mu', 'kappa', 'amplitude', 'baseline']
+    stimulus_type = OneDimensionalRadialStimulus
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, allow_neg_amplitudes=False, 
+                 model_stimulus_amplitude=False,
+                 **kwargs):
+
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                            weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes, 
+                            model_stimulus_amplitude=model_stimulus_amplitude,
+                            **kwargs)
+
+    def _get_stimulus_type(self, model_stimulus_amplitude=False):
+        if model_stimulus_amplitude:
+            return OneDimensionalRadialStimulusWithAmplitude
+        else:
+            return OneDimensionalRadialStimulus
 
     @tf.function
-    def _basis_predictions(self, paradigm, parameters):
+    def _basis_predictions_without_amplitude(self, paradigm, parameters):
         # paradigm: n_batches x n_timepoints x n_stimulus_features
         # parameters:: n_batches x n_voxels x n_parameters
 
@@ -592,6 +657,32 @@ class VonMisesPRF(GaussianPRF):
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
+
+    @tf.function
+    def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        # paradigm: n_batches x n_timepoints x n_stimulus_features
+        # parameters:: n_batches x n_voxels x n_parameters
+
+        # norm: n_batches x n_timepoints x n_voxels
+
+        # output: n_batches x n_timepoints x n_voxels
+        return von_mises_pdf(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
+
+    def init_pseudoWWT(self, stimulus_range, parameters):
+
+        if stimulus_range.ndim == 2:
+            stimulus_range = stimulus_range[:, [0]]
+
+        stimulus_range = np.stack((stimulus_range, np.ones_like(stimulus_range)), axis=1).astype(np.float32)
+        W = self.basis_predictions(stimulus_range, parameters)
+
+        pseudoWWT = tf.tensordot(W, W, (0, 0))
+        self._pseudoWWT = tf.where(tf.math.is_nan(pseudoWWT), tf.zeros_like(pseudoWWT),
+                                   pseudoWWT)
+        return self._pseudoWWT
 
 class LogGaussianPRF(GaussianPRF):
 
@@ -637,6 +728,8 @@ class LogGaussianPRFWithHRF(LogGaussianPRF, HRFEncodingModel):
     pass
 
 class GaussianPRFOnGaussianSignal(GaussianPRF):
+
+    stimulus_type = OneDimensionalGaussianStimulus
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, allow_neg_amplitudes=False,

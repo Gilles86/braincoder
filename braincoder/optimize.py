@@ -4,7 +4,7 @@ import datetime
 import tensorflow as tf
 import os.path as op
 import os
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from .utils import format_data, format_parameters, format_paradigm, logit, get_rsq
 import logging
 from tensorflow.math import softplus, sigmoid
@@ -21,7 +21,7 @@ class WeightFitter(object):
         self.model = model
         self.parameters = format_parameters(parameters)
         self.data = format_data(data)
-        self.paradigm = format_paradigm(paradigm)
+        self.paradigm = self.model.get_paradigm(paradigm)
 
     def fit(self, alpha=0.0):
         parameters, parameters_ = self.model._get_parameters(self.parameters)
@@ -36,7 +36,7 @@ class ParameterFitter(object):
     def __init__(self, model, data, paradigm, memory_limit=666666666, log_dir=False):
         self.model = model
         self.data = data.astype(np.float32)
-        self.paradigm = paradigm.astype(np.float32)
+        self.paradigm = model.get_paradigm(paradigm)
 
         self.memory_limit = memory_limit  # 8 GB?
 
@@ -127,11 +127,13 @@ class ParameterFitter(object):
 
         mean_best_r2s = []
 
+        paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
+
         if confounds is None:
             @tf.function
             def get_ssq(parameters):
                 predictions = self.model._predict(
-                    self.paradigm.values[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
+                    paradigm_[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
 
                 residuals = y - predictions[0]
 
@@ -142,7 +144,7 @@ class ParameterFitter(object):
             @tf.function
             def get_ssq(parameters):
                 predictions_ = self.model._predict(
-                    self.paradigm.values[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
+                    paradigm_[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
 
                 predictions = tf.transpose(predictions_)[
                     :, tf.newaxis, :, tf.newaxis]
@@ -250,6 +252,9 @@ class ParameterFitter(object):
 
         self.estimated_parameters.index = self.data.columns
 
+        if not self.estimated_parameters.index.name:
+            self.estimated_parameters.index.name = 'source'
+
         self.predictions = self.model.predict(
             self.paradigm, self.estimated_parameters, self.model.weights)
         self.r2 = pd.Series(best_r2.numpy(), index=self.data.columns)
@@ -266,8 +271,7 @@ class ParameterFitter(object):
         print(f'Working with chunk size of {chunk_size}')
 
         if fixed_pars is not None:
-            return self._partly_fit_grid(fixed_pars, n_timepoints, n_voxels,
-                                         chunk_size, **kwargs)
+            raise NotImplementedError()
 
         # Make sure that ranges for all parameters are given ing
         # *args or **kwargs
@@ -299,8 +303,8 @@ class ParameterFitter(object):
         logging.info('Built grid of {len(par_grid)} parameter settings...')
 
         data = self.data.values
-        paradigm = self.paradigm.values
 
+        paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
 
         if use_correlation_cost:
 
@@ -311,7 +315,7 @@ class ParameterFitter(object):
 
             @tf.function
             def _cost(par_grid):
-                grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
+                grid_predictions = self.model._predict(paradigm_[tf.newaxis, ...],
                                                        par_grid[tf.newaxis, ...], None)
 
                 grid_predictions_demeaned = grid_predictions[0] -  tf.reduce_mean(grid_predictions[0], 0, True)
@@ -325,7 +329,7 @@ class ParameterFitter(object):
         else:
             @tf.function
             def _cost(par_grid):
-                grid_predictions = self.model._predict(paradigm[tf.newaxis, ...],
+                grid_predictions = self.model._predict(paradigm_[tf.newaxis, ...],
                                                        par_grid[tf.newaxis, ...], None)
 
                 # time x features x parameters
@@ -355,6 +359,9 @@ class ParameterFitter(object):
         best_pars = pd.DataFrame(best_pars.numpy(), index=self.data.columns,
                                  columns=self.model.parameter_labels).astype(np.float32)
 
+        if not best_pars.index.name:
+            best_pars.index.name = 'source'
+
         return best_pars
 
     def refine_baseline_and_amplitude(self, parameters, n_iterations=2, positive_amplitude=True, l2_alpha=1.0):
@@ -367,7 +374,6 @@ class ParameterFitter(object):
             'amplitude' in parameters)), "Need parameters with amplitude and baseline"
 
         orig_r2 = get_rsq(data, predictions)
-        print(f"Original mean r2: {orig_r2.mean()}")
 
         demeaned_predictions = (predictions - parameters.loc[:, 'baseline'].T) / parameters.loc[:, 'amplitude']
 
@@ -392,19 +398,17 @@ class ParameterFitter(object):
 
         ix = (new_r2 > orig_r2) & (data.std() != 0.0)
 
-        print(f'{ix.mean()*100:.2f}% of time lines improved')
         parameters.loc[ix] = new_parameters.loc[ix]
 
         combined_pred = self.model.predict(parameters=parameters, paradigm=self.paradigm)
         combined_r2 = get_rsq(data, combined_pred)
-        print(f"New mean r2 after OLS: {combined_r2.mean()}")
 
         if n_iterations == 1:
             return parameters
         else:
             return self.refine_baseline_and_amplitude(parameters, n_iterations - 1)
 
-    def _partly_fit_grid(self, fixed_pars, n_timepoints, n_voxels, chunk_size, **kwargs):
+    def _partly_fit_grid(self, fixed_pars, n_voxels, chunk_size, **kwargs):
 
         for key in kwargs.keys():
             if key in fixed_pars:
@@ -451,7 +455,9 @@ class ParameterFitter(object):
         vox_ix = tf.range(n_features, dtype=tf.int64)
 
         data = self.data.values
-        paradigm = self.paradigm.values
+        
+
+        paradigm_ = self.model.stimulus._clean_paraigm(self.paradigm)
 
         @tf.function
         def _get_ssq_for_predictions(par_grid):
@@ -460,7 +466,7 @@ class ParameterFitter(object):
             # parameters:: n_batches x n_voxels x n_parameters
             # norm: n_batches x n_timepoints x n_voxels
 
-            grid_predictions = self.model._predict(paradigm[tf.newaxis, :, :],
+            grid_predictions = self.model._predict(paradigm_[tf.newaxis, :, :],
                                                    par_grid, None)
 
             resid = data[tf.newaxis, ...] - grid_predictions
@@ -539,11 +545,7 @@ class ResidualFitter(object):
         self.data = format_data(data)
         self.lambd = lambd
 
-        if paradigm is None:
-            if self.model.paradigm is None:
-                raise ValueError('Need to have paradigm')
-        else:
-            self.model.paradigm = paradigm
+        self.paradigm = self.model.get_paradigm(paradigm)
 
         if parameters is None:
             if self.model.parameters is None:
@@ -568,7 +570,7 @@ class ResidualFitter(object):
         n_voxels = self.data.shape[1]
 
         if residuals is None:
-            residuals = (self.data - self.model.predict()).values
+            residuals = (self.data - self.model.predict(paradigm=self.paradigm)).values
 
         sample_cov = tfp.stats.covariance(residuals)
 
@@ -584,7 +586,7 @@ class ResidualFitter(object):
         sigma2_ = tf.Variable(initial_value=softplus_inverse(
             init_sigma2), shape=None, name='sigma2_trans', dtype=tf.float32)
 
-        if hasattr(self.model, 'get_pseudoWWT'):
+        if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
             print('USING A PSEUDO-WWT!')
             WWT = self.model.get_pseudoWWT()
         else:
@@ -810,77 +812,99 @@ class ResidualFitter(object):
             tf.linalg.diag(tf.ones(tau.shape[1]) * eps)
 
 
+
 class StimulusFitter(object):
 
-    def __init__(self, data, model, stimulus_size, omega, dof=None):
+    def __init__(self, data, model, omega, parameters=None, weights=None, dof=None, stimulus=None):
 
         self.data = format_data(data)
         self.model = model
-        self.stimulus_size = stimulus_size
         self.model.omega = omega
         self.model.dof = dof
 
-        if self.model.weights is None:
-            self.model.weights
+        if stimulus is None:
+            self.stimulus = self.model.stimulus
 
-    def fit(self, init_stimulus=None, learning_rate=0.1, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6,
-            spike_and_slab_prior=False, sigma_prior=1., alpha=.5, default_mask=None, default_value=None,
-            positive_only=True, progressbar=True):
+        if parameters is not None:
+            self.model.parameters = parameters
 
-        size_stimulus_var = (1, len(self.data), self.stimulus_size)
+        if weights is not None:
+            self.model.weights = weights
 
-        if default_mask is None:
-            default_mask = np.zeros(len(self.data), np.bool)
-            default_value = 0
-
-        pbar = range(max_n_iterations)
+    def fit(self, init_pars=None, fit_vars=None, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6, learning_rate=0.01, progressbar=True):
 
         if progressbar:
-            pbar = tqdm(pbar)
+            pbar = tqdm(range(max_n_iterations))
+        else:
+            pbar = range(max_n_iterations)
 
         self.costs = np.ones(max_n_iterations) * 1e12
 
-        data_ = self.data.values[np.newaxis, :, :]
+        if isinstance(self.data, pd.DataFrame):
+            data_ = self.data.values[np.newaxis, :, :]
+        else:
+            data_ = self.data[np.newaxis, :, :]
+
         parameters = self.model.parameters.values[np.newaxis, :, :]
         weights = None if self.model.weights is None else self.model.weights.values[
             np.newaxis, :, :]
 
-        if spike_and_slab_prior:
-            @tf.function
-            def logprior(stimulus):
-                prior_dist = tfd.Mixture(cat=tfd.Categorical(probs=[alpha, 1.-alpha]),
-                                         components=[
-                    tfd.Laplace(loc=0, scale=sigma_prior),
-                    tfd.Normal(loc=0, scale=sigma_prior), ])
+        if isinstance(init_pars, pd.DataFrame):
+            init_pars = init_pars.values
 
-                return prior_dist.log_prob(stimulus)
+        if init_pars is None:
+            init_pars = self.stimulus.generate_empty_stimulus(len(self.data))
+        elif init_pars.shape[0] != len(self.data):
+            raise ValueError(
+                'init_pars should have the same number of rows as data')
+
+        init_pars = np.asarray(init_pars).astype(np.float32)
+
+        model_vars = []
+        trainable_vars = []
+
+        if fit_vars is None:
+            fit_vars = self.stimulus.dimension_labels
+
+        for label, bijector, values in zip(self.stimulus.dimension_labels, self.stimulus.bijectors, init_pars.T):
+            assert(np.all(~np.isnan(bijector.inverse(values)))
+                   ), f'Problem with init values of {label} (nans):\n\r{bijector.inverse(values)}'
+            assert(np.all(np.isfinite(bijector.inverse(values)))
+                   ), f'Problem with init values of {label} (infinite values):\nr{bijector}\nr{values}\n\r{bijector.inverse(values)}'
+
+            tf_var = tf.Variable(name=label,
+                                 shape=values.shape,
+                                 initial_value=bijector.inverse(values))
+
+            model_vars.append(tf_var)
+
+            if label in fit_vars:
+                trainable_vars.append(tf_var)
+
+        likelihood = self.build_likelihood()
+
+        pbar = tqdm(range(max_n_iterations))
+        self.costs = np.ones(max_n_iterations) * 1e12
+
+        opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
         for step in pbar:
             with tf.GradientTape() as tape:
-                if positive_only:
-                    decoded_stimulus = softplus(decoded_stimulus_)
-                else:
-                    decoded_stimulus = decoded_stimulus_
 
-                ll = self.model._likelihood(decoded_stimulus,
-                                            data_, parameters,
-                                            weights, self.model.omega, self.model.dof, logp=True, normalize=False)
+                untransformed_pars = [bijector.forward(
+                    par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
+                ll = likelihood(*untransformed_pars)[0]
+                cost = -ll
 
-                cost = -tf.reduce_sum(ll)
+            gradients = tape.gradient(cost, trainable_vars)
+            opt.apply_gradients(zip(gradients, trainable_vars))
 
-                if spike_and_slab_prior:
-                    cost += -tf.reduce_sum(logprior(decoded_stimulus))
-
-                self.costs[step] = cost.numpy()
-
-            gradients = tape.gradient(cost, trainable_variables)
-            opt.apply_gradients(zip(gradients, trainable_variables))
-
-            pbar.set_description(f'fit stat: {-cost.numpy():6.2f}')
+            if progressbar:
+                pbar.set_description(f'LL: {ll:6.4f}')
 
             self.costs[step] = cost.numpy()
 
-            previous_cost = self.costs[np.max((step-lag, 0))]
+            previous_cost = self.costs[np.max((step - lag, 0))]
             if step > min_n_iterations:
                 if np.sign(previous_cost) == np.sign(cost):
                     if np.sign(cost) == 1:
@@ -890,7 +914,68 @@ class StimulusFitter(object):
                         if (cost / previous_cost) < 1 - rtol:
                             break
 
-        return decoded_stimulus[0].numpy()
+        fitted_pars_ = np.stack(
+            [par.numpy() for par in untransformed_pars], axis=1)
 
-    def firstpass(self):
-        raise NotImplementedError("Best to start fitting with empty image")
+        fitted_pars = pd.DataFrame(fitted_pars_, columns=self.stimulus.dimension_labels,
+                                    index=self.data.index,
+                                    dtype=np.float32)
+        return fitted_pars
+
+    def fit_grid(self, *pars):
+
+        assert(len(pars) == len(self.stimulus.dimension_labels)), 'Need to provide values for all stimulus dimensions: {self.stimulus.dimension_labels}'
+
+        pars = [np.asarray(par).astype(np.float32) for par in pars]
+
+        parameters = dict(zip(self.stimulus.dimension_labels, pars))
+
+        # grid length x n_pars
+        grid = pd.MultiIndex.from_product(
+            parameters.values(), names=parameters.keys()).to_frame(index=False).astype(np.float32)
+
+        logging.info(f'Built grid of {len(grid)} possible stimuli...')
+
+        likelihood = self.build_likelihood(use_batch_dimension=True)
+
+        stimulus = self.stimulus._generate_stimulus(grid.values)
+
+        ll = likelihood(*grid.values.T)
+        ll = pd.DataFrame(likelihood(*grid.values.T).numpy().T, columns=pd.MultiIndex.from_frame(
+            grid), index=self.data.index)
+
+        best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
+        best_pars.index = self.data.index
+
+        return best_pars
+
+    def build_likelihood(self, use_batch_dimension=False):
+
+        data = self.data.values[tf.newaxis, ...]
+        parameters = self.model.parameters.values[tf.newaxis, ...]
+        weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
+        omega_chol = np.linalg.cholesky(self.model.omega)
+
+        if use_batch_dimension:
+            @tf.function
+            def likelihood(*pars):
+
+                pars = tf.stack(pars, axis=1)
+                stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
+                ll = self.model._likelihood(
+                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+
+                return ll
+
+        else:
+            @tf.function
+            def likelihood(*pars):
+
+                pars = tf.stack(pars, axis=1)
+                stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
+                ll = self.model._likelihood(
+                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+
+                return tf.reduce_sum(ll, 1)
+
+        return likelihood
