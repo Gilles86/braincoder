@@ -13,6 +13,10 @@ Quick start
 
 
 .. toctree::
+   :maxdepth: 1
+   :hidden:
+
 
    tutorial/index.rst
    auto_examples/index.rst
+   bibliography.rst

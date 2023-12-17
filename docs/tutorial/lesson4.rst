@@ -70,7 +70,9 @@ If we have two RFs, the situation becomes unambiguous:
 .. |likelihood2| image:: ../auto_examples/00_encodingdecoding/images/sphx_glr_invert_model_004.png
 .. centered:: |likelihood2|
 
+.. note::
 
+    The complete Python script and its output can be found :ref:`here<sphx_glr_auto_examples_00_encodingdecoding_invert_model.py>`.
 Summary
 #######
 

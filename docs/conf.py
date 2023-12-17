@@ -21,7 +21,13 @@ html_static_path = ['_static']
 html_css_files = ['css/custom.css']
 
 extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.duration', 
-              'sphinx_gallery.gen_gallery']
+              'sphinx_gallery.gen_gallery', 'sphinxcontrib.bibtex']
+
+bibtex_bibfiles = ["./references.bib"]
+bibtex_style = "unsrt"
+bibtex_reference_style = "author_year"
+bibtex_footreference_style = "author_year"
+bibtex_footbibliography_header = ""
 
 autosummary_generate = True
 

@@ -76,18 +76,22 @@ import seaborn as sns
 
 tmp = posterior.set_index(pd.Series(test_paradigm, name='ground truth'), append=True).loc[:8].stack().to_frame('p')
 
-g = sns.FacetGrid(tmp.reset_index(), col='time', col_wrap=3)
+g = sns.FacetGrid(tmp.reset_index(), col='frame', col_wrap=3)
 
 g.map(plt.plot, 'stimulus', 'p', color='k')
-# g.map(lambda data, **kwargs: plt.axvline(data, color='r'), 'ground truth')
+
 def test(data, **kwargs):
     plt.axvline(data.mean(), c='k', ls='--', **kwargs)
 g.map(test, 'ground truth')
+g.set(xlabel='Stimulus value', ylabel='Posterior probability density')
 
 # %%
 
 # Let's look at the summary statistics of the posteriors posteriors
-def get_posterior_stats(posterior):
+def get_posterior_stats(posterior, normalize=True):
+    posterior = posterior.copy()
+    posterior = posterior.div(np.trapz(posterior, posterior.columns,axis=1), axis=0)
+
     # Take integral over the posterior to get to the expectation (mean posterior)
     E = np.trapz(posterior*posterior.columns.values[np.newaxis,:], posterior.columns, axis=1)
     
@@ -99,12 +103,15 @@ def get_posterior_stats(posterior):
     return stats
 
 posterior_stats = get_posterior_stats(posterior)
+
+# Let's see how far the posterior mean is from the ground truth
 plt.errorbar(test_paradigm, posterior_stats['E'],posterior_stats['sd'], fmt='o',)
 plt.plot([0, 100], [0,100], c='k', ls='--')
 
 plt.xlabel('Ground truth')
 plt.ylabel('Mean posterior')
 
+# Let's see how the error depends on the standard deviation of the posterior
 error = test_paradigm - posterior_stats['E']
 error_abs = np.abs(error)
 error_abs.name = 'error'
@@ -114,4 +121,26 @@ sns.lmplot(x='sd', y='error', data=posterior_stats.join(error_abs))
 plt.xlabel('Standard deviation of posterior')
 plt.ylabel('Objective error')
 
+# %%
+
+
+# Now, let's try to find the MAP estimate using gradient descent
+from braincoder.optimize import StimulusFitter
+stimulus_fitter = StimulusFitter(model=model, data=test_data, omega=omega)
+
+# We start with a very coarse grid search, so we are sure we are in the right ballpark
+estimated_stimuli_grid = stimulus_fitter.fit_grid(np.arange(1, 100, 5))
+
+# %%
+
+
+# We can then refine the estimate using gradient descent
+estimated_stimuli_gd = stimulus_fitter.fit(init_pars=estimated_stimuli_grid, progressbar=False)
+
+# Let's see how well we did
+plt.scatter(test_paradigm, estimated_stimuli_grid, alpha=.5, label='MAP (grid search)')
+plt.scatter(test_paradigm, estimated_stimuli_gd, alpha=.5, label='MAP (gradient descent)')
+plt.scatter(test_paradigm, posterior_stats['E'], alpha=.5, label='Mean posterior')
+plt.plot([0, 100], [0,100], c='k', ls='--', label='Identity line')
+plt.legend()
 # %%

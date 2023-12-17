@@ -157,6 +157,10 @@ Now we can import the `ResidualFitter` and estimate :math:`\Sigma` (here called
     ``omega``-matrix. Note that in real data, we would use estimated parameters
     and/or weights.
 
+.. note::
+
+    The complete Python script and its output can be found :ref:`here<sphx_glr_auto_examples_00_encodingdecoding_fit_residuals.py>`.
+
 Summary
 #######
 

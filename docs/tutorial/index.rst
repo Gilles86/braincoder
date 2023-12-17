@@ -24,3 +24,4 @@ Lessons
    lesson3.rst
    lesson4.rst
    lesson5.rst
+   lesson6.rst
