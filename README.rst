@@ -43,7 +43,9 @@ Here we create a new environment called `braincoder` with the required packages:
 
 .. code-block:: bash
 
-    conda create --name braincoder tensorflow-probability tensorflow -c conda-forge
+    mamba create --name braincoder tensorflow-probability tensorflow -c conda-forge
+    mamba activate braincoder
+    pip install git+https://github.com/Gilles86/braincoder.git
 
 Usage
 =====
