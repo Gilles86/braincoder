@@ -830,13 +830,18 @@ class StimulusFitter(object):
         if stimulus is None:
             self.stimulus = self.model.stimulus
 
+        self.single_bijector = not isinstance(self.stimulus.bijectors, list)
+
         if parameters is not None:
             self.model.parameters = parameters
 
         if weights is not None:
             self.model.weights = weights
 
-    def fit(self, init_pars=None, fit_vars=None, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6, learning_rate=0.01, progressbar=True):
+    def fit(self, init_pars=None, fit_vars=None, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6, learning_rate=0.01, progressbar=True,
+            l2_norm=None,
+            l1_norm=None,
+            legacy_adam=False):
 
         if progressbar:
             pbar = tqdm(range(max_n_iterations))
@@ -868,38 +873,60 @@ class StimulusFitter(object):
         model_vars = []
         trainable_vars = []
 
-        if fit_vars is None:
-            fit_vars = self.stimulus.dimension_labels
-
-        for label, bijector, values in zip(self.stimulus.dimension_labels, self.stimulus.bijectors, init_pars.T):
-            assert(np.all(~np.isnan(bijector.inverse(values)))
-                   ), f'Problem with init values of {label} (nans):\n\r{bijector.inverse(values)}'
-            assert(np.all(np.isfinite(bijector.inverse(values)))
-                   ), f'Problem with init values of {label} (infinite values):\nr{bijector}\nr{values}\n\r{bijector.inverse(values)}'
-
-            tf_var = tf.Variable(name=label,
-                                 shape=values.shape,
-                                 initial_value=bijector.inverse(values))
+        if self.single_bijector:
+            # Code to handle when self.stimulus.bijectors is not iterable
+            bijector = self.stimulus.bijectors
+            tf_var = tf.Variable(name='stimulus',
+                                shape=init_pars.shape,
+                                initial_value=bijector.inverse(init_pars))
 
             model_vars.append(tf_var)
+            trainable_vars.append(tf_var)
 
-            if label in fit_vars:
-                trainable_vars.append(tf_var)
+        else:
+            if fit_vars is None:
+                fit_vars = self.stimulus.dimension_labels
+
+            for label, bijector, values in zip(self.stimulus.dimension_labels, self.stimulus.bijectors, init_pars.T):
+                assert(np.all(~np.isnan(bijector.inverse(values)))
+                    ), f'Problem with init values of {label} (nans):\n\r{bijector.inverse(values)}'
+                assert(np.all(np.isfinite(bijector.inverse(values)))
+                    ), f'Problem with init values of {label} (infinite values):\nr{bijector}\nr{values}\n\r{bijector.inverse(values)}'
+
+                tf_var = tf.Variable(name=label,
+                                    shape=values.shape,
+                                    initial_value=bijector.inverse(values))
+
+                model_vars.append(tf_var)
+
+                if label in fit_vars:
+                    trainable_vars.append(tf_var)
 
         likelihood = self.build_likelihood()
 
         pbar = tqdm(range(max_n_iterations))
         self.costs = np.ones(max_n_iterations) * 1e12
 
-        opt = tf.optimizers.Adam(learning_rate=learning_rate)
+        if legacy_adam:
+            opt = tf.keras.optimizers.legacy.Adam(learning_rate=learning_rate)
+        else:
+            opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
         for step in pbar:
             with tf.GradientTape() as tape:
+                if self.single_bijector:
+                    # n_pars x datapoints
+                    untransformed_pars = tf.transpose(self.stimulus.bijectors.forward(model_vars[0]))
+                else:
+                    untransformed_pars = [bijector.forward(
+                        par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
 
-                untransformed_pars = [bijector.forward(
-                    par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
                 ll = likelihood(*untransformed_pars)[0]
                 cost = -ll
+                if l1_norm is not None:
+                    cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in trainable_vars])
+                if l2_norm is not None:
+                    cost += l2_norm * tf.reduce_sum([tf.reduce_sum(par**2) for par in trainable_vars])
 
             gradients = tape.gradient(cost, trainable_vars)
             opt.apply_gradients(zip(gradients, trainable_vars))
@@ -927,60 +954,21 @@ class StimulusFitter(object):
                                     dtype=np.float32)
         return fitted_pars
 
-    def fit_grid(self, *pars):
-
-        assert(len(pars) == len(self.stimulus.dimension_labels)), 'Need to provide values for all stimulus dimensions: {self.stimulus.dimension_labels}'
-
-        pars = [np.asarray(par).astype(np.float32) for par in pars]
-
-        parameters = dict(zip(self.stimulus.dimension_labels, pars))
-
-        # grid length x n_pars
-        grid = pd.MultiIndex.from_product(
-            parameters.values(), names=parameters.keys()).to_frame(index=False).astype(np.float32)
-
-        logging.info(f'Built grid of {len(grid)} possible stimuli...')
-
-        likelihood = self.build_likelihood(use_batch_dimension=True)
-
-        stimulus = self.stimulus._generate_stimulus(grid.values)
-
-        ll = likelihood(*grid.values.T)
-        ll = pd.DataFrame(likelihood(*grid.values.T).numpy().T, columns=pd.MultiIndex.from_frame(
-            grid), index=self.data.index)
-
-        best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
-        best_pars.index = self.data.index
-
-        return best_pars
-
-    def build_likelihood(self, use_batch_dimension=False):
+    def build_likelihood(self):
 
         data = self.data.values[tf.newaxis, ...]
         parameters = self.model.parameters.values[tf.newaxis, ...]
         weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
         omega_chol = np.linalg.cholesky(self.model.omega)
 
-        if use_batch_dimension:
-            @tf.function
-            def likelihood(*pars):
+        @tf.function
+        def likelihood(*pars):
 
-                pars = tf.stack(pars, axis=1)
-                stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
-                ll = self.model._likelihood(
-                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+            pars = tf.stack(pars, axis=1)
+            stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
+            ll = self.model._likelihood(
+                stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
 
-                return ll
-
-        else:
-            @tf.function
-            def likelihood(*pars):
-
-                pars = tf.stack(pars, axis=1)
-                stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
-                ll = self.model._likelihood(
-                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
-
-                return tf.reduce_sum(ll, 1)
+            return tf.reduce_sum(ll, 1)
 
         return likelihood
