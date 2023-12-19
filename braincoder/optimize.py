@@ -396,7 +396,7 @@ class ParameterFitter(object):
         new_parameters.loc[:, 'amplitude'] = beta[:, 1]
 
         if positive_amplitude:
-            new_parameters['amplitude'] = np.clip(new_parameters['amplitude'], 0.0, np.inf)
+            new_parameters['amplitude'] = np.clip(new_parameters['amplitude'], 1e-4, np.inf)
 
         new_pred = self.model.predict(parameters=new_parameters, paradigm=self.paradigm)
         new_r2 = get_rsq(data, new_pred)
