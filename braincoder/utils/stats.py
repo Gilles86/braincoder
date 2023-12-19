@@ -20,6 +20,9 @@ def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
 
     if zerovartonan:
         r2[data.var() == 0] = np.nan
+        r2[predictions.var() == 0] = np.nan
+
+    r2.name = 'r2'
 
     return r2
 
