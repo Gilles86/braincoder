@@ -9,7 +9,7 @@ from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
 import scipy.stats as ss
-from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude
+from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus
 
 class EncodingModel(object):
 
@@ -396,6 +396,7 @@ class EncodingModel(object):
             return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
         else:
             return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
+
     def _get_parameters(self, parameters=None):
 
         if (parameters is None) and (self.parameters is not None):
@@ -767,9 +768,23 @@ class GaussianPRFOnGaussianSignal(GaussianPRF):
 class GaussianPRF2D(EncodingModel):
 
     parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude']
+    stimulus_type = ImageStimulus
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, verbosity=logging.INFO, **kwargs):
+                 weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO, **kwargs):
+
+        self.data = data
+        self.parameters = parameters
+
+        if isinstance(parameters, pd.DataFrame):
+            for par in self.parameter_labels:
+                assert(par in parameters.columns), 'Need {} in parameters'.format(par)
+            self.parameters = self.parameters[self.parameter_labels]
+        else:
+            self.parameters = pd.DataFrame(self.parameters, columns=self.parameter_labels)
+
+        self.weights = weights
+        self.omega = omega
 
         if grid_coordinates is None:
             grid_coordinates = np.array(np.meshgrid(np.linspace(-1, 1, paradigm.shape[1]),
@@ -785,15 +800,16 @@ class GaussianPRF2D(EncodingModel):
 
         self.n_x = len(self.grid_coordinates['x'].unique())
         self.n_y = len(self.grid_coordinates['y'].unique())
+        self.stimulus = self.stimulus_type(self.grid_coordinates, positive_only=positive_image_values_only)
+        self.paradigm = self.stimulus.clean_paradigm(paradigm)
 
-        if paradigm is not None:
-            paradigm = np.reshape(paradigm, (len(paradigm), -1))
+        x_diff = np.diff(np.sort(self.grid_coordinates['x'].unique())).mean()
+        y_diff = np.diff(np.sort(self.grid_coordinates['y'].unique())).mean()
+        self.pixel_area = x_diff * y_diff
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, verbosity=logging.INFO, **kwargs)
+        if omega is not None:
+            self.omega_chol = np.linalg.cholesky(omega)
 
-        if paradigm is not None:
-            self.paradigm.columns = pd.MultiIndex.from_frame(self.grid_coordinates)
 
     def get_rf(self, as_frame=False, unpack=False):
 
@@ -829,7 +845,7 @@ class GaussianPRF2D(EncodingModel):
         return result
 
     @tf.function
-    def _get_rf(self, grid_coordinates, parameters):
+    def _get_rf(self, grid_coordinates, parameters, normalize=True):
 
         # n_batches x n_populations x  n_grid_spaces
         x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
@@ -841,7 +857,13 @@ class GaussianPRF2D(EncodingModel):
         sd = parameters[:, :, 2, tf.newaxis]
         amplitude = parameters[:, :, 4, tf.newaxis]
 
-        return (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
+        gauss = (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
+
+        if normalize:
+            norm = sd * tf.sqrt(2 * np.pi) / self.pixel_area
+            gauss = gauss / norm
+        
+        return gauss
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
@@ -933,10 +955,16 @@ class GaussianPRF2DAngle(GaussianPRF2D):
 class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
+                 positive_image_values_only=True,
                  weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
 
-        super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
+        super().__init__(grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
+                        positive_image_values_only=positive_image_values_only,
                          hrf_model=hrf_model, **kwargs)
+        if hrf_model is None:
+            raise ValueError('Please provide HRFModel!')
+
+        self.hrf_model = hrf_model
 
     def to_linear_model(self):
         return LinearModelWithBaselineHRF(self.paradigm, self.data,
@@ -951,6 +979,8 @@ class GaussianPRF2DAngleWithHRF(GaussianPRF2DAngle, HRFEncodingModel):
 
         super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
                          hrf_model=hrf_model, **kwargs)
+
+        self.hrf_model = hrf_model
 
     def to_linear_model(self):
         return LinearModelWithBaselineHRF(self.paradigm, self.data,

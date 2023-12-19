@@ -41,7 +41,7 @@ class Stimulus(object):
             return paradigm
 
     def _generate_stimulus(self, paradigm):
-        return self._clean_paradigm(paradigm)
+        return paradigm
 
     def generate_stimulus(self, paradigm):
         return self.clean_paradigm(paradigm)
@@ -50,7 +50,11 @@ class Stimulus(object):
         stimulus = np.ones((size, len(self.dimension_labels))) * 1e-6
 
         if self.bijectors is not None:
-            stimulus = np.stack([bijector.forward(stimulus[:, ix]).numpy() for ix, bijector in enumerate(self.bijectors)], axis=1)
+
+            if isinstance(self.bijectors, list):
+                stimulus = np.stack([bijector.forward(stimulus[:, ix]).numpy() for ix, bijector in enumerate(self.bijectors)], axis=1)
+            else:
+                stimulus = self.bijectors.forward(stimulus).numpy()
 
         return stimulus.astype(np.float32)
 
@@ -106,6 +110,41 @@ class OneDimensionalGaussianStimulusWithAmplitude(Stimulus):
         else:
             self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd'), tfp.bijectors.Identity(name='amplitude')]
 
+
+class ImageStimulus(Stimulus):
+
+    def __init__(self, grid_coordinates, positive_only=True):
+        self.grid_coordinates = pd.DataFrame(grid_coordinates, columns=['x', 'y'])
+
+        if positive_only:
+            self.bijectors = tfp.bijectors.Softplus(name='intensity')
+        else:
+            self.bijectors = tfp.bijectors.Identity(name='intensity')
+
+        self.dimension_labels = pd.MultiIndex.from_frame(self.grid_coordinates)
+
+    def clean_paradigm(self, paradigm):
+
+        if (not isinstance(paradigm, pd.DataFrame)) and (paradigm is not None):
+
+            if paradigm.ndim == 3:
+                paradigm = paradigm[:, np.newaxis]
+
+                paradigm = paradigm.reshape((paradigm.shape[0], -1))
+            elif paradigm.ndim == 2:
+                pass
+            else:
+                raise ValueError('Paradigm should be 2 or 3 dimensional')
+
+            paradigm = pd.DataFrame(paradigm, columns=self.dimension_labels, index=pd.Index(np.arange(len(paradigm)), name='frame')).astype(np.float32)
+
+        if isinstance(paradigm, pd.DataFrame):
+            paradigm = paradigm.astype(np.float32)
+
+        return paradigm
+
+    def generate_empty_stimulus(self, size):
+        return np.ones((size, len(self.dimension_labels))) * 1e-6
 
 class CustomStimulusFitter(StimulusFitter):
 
