@@ -60,7 +60,7 @@ class SPMHRFModel(HRFModel):
 
         dt = tr / oversampling
         time_stamps = np.linspace(0, time_length,
-                                  np.rint(float(time_length) / dt).astype(np.int))
+                                  np.rint(float(time_length) / dt).astype(np.int32))
         time_stamps -= onset
 
         g1 = tfp.distributions.Gamma(concentration=delay / dispersion, rate=1.)
