@@ -816,8 +816,6 @@ class ResidualFitter(object):
             lambd * sample_covariance +  \
             tf.linalg.diag(tf.ones(tau.shape[1]) * eps)
 
-
-
 class StimulusFitter(object):
 
     def __init__(self, data, model, omega, parameters=None, weights=None, dof=None, stimulus=None):
