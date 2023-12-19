@@ -62,6 +62,7 @@ class ParameterFitter(object):
             lag=100,
             learning_rate=0.01,
             progressbar=True,
+            legacy_adam=False,
             **kwargs):
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
@@ -69,7 +70,11 @@ class ParameterFitter(object):
         y = self.data.values
 
         if optimizer is None:
-            opt = tf.optimizers.Adam(learning_rate=learning_rate, **kwargs)
+
+            if legacy_adam:
+                opt = tf.keras.optimizers.legacy.Adam(learning_rate=learning_rate, **kwargs)
+            else:
+                opt = tf.optimizers.Adam(learning_rate=learning_rate, **kwargs)
 
         if init_pars is None:
             init_pars = self.model.get_init_pars(
