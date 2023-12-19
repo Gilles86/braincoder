@@ -33,6 +33,7 @@ setup(
     keywords='braincoder',
     name='braincoder',
     packages=find_packages(include=['braincoder', 'braincoder.*']),
+    package_data={'braincoder': ['data/szinte2024/*']},
     include_package_data=True,
     test_suite='tests',
     tests_require=test_requirements,
