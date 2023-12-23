@@ -26,7 +26,7 @@ class EncodingModel(object):
         self.paradigm = self.stimulus.clean_paradigm(paradigm)
 
         self.data = data
-        self.parameters = parameters
+        self.parameters = format_parameters(parameters)
         self.weights = weights
         self.omega = omega
 
@@ -81,6 +81,8 @@ class EncodingModel(object):
             parameters = self.parameters
         else:
             parameters = format_parameters(parameters)
+
+        parameters = self._get_parameters(parameters)
 
         if np.isscalar(noise):
             simulated_data = self._simulate(
@@ -221,11 +223,7 @@ class EncodingModel(object):
         else:
             time_index = pd.Index(np.arange(len(data)), name='frame')
 
-        if parameters is None:
-            parameters = self.parameters
-
-        if hasattr(parameters, 'values'):
-            parameters = parameters.values
+        parameters = self._get_parameters(parameters).values
 
         if hasattr(stimulus_range, 'values'):
             stimulus_range = stimulus_range.values
@@ -407,12 +405,10 @@ class EncodingModel(object):
 
         parameters = format_parameters(parameters)
 
-        if parameters is None:
-            parameters_ = parameters
-        else:
-            parameters_ = parameters.values[np.newaxis, ...]
+        if parameters is not None:
+            parameters = parameters[self.parameter_labels]
 
-        return parameters, parameters_
+        return parameters
 
     def get_paradigm(self, paradigm):
             
@@ -525,7 +521,7 @@ class GaussianPRF(EncodingModel):
     def basis_predictions(self, paradigm=None, parameters=None):
 
         paradigm = self.get_paradigm(paradigm)
-        parameters = self._get_parameters(parameters)[0]
+        parameters = self._get_parameters(parameters)
 
         if hasattr(parameters, 'values'):
             parameters = parameters.values
@@ -793,15 +789,7 @@ class GaussianPRF2D(EncodingModel):
                  weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO, **kwargs):
 
         self.data = data
-        self.parameters = parameters
-
-        if isinstance(parameters, pd.DataFrame):
-            for par in self.parameter_labels:
-                assert(par in parameters.columns), 'Need {} in parameters'.format(par)
-            self.parameters = self.parameters[self.parameter_labels]
-        else:
-            self.parameters = pd.DataFrame(self.parameters, columns=self.parameter_labels)
-
+        self.parameters = format_parameters(parameters)
         self.weights = weights
         self.omega = omega
 
@@ -830,9 +818,11 @@ class GaussianPRF2D(EncodingModel):
             self.omega_chol = np.linalg.cholesky(omega)
 
 
-    def get_rf(self, as_frame=False, unpack=False):
+    def get_rf(self, as_frame=False, unpack=False, parameters=None):
 
         grid_coordinates = self.grid_coordinates.values
+
+        parameters = self._get_parameters(parameters)
         parameters = self.parameters.values[np.newaxis, ...]
 
         rf = self._get_rf(grid_coordinates, parameters).numpy()[0]
@@ -978,19 +968,16 @@ class GaussianPRF2DAngle(GaussianPRF2D):
                      weights=self.weights, omega=self.omega)
 
 
-class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
+class GaussianPRF2DWithHRF(HRFEncodingModel, GaussianPRF2D):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
                  positive_image_values_only=True,
-                 weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
+                 weights=None, hrf_model=None, flexible_hrf_parameters=False, verbosity=logging.INFO, **kwargs):
 
-        super().__init__(grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
-                        positive_image_values_only=positive_image_values_only,
-                         hrf_model=hrf_model, **kwargs)
-        if hrf_model is None:
-            raise ValueError('Please provide HRFModel!')
+        GaussianPRF2DAngle.__init__(self, grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
+                        positive_image_values_only=positive_image_values_only, **kwargs)
 
-        self.hrf_model = hrf_model
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model, flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
 
     def to_linear_model(self):
         return LinearModelWithBaselineHRF(self.paradigm, self.data,

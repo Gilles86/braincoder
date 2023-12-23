@@ -24,7 +24,8 @@ class WeightFitter(object):
         self.paradigm = self.model.get_paradigm(paradigm)
 
     def fit(self, alpha=0.0):
-        parameters, parameters_ = self.model._get_parameters(self.parameters)
+        parameters = self.model._get_parameters(self.parameters)
+        parameters_ = parameters.values[np.newaxis, ...]
         basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
 
         weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
@@ -80,10 +81,9 @@ class ParameterFitter(object):
             init_pars = self.model.get_init_pars(
                 data=y, paradigm=self.paradigm, confounds=confounds)
             print('using get_init_pars')
-        elif hasattr(init_pars, 'values'):
-            init_pars = init_pars.values.astype(np.float32)
 
-        init_pars = self.model._transform_parameters_backward(init_pars)
+        init_pars = self.model._get_parameters(init_pars)
+        init_pars = self.model._transform_parameters_backward(init_pars.values.astype(np.float32))
 
         ssq_data = tf.reduce_sum(
             (y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
