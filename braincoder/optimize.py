@@ -922,9 +922,9 @@ class StimulusFitter(object):
                 ll = likelihood(*untransformed_pars)[0]
                 cost = -ll
                 if l1_norm is not None:
-                    cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in trainable_vars])
+                    cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in untransformed_pars])
                 if l2_norm is not None:
-                    cost += l2_norm * tf.reduce_sum([tf.reduce_sum(par**2) for par in trainable_vars])
+                    cost += l2_norm * tf.reduce_sum([tf.reduce_sum(par**2) for par in untransformed_pars])
 
             gradients = tape.gradient(cost, trainable_vars)
             opt.apply_gradients(zip(gradients, trainable_vars))
