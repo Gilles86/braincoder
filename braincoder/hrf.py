@@ -1,31 +1,76 @@
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.math import sigmoid
+from .utils import logit
 
 class HRFModel(object):
+
+    def __init__(self, unique_hrfs=False):
+        self.set_unique_hrfs(unique_hrfs)
+
+    def set_unique_hrfs(self, unique_hrfs):
+        self.unique_hrfs = unique_hrfs
+
+        if self.unique_hrfs:
+            self._convolve = self._convolve_unique
+        else:
+            self._convolve = self._convolve_shared
+
     @tf.function
-    def convolve(self, timeseries):
+    def convolve(self, timeseries, **kwargs):
+
+        hrf = self.get_hrf(**kwargs)
 
         if self.oversampling == 1:
-            return self._convolve(timeseries, pad_size=len(self.hrf))
+            return self._convolve(timeseries, hrf=hrf)
 
         else:
             upsampled_timeseries = self._upsample(timeseries)
-            cts = self._convolve(upsampled_timeseries)
+            cts = self._convolve(upsampled_timeseries, hrf=hrf)
             return self._downsample(cts)
 
-    def _convolve(self, timeseries, pad_size):
-        pad_ = tf.tile(timeseries[:, :1, :], [1, pad_size, 1])
+    def _convolve_shared(self, timeseries, hrf):
+        # timeseries: returns: n_batch x n_timepoints x n_units
+        # hrf: n_hrf_timepoints
+        pad_ = tf.tile(timeseries[:, :1, :], [1, len(hrf), 1])
         timeseries_padded = tf.concat((pad_, timeseries), 1)
 
         cts = tf.nn.conv2d(timeseries_padded[:, :, :, tf.newaxis],
                            # THIS IS WEIRD TENSORFLOW BEHAVIOR
-                           self.hrf[:, tf.newaxis,
-                                    tf.newaxis, tf.newaxis][::-1],
+                           hrf[:, tf.newaxis,
+                                    :, tf.newaxis][::-1],
                            strides=[1, 1],
                            padding='VALID')[:, :, :, 0]
 
-        return cts[:, pad_size-len(self.hrf)+1:, :]
+        return cts[:, 1:, :]
+
+    def _convolve_unique(self, timeseries, hrf):
+        # timeseries: returns: n_batch x n_timepoints x n_units
+        # hrf: n_hrf_timepoints x n_units
+        print(timeseries.shape, hrf.shape)
+        n, m = timeseries.shape[1], timeseries.shape[2]
+
+        pad_ = tf.tile(timeseries[:, :1, :], [1, len(hrf), 1])
+        timeseries_padded = tf.concat((pad_, timeseries), 1)
+
+        # Reshape the timeseries data to 4D
+        timeseries_4d = tf.reshape(timeseries_padded, [1, 1, n+len(hrf), m])  # Shape: [batch, in_height, in_width, in_channels]
+
+        # Reshape the HRF filters to 4D
+        hrf_filters_4d = tf.reshape(hrf, [1, len(hrf), m, 1])  # Shape: [filter_height, filter_width, in_channels, channel_multiplier]
+
+        # Perform depthwise convolution
+        convolved = tf.nn.depthwise_conv2d(
+            input=timeseries_4d,
+            filter=tf.reverse(hrf_filters_4d, axis=[1]),
+            strides=[1, 1, 1, 1],
+            padding='VALID'
+        )
+
+        convolved = convolved[:, :, 1:, :]
+
+        return tf.reshape(convolved, [1, n, m])
 
     def _upsample(self, timeseries):
         new_length = len(timeseries) * self.oversampling
@@ -41,43 +86,77 @@ class HRFModel(object):
 
         return tf.squeeze(timeseries_downsampled)
 
+def gamma_pdf(t, a, d):
+    """Compute the gamma probability density function at t."""
+    return tf.pow(t, a - 1) * tf.exp(-t / d) / (tf.pow(d, a) * tf.exp(tf.math.lgamma(a)))
+
+def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6):
+    """Compute the SPM canonical HRF at time points t."""
+    hrf = gamma_pdf(t, a1, d1) - c * gamma_pdf(t, a2, d2)
+    return hrf
 
 class SPMHRFModel(HRFModel):
 
-    def __init__(self, tr, oversampling=1, time_length=32., onset=0.,
-                 delay=6, undershoot=16., dispersion=1.,
+    parameter_labels = ['hrf_delay', 'hrf_dispersion']
+    n_parameters = 2
+
+    def __init__(self, tr, unique_hrfs=False, oversampling=1, time_length=32., onset=0.,
+                 delay=6., undershoot=16., dispersion=1.,
                  u_dispersion=1., ratio=0.167):
 
         self.tr = tr
         self.oversampling = oversampling
         self.time_length = time_length
         self.onset = onset
-        self.delay = delay
+        self.hrf_delay = delay
         self.undershoot = undershoot
-        self.dipsersion = dispersion
+        self.hrf_dispersion = dispersion
         self.u_dispersion = u_dispersion
         self.ratio = ratio
 
-        dt = tr / oversampling
-        time_stamps = np.linspace(0, time_length,
-                                  np.rint(float(time_length) / dt).astype(np.int32))
-        time_stamps -= onset
+        self.dt = self.tr / self.oversampling
+        self.time_stamps = np.linspace(0, self.time_length,
+                                  np.rint(float(self.time_length) / self.dt).astype(np.int32)).astype(np.float32)
+        self.time_stamps -= self.onset
 
-        g1 = tfp.distributions.Gamma(concentration=delay / dispersion, rate=1.)
-        shift = dt / dispersion
-        over = g1.prob(time_stamps - shift)
-        over = tf.where(tf.math.is_nan(over), tf.zeros_like(over), over)
+        # time x n_hrfs
+        self.time_stamps = self.time_stamps[:, np.newaxis]
 
-        g2 = tfp.distributions.Gamma(
-            concentration=undershoot / u_dispersion, rate=1.)
-        shift_u = dt / u_dispersion
-        under = g2.prob(time_stamps - shift_u)
-        under = tf.where(tf.math.is_nan(under), tf.zeros_like(under), under)
+        super().__init__(unique_hrfs=unique_hrfs)
 
-        self.hrf = over - ratio * under
+    def get_hrf(self, hrf_delay=None, hrf_dispersion=None):
 
-        self.hrf = self.hrf / tf.reduce_sum(self.hrf)
+        if hrf_delay is None:
+            hrf_delay = self.hrf_delay
 
+        if hrf_dispersion is None:
+            hrf_dispersion = self.hrf_dispersion
+
+        return spm_hrf(self.time_stamps, a1=hrf_delay, d1=hrf_dispersion,
+                             a2=self.undershoot, d2=self.u_dispersion, c=self.ratio)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        delay = sigmoid(parameters[:, 0][:, tf.newaxis])
+        dispersion = sigmoid(parameters[:, 1][:, tf.newaxis])
+
+        # Scale delay to be between [1.0, 10.0]
+        delay = 9.0 * delay + 1.0
+
+        # Scale dispersion to be between [0.75, 3.0]
+        dispersion = 2.25 * dispersion + 0.75
+
+        return tf.concat([delay, dispersion], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        delay = parameters[:, 0][:, tf.newaxis]
+        delay = logit((delay - 1.0) / 9.0)
+
+        dispersion = parameters[:, 1][:, tf.newaxis]
+        dispersion = logit((dispersion - 0.75) / 2.25)
+
+        return tf.concat([delay, dispersion], axis=1)
 
 class CustomHRFModel(HRFModel):
 

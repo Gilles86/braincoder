@@ -33,6 +33,9 @@ class EncodingModel(object):
         if omega is not None:
             self.omega_chol = np.linalg.cholesky(omega)
 
+    def get_parameter_labels(self):
+        return self.parameter_labels
+
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
 
@@ -432,25 +435,41 @@ class EncodingModel(object):
 
         return paradigm
 
-
-class HRFEncodingModel(EncodingModel):
+class HRFEncodingModel(object):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
+                    weights=None, omega=None, hrf_model=None, verbosity=logging.INFO,
+                    flexible_hrf_parameters=False, **kwargs):
 
         if hrf_model is None:
             raise ValueError('Please provide HRFModel!')
 
         self.hrf_model = hrf_model
 
-        super().__init__(paradigm, data, parameters, weights, omega, verbosity, **kwargs)
+        if flexible_hrf_parameters != hrf_model.unique_hrfs:
+            hrf_model.set_unique_hrfs(flexible_hrf_parameters)
+
+        if flexible_hrf_parameters:
+            self.flexible_hrf_parameters = True
+            self.parameter_labels = self.get_parameter_labels() + self.hrf_model.parameter_labels
+        else:
+            self.flexible_hrf_parameters = False
+
+        self.parameters = self._get_parameters(parameters)
+
 
     @tf.function
     def _predict(self, paradigm, parameters, weights):
         pre_convolve = EncodingModel._predict(
             self, paradigm, parameters, weights)
 
-        return self.hrf_model.convolve(pre_convolve)
+        kwargs = {}
+        # parameters: n_batch x n_units x n_parameters
+        if self.flexible_hrf_parameters:
+            for ix, label in enumerate(self.hrf_model.parameter_labels):
+                kwargs[label] = parameters[:, :, -len(self.hrf_model.parameter_labels) + ix]
+
+        return self.hrf_model.convolve(pre_convolve, **kwargs)
 
     @tf.function
     def _predict_no_hrf(self, paradigm, parameters, weights):
@@ -882,8 +901,15 @@ class GaussianPRF2D(EncodingModel):
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis]], axis=1)
 
-    def get_pseudoWWT(self):
-        rf = self.get_rf()
+    def get_pseudoWWT(self, remove_baseline=True):
+
+        parameters = self._get_parameters().copy()
+        
+        if remove_baseline:
+            parameters['baseline'] = np.float32(0.0)
+
+        rf = self.get_rf(parameters=parameters.astype(np.float32))
+
         return rf.dot(rf.T)
 
     def to_linear_model(self):
@@ -972,7 +998,33 @@ class GaussianPRF2DWithHRF(GaussianPRF2D, HRFEncodingModel):
                                               'baseline']], weights=self.get_rf().T,
                                           hrf_model=self.hrf_model)
 
-class GaussianPRF2DAngleWithHRF(GaussianPRF2DAngle, HRFEncodingModel):
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+
+            encoding_pars = GaussianPRF2D._transform_parameters_forward(self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars:])
+            
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return GaussianPRF2D._transform_parameters_forward(self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+
+            encoding_pars = GaussianPRF2D._transform_parameters_backward(self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(parameters[:, -n_hrf_pars:])
+            
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return GaussianPRF2D._transform_parameters_backward(self, parameters)
+
+class GaussianPRF2DAngleWithHRF(HRFEncodingModel, GaussianPRF2DAngle):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
                  weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
