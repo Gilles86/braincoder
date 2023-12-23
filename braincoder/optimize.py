@@ -170,7 +170,7 @@ class ParameterFitter(object):
             if progressbar:
                 pbar = tqdm(pbar)
 
-            best_r2 = tf.zeros(y.shape[1])
+            best_r2 = tf.ones(y.shape[1]) * -1e3
             best_parameters = tf.zeros(init_pars.shape)
 
             for step in pbar:
