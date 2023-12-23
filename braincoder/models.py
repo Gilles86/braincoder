@@ -19,9 +19,6 @@ class EncodingModel(object):
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
 
-        if (self.parameter_labels is not None) & (type(parameters) is pd.DataFrame):
-            parameters = parameters[self.parameter_labels]
-
         self.stimulus = self._get_stimulus()
         self.paradigm = self.stimulus.clean_paradigm(paradigm)
 
@@ -62,7 +59,8 @@ class EncodingModel(object):
         paradigm = self.get_paradigm(paradigm)
         paradigm_ = self._get_paradigm(paradigm)[np.newaxis, ...]
 
-        parameters, parameters_ = self._get_parameters(parameters)
+        parameters = self._get_parameters(parameters)
+        parameters_ = parameters.values[np.newaxis, ...]
 
         predictions = self._predict(paradigm_, parameters_, weights_)[0]
 
@@ -129,14 +127,6 @@ class EncodingModel(object):
             self._data = None
         else:
             self._data = format_data(data)
-
-    @property
-    def parameters(self):
-        return self._parameters
-
-    @parameters.setter
-    def parameters(self, parameters):
-        self._parameters = format_parameters(parameters, self.parameter_labels)
 
     @property
     def weights(self):
@@ -256,6 +246,7 @@ class EncodingModel(object):
                               omega,
                               dof,
                               logp=True,
+
                               normalize=False).numpy()
 
         
@@ -470,18 +461,6 @@ class HRFEncodingModel(object):
     @tf.function
     def _predict_no_hrf(self, paradigm, parameters, weights):
         return EncodingModel._predict(self, paradigm, parameters, weights)
-
-    def get_init_pars(self, data, paradigm, confounds=None):
-
-        paradigm_shift = tf.cast(tf.math.round(
-            self.hrf_model.delay / self.hrf_model.tr), tf.int32)
-
-        padding = [[paradigm_shift, 0], [0, 0]]
-
-        paradigm = tf.pad(self.stimulus._generate_stimulus(paradigm.values), padding)[:-paradigm_shift]
-
-        return super().get_init_pars(data, paradigm, confounds)
-
 
 class GaussianPRF(EncodingModel):
 
@@ -947,10 +926,6 @@ class GaussianPRF2DAngle(GaussianPRF2D):
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis]], axis=1)
 
-    def get_pseudoWWT(self):
-        rf = self.get_rf()
-        return rf.dot(rf.T)
-
     def to_linear_model(self):
         return LinearModelWithBaseline(self.paradigm, self.data, self.parameters[['baseline']], weights=self.get_rf().T)
 
@@ -1041,7 +1016,7 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
     # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
     # srf factor is limited to be above 1
     parameter_labels = ['x', 'y', 'sd', 'baseline',
-                        'amplitude', 'srf_amplitude', 'srf_factor']
+                        'amplitude', 'srf_amplitude', 'srf_size']
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
@@ -1067,10 +1042,6 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
     @tf.function
     def _get_rf(self, grid_coordinates, parameters):
-
-        # n_batches x n_populations x  n_grid_spaces
-        x = grid_coordinates[:, 0][tf.newaxis, tf.newaxis, :]
-        y = grid_coordinates[:, 1][tf.newaxis, tf.newaxis, :]
 
         # n_batches x n_populations x n_grid_spaces (broadcast)
         mu_x = parameters[:, :, 0, tf.newaxis]
