@@ -952,21 +952,61 @@ class StimulusFitter(object):
                                     dtype=np.float32)
         return fitted_pars
 
-    def build_likelihood(self):
+    def build_likelihood(self, use_batch_dimension=False):
 
         data = self.data.values[tf.newaxis, ...]
         parameters = self.model.parameters.values[tf.newaxis, ...]
         weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
         omega_chol = np.linalg.cholesky(self.model.omega)
 
-        @tf.function
-        def likelihood(*pars):
+        if use_batch_dimension:
+            @tf.function
+            def likelihood(*pars):
 
-            pars = tf.stack(pars, axis=1)
-            stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
-            ll = self.model._likelihood(
-                stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                pars = tf.stack(pars, axis=1)
+                stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
+                ll = self.model._likelihood(
+                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
 
-            return tf.reduce_sum(ll, 1)
+                return ll
+
+        else:
+            @tf.function
+            def likelihood(*pars):
+
+                pars = tf.stack(pars, axis=1)
+                stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
+                ll = self.model._likelihood(
+                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+
+                return tf.reduce_sum(ll, 1)
 
         return likelihood
+
+
+    def fit_grid(self, *pars):
+
+        assert(len(pars) == len(self.stimulus.dimension_labels)), 'Need to provide values for all stimulus dimensions: {self.stimulus.dimension_labels}'
+
+        pars = [np.asarray(par).astype(np.float32) for par in pars]
+
+        parameters = dict(zip(self.stimulus.dimension_labels, pars))
+
+        # grid length x n_pars
+        grid = pd.MultiIndex.from_product(
+            parameters.values(), names=parameters.keys()).to_frame(index=False).astype(np.float32)
+
+        logging.info(f'Built grid of {len(grid)} possible stimuli...')
+
+        likelihood = self.build_likelihood(use_batch_dimension=True)
+
+        stimulus = self.stimulus._generate_stimulus(grid.values)
+
+        ll = likelihood(*grid.values.T)
+        ll = pd.DataFrame(likelihood(*grid.values.T).numpy().T, columns=pd.MultiIndex.from_frame(
+            grid), index=self.data.index)
+
+        best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
+        best_pars.index = self.data.index
+
+        return best_pars
