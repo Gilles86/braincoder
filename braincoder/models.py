@@ -1083,20 +1083,164 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
         standard_prf = super()._get_rf(grid_coordinates, parameters)
 
-        srf = tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*(srf_size*sd)**2)
-                     ) * amplitude / srf_size**2
+        srf_pars = tf.concat([mu_x, mu_y, sd*srf_size, tf.zeros_like(mu_x), srf_amplitude*amplitude*srf_size], axis=2)
+        print(parameters.shape, srf_pars.shape)
+        sprf = super()._get_rf(grid_coordinates, srf_pars)
 
-        return standard_prf - srf_amplitude * srf
+        return standard_prf - sprf
 
 
-class DifferenceOfGaussiansPRF2DWithHRF(DifferenceOfGaussiansPRF2D, HRFEncodingModel):
+class DifferenceOfGaussiansPRF2DWithHRF(HRFEncodingModel, DifferenceOfGaussiansPRF2D):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
-                 weights=None, hrf_model=None, verbosity=logging.INFO):
+                 positive_image_values_only=True,
+                 weights=None, hrf_model=None, flexible_hrf_parameters=False, verbosity=logging.INFO, **kwargs):
 
-        super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
-                         hrf_model=hrf_model)
+        DifferenceOfGaussiansPRF2D.__init__(self, grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
+                        positive_image_values_only=positive_image_values_only, **kwargs)
 
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model, flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+
+            encoding_pars = DifferenceOfGaussiansPRF2D._transform_parameters_forward(self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars:])
+            
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DifferenceOfGaussiansPRF2D._transform_parameters_forward(self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+
+            encoding_pars = DifferenceOfGaussiansPRF2D._transform_parameters_backward(self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(parameters[:, -n_hrf_pars:])
+            
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DifferenceOfGaussiansPRF2D._transform_parameters_backward(self, parameters)
+
+class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
+    # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
+    # srf factor is limited to be above 1
+    parameter_labels = ['x', 'y', 'sd', 'baseline',
+                        'amplitude', 'srf_amplitude', 'srf_size', 'neural_baseline', 'surround_baseline']
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          parameters[:, 1][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 5][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1,
+                          parameters[:, 7][:,tf.newaxis],
+                          parameters[:, 8][:,tf.newaxis],
+                          ], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        return tf.concat([parameters[:, 0][:, tf.newaxis],
+                          parameters[:, 1][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 5][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis] - 1),
+                          parameters[:, 7][:, tf.newaxis],
+                          parameters[:, 8][:, tf.newaxis]], axis=1)
+
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # paradigm: n_batches x n_timepoints x n_stimulus_features
+        # parameters:: n_batches x n_voxels x n_parameters
+
+        # norm: n_batches x n_timepoints x n_voxels
+
+        # output: n_batches x n_timepoints x n_voxels
+
+
+        mu_x = parameters[:, :, 0, tf.newaxis]
+        mu_y = parameters[:, :, 1, tf.newaxis]
+        sd = parameters[:, :, 2, tf.newaxis]
+        baseline = parameters[tf.newaxis, :, :, 3]
+        amplitude = parameters[:, :, 4, tf.newaxis]
+        rf_parameters = tf.concat([mu_x, mu_y, sd, tf.zeros_like(mu_x), amplitude], axis=2)
+        rf = self._get_rf(self.grid_coordinates, rf_parameters)
+
+        srf_amplitude = parameters[:, :, 5, tf.newaxis]
+        srf_size = parameters[:, :, 6, tf.newaxis]
+
+        srf_parameters = tf.concat([mu_x, mu_y, sd*srf_size, tf.zeros_like(mu_x), srf_amplitude*amplitude*srf_size], axis=2)
+
+        srf = self._get_rf(self.grid_coordinates, srf_parameters)
+
+        neural_baseline = parameters[tf.newaxis, :, :, 7]
+        surround_baseline = parameters[tf.newaxis, :, :, 8]
+
+        # [1,150,2365], [1,2365,1]
+        neural_activation = tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :] + neural_baseline
+        normalization = tf.tensordot(paradigm, srf, (2, 2))[:, :, 0, :] + surround_baseline
+
+        normalized_activation = (neural_activation / normalization) - (surround_baseline / neural_baseline)
+
+        if isinstance(self, DivisiveNormalizationGaussianPRF2D):
+            normalized_activation += baseline
+
+        return normalized_activation
+
+class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormalizationGaussianPRF2D):
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
+                 positive_image_values_only=True,
+                 weights=None, hrf_model=None, flexible_hrf_parameters=False, verbosity=logging.INFO, **kwargs):
+
+        DivisiveNormalizationGaussianPRF2D.__init__(self, grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
+                        positive_image_values_only=positive_image_values_only, **kwargs)
+
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model, flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+
+            encoding_pars = DivisiveNormalizationGaussianPRF2D._transform_parameters_forward(self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars:])
+            
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DivisiveNormalizationGaussianPRF2D._transform_parameters_forward(self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+
+            encoding_pars = DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(parameters[:, -n_hrf_pars:])
+            
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters)
+
+
+    def _predict(self, paradigm, parameters, weights):
+        baseline = parameters[tf.newaxis, :, :, 3]
+        return HRFEncodingModel._predict(self, paradigm, parameters, weights) + baseline
 
 class DiscreteModel(EncodingModel):
 
