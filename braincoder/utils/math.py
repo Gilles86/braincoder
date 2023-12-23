@@ -12,6 +12,8 @@ def logit(x):
     """ Computes the logit function, i.e. the logistic sigmoid inverse. """
     return tf.clip_by_value(-tf.math.log(1. / x - 1.), -1e12, 1e12)
 
+def logistic_transfer(x, lower_bound, upper_bound):
+    return lower_bound + (upper_bound - lower_bound) / (1 + tf.exp(-x))
 
 @tf.function
 def log2(x):
