@@ -77,8 +77,8 @@ Analyze PRF locations
 sns.relplot(x='x', y='y', hue='r2', data=pars.join(fitted_r2.to_frame('r2')), size='sd', sizes=(10, 100), palette='viridis')
 plt.title('PRF locations')
 
-# Now we get the 250 best voxels:
-best_voxels = fitted_r2.sort_values(ascending=False).iloc[:250].index
+# Now we get the 250 best voxels with reasonable parameters
+best_voxels = fitted_r2.loc[pars['sd'] > 0.5].sort_values(ascending=False).iloc[:250].index
 
 plt.figure()
 sns.relplot(x='x', y='y', hue='r2', data=pars.loc[best_voxels].join(fitted_r2.to_frame('r2')), size='sd', sizes=(10, 100), palette='viridis')
@@ -117,7 +117,7 @@ stim_fitter = StimulusFitter(data.loc[:, best_voxels], model, omega)
 
 # Legacy Adam is a bit faster than the default Adam optimizer on M1
 # Learning rate of 1.0 is a bit high, but works well here
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=200, max_n_iterations=500, learning_rate=.1)
+reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=200, max_n_iterations=1000, learning_rate=.1)
 
 def play_reconstruction(reconstructed_stimulus):
 

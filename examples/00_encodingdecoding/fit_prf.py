@@ -250,7 +250,7 @@ data = load_szinte2024(resize_factor=2.5)
 grid_coordinates = data['grid_coordinates']
 paradigm = data['stimulus']
 
-best_voxels_gauss = r2_gauss_gd.sort_values(ascending=False).index[:200]
+best_voxels_gauss = r2_gauss_gd[pars_gauss_gd['sd'] > 0.5].sort_values(ascending=False).index[:200]
 
 model_gauss = GaussianPRF2DWithHRF(data=d[best_voxels_gauss],
                                    hrf_model=hrf_model,
@@ -268,7 +268,7 @@ omega_gauss, _ = resid_fitter_gauss.fit()
 
 
 # %%
-best_voxels_dn = r2_dn.sort_values(ascending=False).index[:200]
+best_voxels_dn = r2_dn[pars_dn['sd'] > 0.5].sort_values(ascending=False).index[:200]
 
 model_dn = DivisiveNormalizationGaussianPRF2DWithHRF(data=d[best_voxels_dn], 
                                               hrf_model=hrf_model,
@@ -285,7 +285,7 @@ omega_dn, _ = resid_fitter_dn.fit()
 # ===============================
 # Now we can decode the stimulus from the fMRI responses
 stim_fitter_gauss = StimulusFitter(model=model_gauss, data=d.loc[:, best_voxels_gauss], omega=omega_gauss)
-stim_gauss = stim_fitter_gauss.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=5000)
+stim_gauss = stim_fitter_gauss.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=1000)
 
 # %%
 from matplotlib.animation import FuncAnimation
@@ -316,7 +316,7 @@ play_reconstruction(stim_gauss)
 # Decoded stimulus: DN model
 # ==========================
 stim_fitter_dn = StimulusFitter(model=model_dn, data=d.loc[:, best_voxels_dn], omega=omega_dn)
-stim_dn = stim_fitter_dn.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=5000)
+stim_dn = stim_fitter_dn.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=1000)
 
 # %%
 play_reconstruction(stim_dn)
