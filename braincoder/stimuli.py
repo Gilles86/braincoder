@@ -47,7 +47,7 @@ class Stimulus(object):
         return self.clean_paradigm(paradigm)
 
     def generate_empty_stimulus(self, size):
-        stimulus = np.ones((size, len(self.dimension_labels))) * 1e-6
+        stimulus = np.ones((size, len(self.dimension_labels)), dtype=np.float32) * 1e-6
 
         if self.bijectors is not None:
 
@@ -144,7 +144,7 @@ class ImageStimulus(Stimulus):
         return paradigm
 
     def generate_empty_stimulus(self, size):
-        return np.ones((size, len(self.dimension_labels))) * 1e-6
+        return np.ones((size, len(self.dimension_labels)), dtype=np.float32) * 1e-6
 
 class CustomStimulusFitter(StimulusFitter):
 
