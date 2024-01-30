@@ -13,7 +13,6 @@ def load_szinte2024(resize_factor=1., best_voxels=None):
     data['grid_coordinates'] = pd.read_csv(pkg_resources.resource_stream(__name__, '../data/szinte2024/grid_coordinates.tsv'), sep='\t').astype(np.float32)
 
     prf_pars = pd.read_csv(pkg_resources.resource_stream(__name__, '../data/szinte2024/gauss_parameters.tsv'), index_col='source', sep='\t').astype(np.float32)
-    print(prf_pars)
 
     if resize_factor != 1.:
         data['stimulus'] = np.array([ndimage.zoom(d, 1./resize_factor) for d in data['stimulus']]).astype(np.float32)
