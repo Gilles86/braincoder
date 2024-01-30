@@ -818,7 +818,7 @@ class ResidualFitter(object):
 
 class StimulusFitter(object):
 
-    def __init__(self, data, model, omega, parameters=None, weights=None, dof=None, stimulus=None):
+    def __init__(self, data, model, omega, parameters=None, weights=None, dof=None, stimulus=None, mask=None):
 
         self.data = format_data(data)
         self.model = model
@@ -839,6 +839,7 @@ class StimulusFitter(object):
     def fit(self, init_pars=None, fit_vars=None, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6, learning_rate=0.01, progressbar=True,
             l2_norm=None,
             l1_norm=None,
+            mask=None,
             legacy_adam=False):
 
         if progressbar:
@@ -847,15 +848,6 @@ class StimulusFitter(object):
             pbar = range(max_n_iterations)
 
         self.costs = np.ones(max_n_iterations) * 1e12
-
-        if isinstance(self.data, pd.DataFrame):
-            data_ = self.data.values[np.newaxis, :, :]
-        else:
-            data_ = self.data[np.newaxis, :, :]
-
-        parameters = self.model.parameters.values[np.newaxis, :, :]
-        weights = None if self.model.weights is None else self.model.weights.values[
-            np.newaxis, :, :]
 
         if isinstance(init_pars, pd.DataFrame):
             init_pars = init_pars.values
@@ -866,7 +858,25 @@ class StimulusFitter(object):
             raise ValueError(
                 'init_pars should have the same number of rows as data')
 
-        init_pars = np.asarray(init_pars).astype(np.float32)
+        if mask is not None:
+
+            if mask.ndim == 1:
+                assert(len(mask) == init_pars.shape[1]), 'Mask should have the same length as the number of stimulus dimensions'
+                mask = np.tile(mask, (len(self.data), 1))
+            elif mask.ndim == 2:
+                mask = mask.reshape(-1)
+                assert(len(mask) == init_pars.shape), 'Mask should have the same shape as number of stimulus dimensions'
+                mask = np.tile(mask.reshape(-1), (len(self.data), 1))
+            elif mask.ndim == 3:
+                assert(len(mask) == self.data.shape[0]), 'Mask should have the same length as the number of datapoints'
+                mask = mask.reshape(len(self.data), -1)
+                assert(mask.shape[1] == init_pars.shape[1]), 'Mask should have the same shape as number of stimulus dimensions'
+            
+            mask_ix = np.array(np.where(mask)).T
+            init_pars = init_pars[mask]
+        
+        else:
+            init_pars = np.asarray(init_pars)
 
         model_vars = []
         trainable_vars = []
@@ -882,6 +892,9 @@ class StimulusFitter(object):
             trainable_vars.append(tf_var)
 
         else:
+            if mask is not None:
+                raise NotImplementedError('Masking not implemented for multiple bijectors')
+
             if fit_vars is None:
                 fit_vars = self.stimulus.dimension_labels
 
@@ -900,7 +913,10 @@ class StimulusFitter(object):
                 if label in fit_vars:
                     trainable_vars.append(tf_var)
 
-        likelihood = self.build_likelihood()
+        if mask is None:
+            likelihood = self.build_likelihood()
+        else:
+            likelihood = self.build_likelihood(use_mask=True, mask_ix=mask_ix)
 
         pbar = tqdm(range(max_n_iterations))
         self.costs = np.ones(max_n_iterations) * 1e12
@@ -919,7 +935,11 @@ class StimulusFitter(object):
                     untransformed_pars = [bijector.forward(
                         par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
 
-                ll = likelihood(*untransformed_pars)[0]
+                if mask is None:
+                    ll = likelihood(*untransformed_pars)[0]
+                else:
+                    ll = likelihood(untransformed_pars)[0]
+
                 cost = -ll
                 if l1_norm is not None:
                     cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in untransformed_pars])
@@ -944,42 +964,68 @@ class StimulusFitter(object):
                         if (cost / previous_cost) < 1 - rtol:
                             break
 
-        fitted_pars_ = np.stack(
-            [par.numpy() for par in untransformed_pars], axis=1)
+        if mask is None:
+            fitted_pars_ = np.stack(
+                [par.numpy() for par in untransformed_pars], axis=1)
+        else:
+            fitted_pars_ = self.stimulus.generate_empty_stimulus(len(self.data))
+            fitted_pars_[mask] = untransformed_pars.numpy()
+
 
         fitted_pars = pd.DataFrame(fitted_pars_, columns=self.stimulus.dimension_labels,
                                     index=self.data.index,
                                     dtype=np.float32)
         return fitted_pars
 
-    def build_likelihood(self, use_batch_dimension=False):
+    def build_likelihood(self, use_batch_dimension=False, use_mask=False, mask_ix=None):
 
         data = self.data.values[tf.newaxis, ...]
         parameters = self.model.parameters.values[tf.newaxis, ...]
         weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
         omega_chol = np.linalg.cholesky(self.model.omega)
 
-        if use_batch_dimension:
-            @tf.function
-            def likelihood(*pars):
+        if use_mask:
+            if use_batch_dimension:
+                return NotImplementedError('Masking not implemented for use_batch_dimension=True')
+            else:
 
-                pars = tf.stack(pars, axis=1)
-                stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
-                ll = self.model._likelihood(
-                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                assert(isinstance(self.stimulus, ImageStimulus)), 'Masking only implemented for ImageStimulus'
 
-                return ll
+                empty_stimulus = self.stimulus.generate_empty_stimulus(len(self.data))
+
+                @tf.function
+                def likelihood(pars):
+
+                    pars = tf.tensor_scatter_nd_add(empty_stimulus, mask_ix, pars)
+
+                    stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
+                    ll = self.model._likelihood(
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+
+                    return tf.reduce_sum(ll, 1)
 
         else:
-            @tf.function
-            def likelihood(*pars):
+            if use_batch_dimension:
+                @tf.function
+                def likelihood(*pars):
 
-                pars = tf.stack(pars, axis=1)
-                stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
-                ll = self.model._likelihood(
-                    stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                    pars = tf.stack(pars, axis=0)
+                    stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
+                    ll = self.model._likelihood(
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
 
-                return tf.reduce_sum(ll, 1)
+                    return ll
+
+            else:
+                @tf.function
+                def likelihood(*pars):
+
+                    pars = tf.stack(pars, axis=1)
+                    stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
+                    ll = self.model._likelihood(
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+
+                    return tf.reduce_sum(ll, 1)
 
         return likelihood
 
