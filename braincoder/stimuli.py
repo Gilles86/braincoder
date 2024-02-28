@@ -19,11 +19,15 @@ class Stimulus(object):
 
         if (not isinstance(paradigm, pd.DataFrame)) and (paradigm is not None):
 
-            if paradigm.ndim == 1:
-                paradigm = paradigm[:, np.newaxis]
+            if isinstance(paradigm, pd.Series):
+                paradigm = paradigm.to_frame()
+                paradigm.columns = self.dimension_labels
+            else:
+                if paradigm.ndim == 1:
+                    paradigm = paradigm[:, np.newaxis]
 
-            paradigm = pd.DataFrame(paradigm, columns=pd.Index(self.dimension_labels, name='stimulus dimensions'),
-            index=pd.Index(np.arange(len(paradigm)), name='frame')).astype(np.float32)
+                paradigm = pd.DataFrame(paradigm, columns=pd.Index(self.dimension_labels, name='stimulus dimensions'),
+                index=pd.Index(np.arange(len(paradigm)), name='frame')).astype(np.float32)
 
         if isinstance(paradigm, pd.DataFrame):
             paradigm = paradigm.astype(np.float32)
