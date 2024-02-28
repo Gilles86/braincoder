@@ -209,7 +209,7 @@ class EncodingModel(object):
 
         return likelihood
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None):
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True):
 
         if hasattr(data, 'values'):
             time_index = data.index
@@ -266,7 +266,12 @@ class EncodingModel(object):
         # ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
         # ll = ll.apply(lambda d: d/d.sum(), axis=1)
 
-        return np.exp(ll)
+        ll = np.exp(ll)
+
+        if normalize:
+            ll /= np.trapz(ll, ll.columns)[:, np.newaxis]
+
+        return ll
 
     def apply_mask(self, mask):
 
