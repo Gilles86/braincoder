@@ -714,11 +714,18 @@ class LogGaussianPRF(GaussianPRF):
                           tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
     @tf.function
-    def _basis_predictions(self, paradigm, parameters):
+    def _basis_predictions_without_amplitude(self, paradigm, parameters):
         return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
+
+    @tf.function
+    def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
 
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
     pass
