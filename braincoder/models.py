@@ -24,6 +24,10 @@ class EncodingModel(object):
 
         self.data = data
         self.parameters = format_parameters(parameters)
+
+        if self.parameter_labels is not None:
+            self.parameters = self.parameters[self.parameter_labels]
+
         self.weights = weights
         self.omega = omega
 
