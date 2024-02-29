@@ -263,10 +263,10 @@ class EncodingModel(object):
             ll = pd.DataFrame(ll.T, index=time_index, columns=index)
 
         # Normalize, working from log likelihoods (otherwise we get numerical issues)
-        # ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
+        ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
         # ll = ll.apply(lambda d: d/d.sum(), axis=1)
 
-        ll = np.exp(ll)
+        # ll = np.exp(ll)
 
         if normalize:
             ll /= np.trapz(ll, ll.columns)[:, np.newaxis]
