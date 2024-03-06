@@ -14,7 +14,7 @@ and Gabor orientations define **determinsitic one-to-one mapping** from
 
 .. math::
 
-   f(x; \theta): s \mapsto x
+   f(s; \theta): s \mapsto x
 
 
 Here:
@@ -31,7 +31,7 @@ of a 1D Gaussian distribution, centered at :math:`\mu` and with dispersion :math
 :math:`x`, multiplied by an amplitude :math:`a`: and added to a baseline :math:`b`:
 
 .. math::
-   f(x; \mu, \sigma, a, b) = a \cdot \mathcal{N}(x; \mu, \sigma) + b
+   f(s; \mu, \sigma, a, b) = a \cdot \mathcal{N}(s; \mu, \sigma) + b
 
 
 Simulate data
