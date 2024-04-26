@@ -5,8 +5,8 @@ Lesson 3: Building the likelihood (by fitting the covariance matrix)
 ====================================================================
 
 For many neuroscientific questions, we are interested in the relationship between neural codes
-and objective stimulus featuers. For example, we might want to know how the brain represents
-numbers, orientatoins, or spatial positions, and how these representatios change as a function
+and objective stimulus features. For example, we might want to know how the brain represents
+numbers, orientations, or spatial positions, and how these representations change as a function
 of task demands, attention, or prior expectations.
 
 One particular powerful approach is to *decode* stimulus features from neural data
@@ -15,12 +15,12 @@ in a Bayesian fashion (e.g., van Bergen et al., 2015; Baretto-Garcia et al, 2023
 Inverting the encoding models
 #############################
 
-Here, we show how we go from a **determistic** forward model (i.e., a model that predicts neural
+Here, we show how we go from a **deterministic** forward model (i.e., a model that predicts neural
 responses from stimulus features) to a **probabilistic** inverse model (i.e., a model that 
 predicts stimulus features from neural responses). We will do so using a **Bayesian inversion scheme**:
 
 .. math::
-    p(s | x; \theta) = \frac{p(x | s; \theta) p(s)}{p(x)}
+    p(s | x; \theta) = \frac{p(x | s; \theta) p(s)}{p(x; \theta)}
 
 where :math:`s` is a n-dimensional point in stimulus space, and :math:`x` is a n-dimensional
 activation pattern in neural space, and :math:`p(s | x; \theta)` is the posterior probability of
@@ -30,13 +30,15 @@ A multivariate likelihood function
 ##################################
 
 The crucial element that is still lacking for this Bayesian inversion scheme is a **likelihood function**.
-Note stanard encoding models do not have a likelihood function, because they are deterministic
-(:math:`f(x;\theta): s \mapsto x`).
-They give us the average neural respons to a certain stimulus, but they don't tell us how likely a certain 
+Note standard encoding models do not have a likelihood function, because they are deterministic
+(:math:`f(s;\theta): s \mapsto x`).
+They give us the average neural response to a certain stimulus, but they don't tell us how likely a certain 
 neural response is, given a certain stimulus.
 However, we can easily derive a likelihood function from the forward model by adding Gaussian noise:
 
 .. math::
+    x = f(s; \theta) + \epsilon
+..
     p(x | s; \theta) = f(s; \theta) + \epsilon
 
 where :math:`\epsilon` is a *multivariate Normal distribution*
@@ -59,9 +61,9 @@ and I is the identity matrix.
 However, if there *is* substantial covariance between the noise terms of different neural
 dimensions (i.e., voxels), this could have severe consequences for the decoding performance.
 In particular, the posterior might be overly confident in its predictions, assuming
-independt sources of information that are not. Under some circumstances, the mean posterior,
+independent sources of information that are not. Under some circumstances, the mean posterior,
 the point estimate of the decoded stimulus, can also be affected.
-Van Bergen et al. (2015, 2017) showed that modeling some of the covariance is ineed crucial
+Van Bergen et al. (2015, 2017) showed that modeling some of the covariance is indeed crucial
 for making correct inferences about neural data.
 However, we generally have a large number of voxels and very limited data.
 Therefore, estimating the full covariance
@@ -109,7 +111,7 @@ The complete formula for the covariance matrix is thus:
 .. math::
     \Sigma = \rho \tau^T\tau + (1-\rho) \tau^T\tau I  + \sigma^2 W^TW
 
-Thus, the :math:`n \times n`covariance-matrix :math:`\Sigma` is now described by 
+Thus, the :math:`n \times n` covariance-matrix :math:`\Sigma` is now described by 
 :math:`n + 2` parameters (the :math:`\tau` noise vector of length
 :math:`n` plus :math:`\rho` and :math:`\sigma`.
 
@@ -166,9 +168,9 @@ Summary
 
 In this lesson we have seen:
  * We need to add a noise model to the classical encoding models :math:`f(s, \theta): s \mapsto x` to get a **likelihood function** which we can invert.
- * Conctretely, we add a multivariate Gaussian noise model to the deterministic predictions of the encodig models
+ * Concretely, we add a multivariate Gaussian noise model to the deterministic predictions of the encoding models
  * We need a noise covariance matrix :math:`\Sigma` (or ``omega``) for this to work.
  * We use a regularised estimate of the covariance matrix.
 
- In the:ref:`next lesson<tutorial_lesson4>`, we will further explore how we can use a likelihood
+ In the :ref:`next lesson<tutorial_lesson4>`, we will further explore how we can use a likelihood
  function to map from neural responses to stimulus features.
