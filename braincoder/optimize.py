@@ -30,6 +30,8 @@ class WeightFitter(object):
         basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
 
         weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
+        weights = pd.DataFrame(weights.numpy(), index=self.parameters.index,
+                               columns=self.data.columns)
 
         return weights
 

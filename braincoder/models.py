@@ -24,6 +24,10 @@ class EncodingModel(object):
 
         self.data = data
         self.parameters = format_parameters(parameters)
+
+        if (self.parameter_labels is not None) and (self.parameters is not None):
+            self.parameters = self.parameters[self.parameter_labels]
+
         self.weights = weights
         self.omega = omega
 
@@ -205,7 +209,7 @@ class EncodingModel(object):
 
         return likelihood
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None):
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True):
 
         if hasattr(data, 'values'):
             time_index = data.index
@@ -259,10 +263,15 @@ class EncodingModel(object):
             ll = pd.DataFrame(ll.T, index=time_index, columns=index)
 
         # Normalize, working from log likelihoods (otherwise we get numerical issues)
-        # ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
+        ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
         # ll = ll.apply(lambda d: d/d.sum(), axis=1)
 
-        return np.exp(ll)
+        # ll = np.exp(ll)
+
+        if normalize:
+            ll /= np.trapz(ll, ll.columns)[:, np.newaxis]
+
+        return ll
 
     def apply_mask(self, mask):
 
@@ -710,11 +719,18 @@ class LogGaussianPRF(GaussianPRF):
                           tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
     @tf.function
-    def _basis_predictions(self, paradigm, parameters):
+    def _basis_predictions_without_amplitude(self, paradigm, parameters):
         return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
+
+    @tf.function
+    def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
 
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
     pass

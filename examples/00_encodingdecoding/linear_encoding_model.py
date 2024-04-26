@@ -59,7 +59,7 @@ data = model.simulate(paradigm=orientations, noise=0.1)
 
 # Fit the weights
 weight_fitter = WeightFitter(model, parameters, data, orientations)
-estimated_weights = weight_fitter.fit(alpha=0.1).numpy()
+estimated_weights = weight_fitter.fit(alpha=0.1)
 
 # Get predictions for the fitted weights
 pred = model.predict(paradigm=orientations, weights=estimated_weights)
