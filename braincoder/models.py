@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf
+from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm
 from tensorflow_probability import distributions as tfd
 from tensorflow.math import softplus, sigmoid
 import pandas as pd
@@ -690,6 +690,28 @@ class VonMisesPRF(GaussianPRF):
 
 class LogGaussianPRF(GaussianPRF):
 
+    parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
+                 model_stimulus_amplitude=False,
+                 parameterisation='mu_sd_natural',
+                 **kwargs):
+
+        if parameterisation == 'mu_sd_natural':
+            self.parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
+            self._basis_predictions_without_amplitude = self._basis_predictions_without_amplitude_n
+            self._basis_predictions_with_amplitude = self._basis_predictions_with_amplitude_n
+        elif parameterisation == 'mode_fwhm_natural':
+            self.parameter_labels = ['mode', 'fwhm', 'amplitude', 'baseline']
+            self._basis_predictions_without_amplitude = self._basis_predictions_without_amplitude_mode_fwhm
+            self._basis_predictions_with_amplitude = self._basis_predictions_with_amplitude_mode_fwhm
+
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                         weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+                          verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
+                          **kwargs)
+
     @tf.function
     def _transform_parameters_forward1(self, parameters):
         return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
@@ -719,15 +741,29 @@ class LogGaussianPRF(GaussianPRF):
                           tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
     @tf.function
-    def _basis_predictions_without_amplitude(self, paradigm, parameters):
+    def _basis_predictions_without_amplitude_n(self, paradigm, parameters):
         return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
 
     @tf.function
-    def _basis_predictions_with_amplitude(self, paradigm, parameters):
+    def _basis_predictions_with_amplitude_n(self, paradigm, parameters):
         return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
+
+    @tf.function
+    def _basis_predictions_without_amplitude_mode_fwhm(self, paradigm, parameters):
+        return lognormal_pdf_mode_fwhm(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1]) * \
+            parameters[:, tf.newaxis, :, 2] + parameters[:, tf.newaxis, :, 3]
+
+    @tf.function
+    def _basis_predictions_with_amplitude_mode_fwhm(self, paradigm, parameters):
+        return lognormal_pdf_mode_fwhm(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]

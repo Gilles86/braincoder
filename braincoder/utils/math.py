@@ -36,6 +36,14 @@ def lognormalpdf_n(x, mu_n, sigma_n, normalize=False):
     else:
         return part2
 
+def lognormal_pdf_mode_fwhm(x, mode, fwhm):
+
+    sigma = 1./(tf.sqrt(2.*tf.math.log(2.))) * tf.math.asinh(fwhm/(mode*2.))
+    sigma2 = sigma**2
+    p = (mode / x) * tf.math.exp(.5*sigma2 - .5 *((tf.math.log(x/mode) - sigma2)**2)/sigma2)
+
+    return p
+
 def von_mises_pdf(x, mu, kappa):
     # Constants
     PI = tf.constant(np.pi)
