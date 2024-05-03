@@ -706,6 +706,9 @@ class LogGaussianPRF(GaussianPRF):
             self.parameter_labels = ['mode', 'fwhm', 'amplitude', 'baseline']
             self._basis_predictions_without_amplitude = self._basis_predictions_without_amplitude_mode_fwhm
             self._basis_predictions_with_amplitude = self._basis_predictions_with_amplitude_mode_fwhm
+        else:
+            raise ValueError('Unknown parameterisation! Needs to be in [mu_sd_natural, mode_fwhm_natural]')
+
 
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
