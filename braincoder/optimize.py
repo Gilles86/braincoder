@@ -329,8 +329,13 @@ class ParameterFitter(object):
                 grid_predictions_demeaned = grid_predictions[0] -  tf.reduce_mean(grid_predictions[0], 0, True)
                 ssq_predictions = tf.reduce_sum(grid_predictions_demeaned**2, 0,True)
 
+                # time x features x parameters
                 r = tf.reduce_sum(grid_predictions_demeaned[:, tf.newaxis, :]*data_demeaned[:, :, tf.newaxis], 0,True) / tf.math.sqrt(ssq_predictions[:, tf.newaxis,:]*ssq_data[:, :, tf.newaxis])
                 r = r[0]
+
+                # Make sure all items in r are finite (replace inf with nan)
+                r = tf.where(tf.math.is_finite(r), r, tf.ones_like(r) * -1)
+
                 best_ixs = tf.argmax(r, 1)
 
                 return -r, best_ixs
