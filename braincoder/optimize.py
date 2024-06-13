@@ -286,7 +286,7 @@ class ParameterFitter(object):
         if len(args) == len(self.model.parameter_labels):
             kwargs = dict(zip(self.model.parameter_labels, args))
 
-        if not list(kwargs.keys()) == self.model.parameter_labels:
+        if not len(kwargs.keys()) == len(self.model.parameter_labels):
             raise ValueError(
                 f'Please provide parameter ranges for all these parameters: {self.model.parameter_labels}')
 
