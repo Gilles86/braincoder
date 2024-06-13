@@ -27,7 +27,8 @@ class WeightFitter(object):
 
     def fit(self, alpha=0.0):
         parameters = self.model._get_parameters(self.parameters)
-        parameters_ = parameters.values[np.newaxis, ...]
+        parameters_ = parameters.values[np.newaxis, ...] if parameters is not None else None
+
         basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
 
         weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
