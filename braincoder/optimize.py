@@ -12,6 +12,7 @@ from tensorflow.math import softplus, sigmoid
 from tensorflow.linalg import lstsq
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
+from .models import LinearModelWithBaseline
 
 softplus_inverse = tfp.math.softplus_inverse
 
@@ -30,7 +31,12 @@ class WeightFitter(object):
         basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
 
         weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
-        weights = pd.DataFrame(weights.numpy(), index=self.parameters.index,
+
+        if (parameters is None) or type(self.model) == LinearModelWithBaseline:
+            weights = pd.DataFrame(weights.numpy(),
+                               columns=self.data.columns)
+        else:
+            weights = pd.DataFrame(weights.numpy(), index=self.parameters.index,
                                columns=self.data.columns)
 
         return weights
