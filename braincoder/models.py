@@ -121,6 +121,22 @@ class EncodingModel(object):
 
         return self._predict(paradigm_, parameters, weights) + noise
 
+    def _gradient(self, stimuli, parameters):
+        stimuli = tf.convert_to_tensor(stimuli)
+        
+        with tf.GradientTape() as tape:
+            tape.watch(stimuli)
+            predictions = self._predict(stimuli, parameters)
+        
+        # Compute the Jacobian, expected to result in [1, n, m, 1, n, 1]
+        jacobians = tape.jacobian(predictions, stimuli)
+        
+        # Correct handling of the Jacobian to transform [1, n, m, 1, n, 1] to [1, n, m]
+        # Sum over redundant dimensions, specifically the input's batch and spatial dimensions (since we want derivative w.r.t. each input independently)
+        gradients = tf.reduce_sum(jacobians, axis=[-2, -1])
+
+        return tf.squeeze(gradients, axis=-1)
+
     @property
     def data(self):
         return self._data
@@ -374,24 +390,39 @@ class EncodingModel(object):
         if stimuli.ndim == 1:
             stimuli = stimuli[:, np.newaxis]
 
-        stimuli_ = tf.repeat(stimuli[np.newaxis, ...], n, axis=0)
-        stimuli_ = tf.Variable(stimuli_, name='stimuli')
 
-        omega_chol = tf.linalg.cholesky(omega)
+        L = tf.linalg.cholesky(omega)
 
-        dist = self.get_residual_dist(omega.shape[0], omega_chol, dof)
-        pred = self._predict(stimuli_, parameters_, weights_)
-        noise = dist.sample(n)
+        if analytical:
+            stimuli_ = tf.Variable(stimuli[np.newaxis, ...], name='stimuli')
+            gradient = self._gradient(stimuli_, parameters_)[0] # number of stimuli x number of voxels
 
-        # Batches (noise) x stimuli x n_voxels
-        data = pred + noise[:, tf.newaxis, :]
+            y = []
 
-        with tf.GradientTape() as tape:
-            ll = self._likelihood(stimuli_, data, parameters_, weights_, omega_chol, dof, logp=True, normalize=False)
+            for i in range(gradient.shape[0]):
+                y.append(tf.linalg.triangular_solve(L, gradient[i, :, tf.newaxis], lower=True))
 
-        dy_dx = tape.gradient(ll, stimuli_)
+            y = tf.concat(y, axis=1)
 
-        fisher_info = tf.reduce_mean(dy_dx**2, 0)[..., 0]
+            fisher_info = tf.reduce_sum(y ** 2, axis=0)
+
+        else:
+            stimuli_ = tf.repeat(stimuli[np.newaxis, ...], n, axis=0)
+            stimuli_ = tf.Variable(stimuli_, name='stimuli')
+
+            dist = self.get_residual_dist(omega.shape[0], L, dof)
+            pred = self._predict(stimuli_, parameters_, weights_)
+            noise = dist.sample(n)
+
+            # Batches (noise) x stimuli x n_voxels
+            data = pred + noise[:, tf.newaxis, :]
+
+            with tf.GradientTape() as tape:
+                ll = self._likelihood(stimuli_, data, parameters_, weights_, L, dof, logp=True, normalize=False)
+
+            dy_dx = tape.gradient(ll, stimuli_)
+
+            fisher_info = tf.reduce_mean(dy_dx**2, 0)[..., 0]
 
         if stimuli.shape[1] == 1:
             return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
