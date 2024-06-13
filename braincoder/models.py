@@ -474,15 +474,28 @@ class EncodingRegressionModel(EncodingModel):
     def __init__(self, paradigm=None, data=None, parameters=None,
                 regressors={}, weights=None, omega=None, verbosity=logging.INFO, **kwargs):
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+        self.regressors = regressors
+
+        if paradigm is not None:
+            self.stimulus = self._get_stimulus()
+
+            for paradigm_label in self.stimulus.dimension_labels:
+                if paradigm_label not in paradigm:
+                    raise ValueError('Paradigm is missing required dimension: ' + paradigm_label + \
+                                    '\nNote that `EncodingRegressionModel` requires a paradigm named stimulus dimensions!')
+
+            base_paradigm = paradigm[self.stimulus.dimension_labels]
+
+        super().__init__(paradigm=base_paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
         
-        self.regressors = regressors
+        self.base_parameter_labels = self.parameter_labels
+        self.paradigm = paradigm
+        self.set_paradigm(paradigm, regressors)
 
         self._basis_basis_predictions = self._basis_predictions
         self._basis_predictions = self._basis_predictions_regressors
 
-        self.base_parameter_labels = self.parameter_labels
 
         self._base_transform_parameters_forward = self._transform_parameters_forward
         self._base_transform_parameters_backward = self._transform_parameters_backward
@@ -490,8 +503,6 @@ class EncodingRegressionModel(EncodingModel):
         self._transform_parameters_forward = lambda x: x
         self._transform_parameters_backward = lambda x: x
 
-        if paradigm is not None:
-            self.set_paradigm(paradigm, regressors)
 
     def build_design_matrices(self, paradigm, regressors):
 
@@ -539,6 +550,8 @@ class EncodingRegressionModel(EncodingModel):
         if regressors is None:
             regressors = {}
 
+        self.paradigm = paradigm
+
         self.design_matrices = self.build_design_matrices(paradigm, self.regressors)
         self.parameter_labels = self._get_regressor_parameter_labels(self.design_matrices)
 
@@ -553,6 +566,30 @@ class EncodingRegressionModel(EncodingModel):
         base_parameters = self._get_base_parameters(self.design_matrices, parameters)
         result = self._basis_basis_predictions(self.base_paradigm.values[:, np.newaxis, :], base_parameters)
         return tf.reshape(result, [1, result.shape[0], -1])
+
+    def get_paradigm(self, paradigm):
+        return paradigm
+
+    def get_transformed_parameters(self, paradigm, parameters):
+        design_matrices = self.build_design_matrices(paradigm, self.regressors)
+
+
+        if hasattr(parameters, 'values'):
+            parameters_ = parameters.values
+        else:
+            parameters_ = np.array(parameters)
+
+        parameters_ = parameters_[np.newaxis, ...]
+
+        transformed_parameters = self._get_base_parameters(design_matrices, parameters_).numpy()
+
+        transformed_parameters = np.reshape(transformed_parameters, (-1, transformed_parameters.shape[-1]))
+
+        transformed_parameters = pd.DataFrame(transformed_parameters,
+                                            index=pd.MultiIndex.from_product([paradigm.index, parameters.index]),
+                                            columns=self.base_parameter_labels)
+
+        return transformed_parameters
 
 
 class HRFEncodingModel(object):
