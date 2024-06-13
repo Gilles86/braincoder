@@ -10,6 +10,7 @@ from tensorflow.math import softplus, sigmoid
 import pandas as pd
 import scipy.stats as ss
 from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus
+from patsy import dmatrix
 
 class EncodingModel(object):
 
@@ -23,7 +24,7 @@ class EncodingModel(object):
         self.paradigm = self.stimulus.clean_paradigm(paradigm)
 
         self.data = data
-        self.parameters = format_parameters(parameters)
+        self.parameters = format_parameters(parameters, parameter_labels=self.parameter_labels)
 
         if (self.parameter_labels is not None) and (self.parameters is not None):
             self.parameters = self.parameters[self.parameter_labels]
@@ -64,7 +65,8 @@ class EncodingModel(object):
         paradigm_ = self._get_paradigm(paradigm)[np.newaxis, ...]
 
         parameters = self._get_parameters(parameters)
-        parameters_ = parameters.values[np.newaxis, ...]
+        
+        parameters_ = parameters.values[np.newaxis, ...] if parameters is not None else None
 
         predictions = self._predict(paradigm_, parameters_, weights_)[0]
 
@@ -368,7 +370,11 @@ class EncodingModel(object):
 
         return weights, weights_
 
-    def get_fisher_information(self, stimuli, omega=None, dof=None, weights=None, parameters=None, n=1000):
+    def get_fisher_information(self, stimuli, omega=None, dof=None, weights=None, parameters=None, n=1000,
+                               analytical=True):
+
+        if analytical and (dof is not None):
+            raise ValueError('Cannot use analytical Fisher information with t-distribution!')
 
         if omega is None:
             omega = self.omega
@@ -461,6 +467,93 @@ class EncodingModel(object):
         paradigm = self.stimulus._clean_paradigm(paradigm)
 
         return paradigm
+
+
+class EncodingRegressionModel(EncodingModel):
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                regressors={}, weights=None, omega=None, verbosity=logging.INFO, **kwargs):
+
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                         weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
+        
+        self.regressors = regressors
+
+        self._basis_basis_predictions = self._basis_predictions
+        self._basis_predictions = self._basis_predictions_regressors
+
+        self.base_parameter_labels = self.parameter_labels
+
+        self._base_transform_parameters_forward = self._transform_parameters_forward
+        self._base_transform_parameters_backward = self._transform_parameters_backward
+
+        self._transform_parameters_forward = lambda x: x
+        self._transform_parameters_backward = lambda x: x
+
+        if paradigm is not None:
+            self.set_paradigm(paradigm, regressors)
+
+    def build_design_matrices(self, paradigm, regressors):
+
+        design_matrices = {}
+        parameter_names = []
+
+        for parameter in self.base_parameter_labels:
+            if parameter in self.regressors:
+                design_matrices[parameter] = dmatrix(self.regressors[parameter], paradigm)
+            else:
+                design_matrices[parameter] = dmatrix('1', paradigm)
+
+        return design_matrices
+
+    def _get_regressor_parameter_labels(self, design_matrices):
+        regressor_parameters = []
+
+        for parameter in self.base_parameter_labels:
+            regressor_parameters += zip([parameter+'_unbounded'] * design_matrices[parameter].shape[1],
+                                        design_matrices[parameter].design_info.column_names)
+
+        return pd.MultiIndex.from_tuples(regressor_parameters, names=['parameter', 'regressor'])
+
+    def _get_base_parameters(self, design_matrices, regressor_parameters):
+
+        parameters = []
+
+        ix = 0
+
+        for parameter in self.base_parameter_labels:
+            end_ix = ix + design_matrices[parameter].shape[1]
+
+            parameters.append(tf.reduce_sum(np.asarray(design_matrices[parameter], dtype=np.float32)[:, np.newaxis, :] * \
+                                      regressor_parameters[:, :, ix:end_ix], axis=2))
+
+            ix = end_ix
+
+        parameters = tf.stack(parameters, axis=2)
+        parameters = tf.map_fn(self._base_transform_parameters_forward, parameters)
+
+        return parameters
+
+    def set_paradigm(self, paradigm, regressors=None):
+
+        if regressors is None:
+            regressors = {}
+
+        self.design_matrices = self.build_design_matrices(paradigm, self.regressors)
+        self.parameter_labels = self._get_regressor_parameter_labels(self.design_matrices)
+
+        for paradigm_label in self.stimulus.dimension_labels:
+            if paradigm_label not in paradigm:
+                raise ValueError('Paradigm is missing required dimension: ' + paradigm_label + \
+                                  '\nNote that `EncodingRegressionModel` requires a paradigm named stimulus dimensions!')
+
+        self.base_paradigm = paradigm[self.stimulus.dimension_labels]
+
+    def _basis_predictions_regressors(self, paradigm, parameters):
+        base_parameters = self._get_base_parameters(self.design_matrices, parameters)
+        result = self._basis_basis_predictions(self.base_paradigm.values[:, np.newaxis, :], base_parameters)
+        return tf.reshape(result, [1, result.shape[0], -1])
+
 
 class HRFEncodingModel(object):
 
@@ -659,6 +752,8 @@ class GaussianPRF(EncodingModel):
                               parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
+class RegressionGaussianPRF(EncodingRegressionModel, GaussianPRF):
+    pass
 class VonMisesPRF(GaussianPRF):
 
     parameter_labels = ['mu', 'kappa', 'amplitude', 'baseline']
@@ -1320,6 +1415,8 @@ class DiscreteModel(EncodingModel):
 
 
 class LinearModel(EncodingModel):
+    
+    parameter_labels = []
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO, **kwargs):
@@ -1343,6 +1440,9 @@ class LinearModel(EncodingModel):
 
 
 class LinearModelWithBaseline(EncodingModel):
+
+    parameter_labels = ['baseline']
+
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
 
