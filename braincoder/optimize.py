@@ -319,7 +319,8 @@ class ParameterFitter(object):
 
         data = self.data.values
 
-        paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
+        # paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
+        paradigm_ = self.paradigm.values
 
         if use_correlation_cost:
 
@@ -477,7 +478,7 @@ class ParameterFitter(object):
         data = self.data.values
         
 
-        paradigm_ = self.model.stimulus._clean_paraigm(self.paradigm)
+        # paradigm_ = self.model.stimulus._clean_paraigm(self.paradigm)
 
         @tf.function
         def _get_ssq_for_predictions(par_grid):
