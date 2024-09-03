@@ -7,6 +7,15 @@ def norm(x, mu, sigma):
     kernel = tf.math.exp(-.5 * (x - mu)**2. / sigma**2)
     return kernel
 
+def norm2d(x, y, mu_x, mu_y, sigma_x, sigma_y, rho=None):
+    if rho is None:
+        # Default to 0 covariance (independent x and y)
+        rho = 0.0
+    z = ((x - mu_x) ** 2 / sigma_x ** 2) + \
+        ((y - mu_y) ** 2 / sigma_y ** 2) - \
+        (2 * rho * (x - mu_x) * (y - mu_y) / (sigma_x * sigma_y))
+    kernel = tf.math.exp(-z / (2 * (1 - rho ** 2)))
+    return kernel
 
 def logit(x):
     """ Computes the logit function, i.e. the logistic sigmoid inverse. """

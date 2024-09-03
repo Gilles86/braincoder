@@ -72,6 +72,10 @@ class OneDimensionalStimulusWithAmplitude(Stimulus):
         if positive_only:
             self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='amplitude')]
 
+class TwoDimensionalStimulus(Stimulus):
+    dimension_labels = ['x', 'y']
+
+
 class OneDimensionalRadialStimulus(Stimulus):
     dimension_labels = ['x (radians)']
 
