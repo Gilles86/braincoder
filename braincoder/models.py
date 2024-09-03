@@ -982,12 +982,12 @@ class GaussianPointPRF2D(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
-                 model_stimulus_amplitude=False, use_covariance=False,
+                 model_stimulus_amplitude=False, correlated_response=False,
                  **kwargs):
 
-        self.use_covariance = use_covariance
+        self.correlated_response = correlated_response
 
-        if use_covariance:
+        if correlated_response:
             self.parameter_labels = ['mu_x', 'mu_y', 'sd_x', 'sd_y', 'rho', 'amplitude', 'baseline']
         else:
             self.parameter_labels = ['mu_x', 'mu_y', 'sd_x', 'sd_y', 'amplitude', 'baseline']
@@ -1052,7 +1052,7 @@ class GaussianPointPRF2D(EncodingModel):
         amplitudes = tf.reduce_max(data_, 0)
 
         # Optional covariance parameter initialization
-        if self.use_covariance:
+        if self.correlated_response:
             covariances = tf.reduce_sum((data_ * (self.stimulus._generate_stimulus(paradigm.values[..., 0]) - mus_x) *
                                         (self.stimulus._generate_stimulus(paradigm.values[..., 1]) - mus_y)), 0) / tf.reduce_sum(data_, 0)
             parameters = tf.concat([mus_x[:, tf.newaxis],
@@ -1077,7 +1077,7 @@ class GaussianPointPRF2D(EncodingModel):
         # paradigm: n_batches x n_timepoints x n_stimulus_features (e.g., [x, y])
         # parameters: n_batches x n_voxels x n_parameters
 
-        if self.use_covariance:
+        if self.correlated_response:
             return norm2d(paradigm[..., tf.newaxis, 0],
                           paradigm[..., tf.newaxis, 1],
                           parameters[:, tf.newaxis, :, 0],
@@ -1100,7 +1100,7 @@ class GaussianPointPRF2D(EncodingModel):
         # paradigm: n_batches x n_timepoints x n_stimulus_features (e.g., [x, y, amplitude])
         # parameters: n_batches x n_voxels x n_parameters
 
-        if self.use_covariance:
+        if self.correlated_response:
             return norm2d(paradigm[..., tf.newaxis, 0],
                           paradigm[..., tf.newaxis, 1],
                           parameters[:, tf.newaxis, :, 0],
@@ -1130,7 +1130,7 @@ class GaussianPointPRF2D(EncodingModel):
 
     def _transform_parameters_forward1(self, parameters):
 
-        if self.use_covariance:
+        if self.correlated_response:
             return tf.concat([parameters[:, 0][:, tf.newaxis],
                               parameters[:, 1][:, tf.newaxis],
                               tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
@@ -1148,7 +1148,7 @@ class GaussianPointPRF2D(EncodingModel):
 
     def _transform_parameters_backward1(self, parameters):
 
-        if self.use_covariance:
+        if self.correlated_response:
             return tf.concat([parameters[:, 0][:, tf.newaxis],
                               parameters[:, 1][:, tf.newaxis],
                                 tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
@@ -1168,7 +1168,7 @@ class GaussianPointPRF2D(EncodingModel):
 
     def _transform_parameters_forward2(self, parameters):
 
-        if self.use_covariance:
+        if self.correlated_response:
             return tf.concat([parameters[:, 0][:, tf.newaxis],
                               parameters[:, 1][:, tf.newaxis],
                               tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
@@ -1186,7 +1186,7 @@ class GaussianPointPRF2D(EncodingModel):
 
     def _transform_parameters_backward2(self, parameters):
 
-        if self.use_covariance:
+        if self.correlated_response:
             return tf.concat([parameters[:, 0][:, tf.newaxis],
                               parameters[:, 1][:, tf.newaxis],
                                 tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
