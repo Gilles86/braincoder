@@ -1128,6 +1128,18 @@ class GaussianPointPRF2D(EncodingModel):
                                    pseudoWWT)
         return self._pseudoWWT
 
+    def get_pseudoWWT(self):
+
+        if self.weights is not None:
+            return self.weights.T.dot(self.weights).values
+
+        if hasattr(self, '_pseudoWWT'):
+            return self._pseudoWWT
+        else:
+            raise ValueError(
+                'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
+
+
     def _transform_parameters_forward1(self, parameters):
 
         if self.correlated_response:
