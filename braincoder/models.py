@@ -1703,6 +1703,14 @@ class LinearModel(EncodingModel):
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, verbosity=logging.INFO, **kwargs)
 
+        if paradigm is not None:
+            self.stimulus = self._get_stimulus(n_dimensions=paradigm.shape[1])
+            self.paradigm = self.stimulus.clean_paradigm(paradigm)
+        else:
+            self.stimulus = self._get_stimulus()
+            self.paradigm = None
+
+
     def predict(self, paradigm=None, parameters=None, weights=None):
 
         if parameters is not None:
