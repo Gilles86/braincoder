@@ -12,7 +12,10 @@ class Stimulus(object):
 
     dimension_labels = ['x']
 
-    def __init__(self):
+    def __init__(self, n_dimensions=1):
+        if n_dimensions != 1:
+            self.dimension_labels = [f'dim_{ix}' for ix in range(n_dimensions)]
+
         self.bijectors = [tfp.bijectors.Identity(name=label) for label in self.dimension_labels]
 
     def clean_paradigm(self, paradigm):
