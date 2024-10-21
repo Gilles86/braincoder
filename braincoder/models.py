@@ -20,8 +20,12 @@ class EncodingModel(object):
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
 
-        self.stimulus = self._get_stimulus()
-        self.paradigm = self.stimulus.clean_paradigm(paradigm)
+        if paradigm is not None:
+            self.stimulus = self._get_stimulus(n_dimensions=paradigm.shape[1])
+            self.paradigm = self.stimulus.clean_paradigm(paradigm)
+        else:
+            self.stimulus = self._get_stimulus()
+            self.paradigm = None
 
         self.data = data
         self.parameters = format_parameters(parameters, parameter_labels=self.parameter_labels)
@@ -235,10 +239,13 @@ class EncodingModel(object):
         else:
             time_index = pd.Index(np.arange(len(data)), name='frame')
 
-        parameters = self._get_parameters(parameters).values
+        parameters = self._get_parameters(parameters)
 
         if hasattr(stimulus_range, 'values'):
             stimulus_range = stimulus_range.values
+
+        if hasattr(parameters, 'values'):
+            parameters = parameters.values
 
         if omega is None:
             omega = self.omega
@@ -263,7 +270,7 @@ class EncodingModel(object):
         # n_batches * n_timepoints x n_stimulus_features
         ll = self._likelihood(stimulus_range,
                               data[np.newaxis, :, :],
-                              parameters[np.newaxis, :, :],
+                              parameters[np.newaxis, :, :] if parameters is not None else None,
                               weights_,
                               omega,
                               dof,
