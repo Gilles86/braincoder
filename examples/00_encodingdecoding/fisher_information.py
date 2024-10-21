@@ -18,8 +18,8 @@ at different locations in stimulus space without actually doing any decoding.
 
 Notably, Fisher information also plays a crucial role in efficient coding theory. In general, the expected
 squared error of a likelihood function, given a limited 'information budget',
- can be minimized by using a likelihood function where the Fisher information is proportional
-to the derivative of the cummulative prior distribution (:cite:`wei2015bayesian`).
+can be minimized by using a likelihood function where the Fisher information is proportional
+to the derivative of the cummulative prior distribution (:cite:t:`wei2015bayesian`).
 
 """
 
@@ -141,7 +141,6 @@ plt.title('Posterior std.')
 # Fisher information for different RF distributions
 # -------------------------------------------------
 # Let's calculate the Fisher information for different RF structures
-# Set up four different models
 # %
 
 # Centered distribution around 5.
@@ -209,9 +208,45 @@ g3.add_legend()
 # parietal cortex are shaped as a log-normal distribution. We can
 # now study how the Fisher information is modulated by the shape of
 # the receptive fields.
-# %
+# 
+
 from braincoder.models import LogGaussianPRF
 mus = np.linspace(5, 25, 8)
+
+parameters = pd.DataFrame({'mu':mus, 'sd':25., 'baseline':0.0, 'amplitude':1.0})[['mu', 'sd', 'amplitude', 'baseline']]
+
+# Set up model and paradigm and plot the receptive fields
+paradigm = np.linspace(0, 100, 100, dtype=np.float32)
+model = LogGaussianPRF(parameters=parameters, paradigm=paradigm)
+y = model.predict(paradigm=paradigm)
+
+y.plot(c='k', legend=False, alpha=0.5)
+sns.despine()
+plt.title('Receptive fields')
+
+# Calculate Fisher information
+omega = np.identity(len(parameters)).astype(np.float32)
+fisher_information = model.get_fisher_information(stimuli=np.linspace(5, 100, 1000).astype(np.float32), omega=omega, n=5000).to_frame()
+
+fisher_information['sqrt(fi)'] = np.sqrt(fisher_information['Fisher information'])
+
+plt.figure()
+sns.lineplot(x='stimulus', y='sqrt(fi)', data=fisher_information.reset_index(), color='k')
+plt.title('Square root of Fisher information')
+
+
+# %%
+# Somewhat consistent with the literature, the Fisher information
+# behaves roughly like 1/x now, where x is the stimulus. This means that the
+# precision of the estimated stimulus decreases with increasing
+# stimulus value. 
+# 
+
+# %
+# Another interesting corner case is a single receptive field with a log-normal
+# kernel.
+from braincoder.models import LogGaussianPRF
+mus = [25.]
 
 parameters = pd.DataFrame({'mu':mus, 'sd':25., 'baseline':0.0, 'amplitude':1.0})[['mu', 'sd', 'amplitude', 'baseline']]
 
@@ -230,11 +265,3 @@ fisher_information['sqrt(fi)'] = np.sqrt(fisher_information['Fisher information'
 
 plt.figure()
 sns.lineplot(x='stimulus', y='sqrt(fi)', data=fisher_information.reset_index(), color='k')
-
-
-# %%
-# Somewhat consistent with the literature, the Fisher information
-# behaves roughly like 1/x now, where x is the stimulus. This means that the
-# precision of the estimated stimulus decreases with increasing
-# stimulus value. 
-# 
