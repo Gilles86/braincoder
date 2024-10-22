@@ -1328,7 +1328,7 @@ class GaussianMixturePRF2D(EncodingModel):
 
 
     @tf.function
-    def _transform_parameters_forward1(self, parameters):
+    def _transform_parameters_forward2(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],                      #mu_1
                           parameters[:, 1][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 2][:, tf.newaxis]),    #sd_1
@@ -1338,7 +1338,7 @@ class GaussianMixturePRF2D(EncodingModel):
                           parameters[:, 6][:, tf.newaxis]], axis=1)
 
     @tf.function
-    def _transform_parameters_backward1(self, parameters):
+    def _transform_parameters_backward2(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           parameters[:, 1][:, tf.newaxis],
                           tfp.math.softplus_inverse(
