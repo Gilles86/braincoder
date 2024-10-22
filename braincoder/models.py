@@ -1346,7 +1346,7 @@ class GaussianMixturePRF2D(EncodingModel):
                           tfp.math.softplus_inverse(
                               parameters[:, 3][:, tf.newaxis]),
                           logit(parameters[:, 4][:, tf.newaxis]),
-                          tf.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
                           parameters[:, 6][:, tf.newaxis]], axis=1)
 
 class GaussianPRF2D(EncodingModel):
