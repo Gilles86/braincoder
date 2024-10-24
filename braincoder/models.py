@@ -1223,11 +1223,11 @@ class GaussianPointPRF2D(EncodingModel):
                              parameters[:, 5][:, tf.newaxis]], axis=1)
 
 class GaussianMixturePRF2D(EncodingModel):
-    parameter_labels = ['mu_x', 'mu_y', 'sd_x', 'sd_y', 'weight', 'amplitude', 'baseline']
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  model_stimulus_amplitude=False,
+                 same_rfs=False,
                  **kwargs):
 
         if allow_neg_amplitudes:
@@ -1238,6 +1238,13 @@ class GaussianMixturePRF2D(EncodingModel):
             self._transform_parameters_backward = self._transform_parameters_backward2
 
         self.stimulus_type = self._get_stimulus_type()
+
+        self.same_rfs = same_rfs
+
+        if same_rfs:
+            self.parameter_labels = ['mu', 'sd', 'weight', 'amplitude', 'baseline']
+        else:
+            self.parameter_labels = ['mu_x', 'mu_y', 'sd_x', 'sd_y', 'weight', 'amplitude', 'baseline']
 
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
@@ -1272,13 +1279,24 @@ class GaussianMixturePRF2D(EncodingModel):
         # norm: n_batches x n_timepoints x n_voxels
 
         # output: n_batches x n_timepoints x n_voxels
-        return (parameters[:, tf.newaxis, :, 4] * norm(paradigm[..., tf.newaxis, 0],
-                                                   parameters[:, tf.newaxis, :, 0],
-                                                   parameters[:, tf.newaxis, :, 2]) + \
-                (1 - parameters[:, tf.newaxis, :, 4]) * norm(paradigm[..., tf.newaxis, 1],
-                                                          parameters[:, tf.newaxis, :, 1],
-                                                          parameters[:, tf.newaxis, :, 3])) * \
-                parameters[:, tf.newaxis, :, 5] + parameters[:, tf.newaxis, :, 6]
+
+        if self.same_rfs:
+            return (parameters[:, tf.newaxis, :, 2] * norm(paradigm[..., tf.newaxis, 0],
+                                                          parameters[:, tf.newaxis, :, 0],
+                                                          parameters[:, tf.newaxis, :, 1]) + \
+                    (1 - parameters[:, tf.newaxis, :, 2]) * norm(paradigm[..., tf.newaxis, 1],
+                                                                 parameters[:, tf.newaxis, :, 0],
+                                                          parameters[:, tf.newaxis, :, 1])) * \
+                     parameters[:, tf.newaxis, :, 3] + parameters[:, tf.newaxis, :, 4]
+
+        else:
+            return (parameters[:, tf.newaxis, :, 4] * norm(paradigm[..., tf.newaxis, 0],
+                                                    parameters[:, tf.newaxis, :, 0],
+                                                    parameters[:, tf.newaxis, :, 2]) + \
+                    (1 - parameters[:, tf.newaxis, :, 4]) * norm(paradigm[..., tf.newaxis, 1],
+                                                            parameters[:, tf.newaxis, :, 1],
+                                                            parameters[:, tf.newaxis, :, 3])) * \
+                    parameters[:, tf.newaxis, :, 5] + parameters[:, tf.newaxis, :, 6]
 
     def init_pseudoWWT(self, stimulus_range, parameters):
 
@@ -1306,48 +1324,78 @@ class GaussianMixturePRF2D(EncodingModel):
 
     @tf.function
     def _transform_parameters_forward1(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],                      #mu_1
-                          parameters[:, 1][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),    #sd_1
-                          tf.math.softplus(parameters[:, 3][:, tf.newaxis]),    #sd_2
-                          tf.math.sigmoid(parameters[:, 4][:, tf.newaxis]),
-                          parameters[:, 5][:, tf.newaxis],
-                          parameters[:, 6][:, tf.newaxis]], axis=1)
+        
+        if self.same_rfs:
+            return tf.concat([parameters[:, 0][:, tf.newaxis], # mu
+                            tf.math.softplus(parameters[:, 1][:, tf.newaxis]), # sd
+                            tf.math.sigmoid(parameters[:, 2][:, tf.newaxis]), # weight
+                            tf.math.softplus(parameters[:, 3][:, tf.newaxis]), # amplitude
+                            parameters[:, 4][:, tf.newaxis]], # baseline
+                            axis=1) 
+
+        else:
+            return tf.concat([parameters[:, 0][:, tf.newaxis],                      #mu_1
+                            parameters[:, 1][:, tf.newaxis],
+                            tf.math.softplus(parameters[:, 2][:, tf.newaxis]),    #sd_1
+                            tf.math.softplus(parameters[:, 3][:, tf.newaxis]),    #sd_2
+                            tf.math.sigmoid(parameters[:, 4][:, tf.newaxis]),
+                            parameters[:, 5][:, tf.newaxis],
+                            parameters[:, 6][:, tf.newaxis]], axis=1)
 
     @tf.function
     def _transform_parameters_backward1(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          parameters[:, 1][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 3][:, tf.newaxis]),
-                          logit(parameters[:, 4][:, tf.newaxis]),
-                          parameters[:, 5][:, tf.newaxis],
-                          parameters[:, 6][:, tf.newaxis]], axis=1)
+        if self.same_rfs:
+            return tf.concat([parameters[:, 0][:, tf.newaxis], # mu
+                            tfp.math.softplus_inverse(parameters[:, 1][:, tf.newaxis]), # sd
+                            logit(parameters[:, 2][:, tf.newaxis]), # weight
+                            tfp.math.softplus_inverse(parameters[:, 3][:, tf.newaxis]), # amplitude
+                            parameters[:, 4][:, tf.newaxis]], # baseline
+                            axis=1)
+        else:
+            return tf.concat([parameters[:, 0][:, tf.newaxis],
+                            parameters[:, 1][:, tf.newaxis],
+                            tfp.math.softplus_inverse(
+                                parameters[:, 2][:, tf.newaxis]),
+                            tfp.math.softplus_inverse(
+                                parameters[:, 3][:, tf.newaxis]),
+                            logit(parameters[:, 4][:, tf.newaxis]),
+                            parameters[:, 5][:, tf.newaxis],
+                            parameters[:, 6][:, tf.newaxis]], axis=1)
 
 
     @tf.function
     def _transform_parameters_forward2(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],                      #mu_1
-                          parameters[:, 1][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),    #sd_1
-                          tf.math.softplus(parameters[:, 3][:, tf.newaxis]),    #sd_2
-                          tf.math.sigmoid(parameters[:, 4][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 5][:, tf.newaxis]),
-                          parameters[:, 6][:, tf.newaxis]], axis=1)
+        if self.same_rfs:
+            return tf.concat([parameters[:, 0][:, tf.newaxis],                      # mu
+                              tf.math.softplus(parameters[:, 1][:, tf.newaxis]),    # sd
+                              tf.math.sigmoid(parameters[:, 2][:, tf.newaxis]),     # weight
+                              tf.math.softplus(parameters[:, 3][:, tf.newaxis]),    # amplitude
+                              parameters[:, 4][:, tf.newaxis]], axis=1)            # baseline
+        else:
+            return tf.concat([parameters[:, 0][:, tf.newaxis],                      # mu_1
+                              parameters[:, 1][:, tf.newaxis],                      # mu_2
+                              tf.math.softplus(parameters[:, 2][:, tf.newaxis]),    # sd_1
+                              tf.math.softplus(parameters[:, 3][:, tf.newaxis]),    # sd_2
+                              tf.math.sigmoid(parameters[:, 4][:, tf.newaxis]),     # weight
+                              tf.math.softplus(parameters[:, 5][:, tf.newaxis]),    # amplitude
+                              parameters[:, 6][:, tf.newaxis]], axis=1)            # baseline
 
     @tf.function
     def _transform_parameters_backward2(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          parameters[:, 1][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 3][:, tf.newaxis]),
-                          logit(parameters[:, 4][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
-                          parameters[:, 6][:, tf.newaxis]], axis=1)
+        if self.same_rfs:
+            return tf.concat([parameters[:, 0][:, tf.newaxis],                      # mu
+                              tfp.math.softplus_inverse(parameters[:, 1][:, tf.newaxis]),    # sd
+                              logit(parameters[:, 2][:, tf.newaxis]),               # weight
+                              tfp.math.softplus_inverse(parameters[:, 3][:, tf.newaxis]),    # amplitude
+                              parameters[:, 4][:, tf.newaxis]], axis=1)            # baseline
+        else:
+            return tf.concat([parameters[:, 0][:, tf.newaxis],                      # mu_1
+                              parameters[:, 1][:, tf.newaxis],                      # mu_2
+                              tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),    # sd_1
+                              tfp.math.softplus_inverse(parameters[:, 3][:, tf.newaxis]),    # sd_2
+                              logit(parameters[:, 4][:, tf.newaxis]),               # weight
+                              tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),    # amplitude
+                              parameters[:, 6][:, tf.newaxis]], axis=1)            # baseline
 
 class GaussianPRF2D(EncodingModel):
 
