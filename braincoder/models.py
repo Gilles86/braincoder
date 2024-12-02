@@ -1627,11 +1627,13 @@ class GaussianPRF2DWithHRF(HRFEncodingModel, GaussianPRF2D):
 class GaussianPRF2DAngleWithHRF(HRFEncodingModel, GaussianPRF2DAngle):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
-                 weights=None, hrf_model=None, verbosity=logging.INFO, **kwargs):
+                 weights=None, hrf_model=None, verbosity=logging.INFO,
+                  positive_image_values_only=True, flexible_hrf_parameters=False, **kwargs):
 
-        super().__init__(grid_coordinates, paradigm, data, parameters, weights, verbosity,
-                         hrf_model=hrf_model, **kwargs)
+        GaussianPRF2DAngle.__init__(self, grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
+                        positive_image_values_only=positive_image_values_only, **kwargs)
 
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model, flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
         self.hrf_model = hrf_model
 
     def to_linear_model(self):
