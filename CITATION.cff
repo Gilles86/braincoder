@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "braincoder"
+version: 0.3.0
+doi: 10.5281/zenodo.10778413
+authors:
+  - name: "Gilles de Hollander"
+    orcid: "0000-0002-XXXX-XXXX"
+  - name: "Maike Renkert"
+    orcid: "0000-0002-4809-4216"
+  - name: "Christian C. Ruff"
+    orcid: "0000-0002-3964-2364"
+  - name: "Tomas H. Knapen"
+    orcid: "0000-0001-5863-8689"
+repository-code: "https://github.com/Gilles86/braincoder"
+date-released: "2024-12-06"
+abstract: |
+  braincoder is a Python package designed to help researchers fit encoding models to neural data 
+  and decode stimulus features from unseen neural data. It leverages computational modeling to 
+  bridge neuroscience and data analysis, providing robust tools for understanding neural representation.
