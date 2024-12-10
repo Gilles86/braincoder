@@ -1657,14 +1657,13 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
     # srf factor is limited to be above 1
     parameter_labels = ['x', 'y', 'sd', 'baseline',
                         'amplitude', 'srf_amplitude', 'srf_size']
-
     @tf.function
     def _transform_parameters_forward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           parameters[:, 1][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis],
-                          parameters[:, 4][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 4])[:, tf.newaxis]),
                           tf.math.softplus(parameters[:, 5][:, tf.newaxis]),
                           tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1], axis=1)
 
@@ -1675,7 +1674,7 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
                           tfp.math.softplus_inverse(
                               parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis],
-                          parameters[:, 4][:, tf.newaxis],
+                          tfp.math.softplus_inverse(parameters[:, 4][:, tf.newaxis]),
                           tfp.math.softplus_inverse(
                               parameters[:, 5][:, tf.newaxis]),
                           tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis] - 1)], axis=1)
