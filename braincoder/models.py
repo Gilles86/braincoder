@@ -1663,7 +1663,7 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
                           parameters[:, 1][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 4])[:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 4][:, tf.newaxis]),
                           tf.math.softplus(parameters[:, 5][:, tf.newaxis]),
                           tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1], axis=1)
 
@@ -1674,7 +1674,8 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
                           tfp.math.softplus_inverse(
                               parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis],
-                          tfp.math.softplus_inverse(parameters[:, 4][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 4][:, tf.newaxis]),
                           tfp.math.softplus_inverse(
                               parameters[:, 5][:, tf.newaxis]),
                           tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis] - 1)], axis=1)
