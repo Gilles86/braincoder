@@ -625,8 +625,27 @@ class HRFEncodingModel(object):
 
     @tf.function
     def _predict(self, paradigm, parameters, weights):
+
+        standardized_parameters = tf.identity(parameters)
+
+        n_batches, n_voxels = parameters.shape[0], parameters.shape[1]
+
+         # We define that baseline and amplitude are applied to the HRF-convolved signal
+         # If we don't do that, we can't easily recover these parameters using OLS...
+        if 'baseline' in self.parameter_labels:
+            baseline_idx = self.parameter_labels.index('baseline')
+            indices_baseline = tf.constant([[i, j, baseline_idx] for i in range(n_batches) for j in range(n_voxels)], dtype=tf.int32)
+            updates_baseline = tf.zeros((n_batches * n_voxels,), dtype=parameters.dtype)
+            standardized_parameters = tf.tensor_scatter_nd_update(standardized_parameters, indices_baseline, updates_baseline)
+
+        if 'amplitude' in self.parameter_labels:
+            amplitude_idx = self.parameter_labels.index('amplitude')
+            indices_amplitude = tf.constant([[i, j, amplitude_idx] for i in range(n_batches) for j in range(n_voxels)], dtype=tf.int32)
+            updates_amplitude = tf.ones((n_batches * n_voxels,), dtype=parameters.dtype)
+            standardized_parameters = tf.tensor_scatter_nd_update(standardized_parameters, indices_amplitude, updates_amplitude)
+
         pre_convolve = EncodingModel._predict(
-            self, paradigm, parameters, weights)
+            self, paradigm, standardized_parameters, weights)
 
         kwargs = {}
         # parameters: n_batch x n_units x n_parameters
@@ -634,7 +653,16 @@ class HRFEncodingModel(object):
             for ix, label in enumerate(self.hrf_model.parameter_labels):
                 kwargs[label] = parameters[:, :, -len(self.hrf_model.parameter_labels) + ix]
 
-        return self.hrf_model.convolve(pre_convolve, **kwargs)
+        # pred: n_batch x n_timepoints x n_units
+        pred_convolved = self.hrf_model.convolve(pre_convolve, **kwargs)
+
+        if 'amplitude' in self.parameter_labels:
+            pred_convolved *= parameters[:, :, amplitude_idx][:, tf.newaxis, :]
+        
+        if 'baseline' in self.parameter_labels:
+            pred_convolved += parameters[:, :, baseline_idx][:, tf.newaxis, :]
+
+        return pred_convolved
 
     @tf.function
     def _predict_no_hrf(self, paradigm, parameters, weights):
