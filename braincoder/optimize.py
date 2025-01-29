@@ -396,7 +396,7 @@ class ParameterFitter(object):
 
         orig_r2 = get_rsq(data, predictions)
 
-        demeaned_predictions = (predictions - parameters.loc[:, 'baseline'].T) / parameters.loc[:, 'amplitude']
+        demeaned_predictions = (predictions / parameters.loc[:, 'amplitude']) -  parameters.loc[:, 'baseline'].T
 
         # n batches (voxels) x n_timepoints x regressors (2)
         X = np.stack((np.ones(
