@@ -1,7 +1,9 @@
 import pkg_resources
 import numpy as np
 import pandas as pd
-from scipy import ndimage
+from scipy import ndimage, io
+import tqdm
+from nilearn.surface import load_surf_data
 
 def load_szinte2024(resize_factor=1., best_voxels=None):
 
@@ -38,5 +40,76 @@ def load_szinte2024(resize_factor=1., best_voxels=None):
     data['prf_pars'] = prf_pars
     data['r2'] = prf_pars['r2']
     data['prf_pars'].drop('r2', axis=1, inplace=True)
+
+    return data
+
+import os
+import pathlib
+import requests
+import zipfile
+import shutil
+from tqdm import tqdm
+
+FIGSHARE_URL = "https://figshare.com/ndownloader/files/26577941"
+DATA_DIR = pathlib.Path.home() / ".braincoder" / "data"
+ZIP_PATH = DATA_DIR / "fmri_teaching_materials.zip"
+
+def ensure_directory_exists(directory):
+    """Create directory if it doesn't exist."""
+    directory.mkdir(parents=True, exist_ok=True)
+
+def download_file(url, save_path):
+    """Download a file from a URL with a progress bar."""
+    response = requests.get(url, stream=True)
+    response.raise_for_status()  # Raise error if download fails
+
+    total_size = int(response.headers.get("content-length", 0))
+    block_size = 1024  # 1 KB
+    progress_bar = tqdm(total=total_size, unit="B", unit_scale=True, desc="Downloading")
+
+    with open(save_path, "wb") as f:
+        for data in response.iter_content(block_size):
+            progress_bar.update(len(data))
+            f.write(data)
+
+    progress_bar.close()
+
+def extract_zip(zip_path, extract_to):
+    """Extracts the given zip file."""
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_to)
+
+def load_vanes2019(raw_files=False):
+    """
+    Ensures the fMRI van Es 2019 dataset is available in ~/.braincoder/data.
+    Downloads and extracts it if necessary.
+    Returns the path to the dataset.
+    """
+    ensure_directory_exists(DATA_DIR)
+    dataset_folder = DATA_DIR / "prf_vanes2019"
+
+    if not dataset_folder.exists() or not any(dataset_folder.iterdir()):
+        print(f"Dataset missing or incomplete in {dataset_folder}, redownloading...")
+        if dataset_folder.exists():
+            shutil.rmtree(dataset_folder)  # Remove partial data
+        download_file(FIGSHARE_URL, ZIP_PATH)
+        print("\nDownload complete, extracting...")
+        extract_zip(ZIP_PATH, dataset_folder)
+        print("\nExtraction complete, cleaning up...")
+        ZIP_PATH.unlink()  # Remove zip file after extraction
+
+    data_lh = load_surf_data(dataset_folder / "sub-02_task-prf_space-59k_hemi-L_run-median_desc-bold.func.gii")
+    data_rh = load_surf_data(dataset_folder / "sub-02_task-prf_space-59k_hemi-R_run-median_desc-bold.func.gii")
+
+    if raw_files:
+        # Return a list with all files in dataset_folder:
+        return list(dataset_folder.iterdir())
+
+    data = {}
+    data['ts'] = pd.concat((pd.DataFrame(data_lh, index=pd.Index(np.arange(len(data_lh)), name='vertex')),
+                      pd.DataFrame(data_rh, index=pd.Index(np.arange(len(data_rh)), name='vertex'))), keys=['L', 'R'], names=['hemisphere'], axis=0).T
+
+
+    data['stimulus'] = io.loadmat(dataset_folder / "vis_design.mat")['stim']
 
     return data
