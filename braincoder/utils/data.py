@@ -4,6 +4,7 @@ import pandas as pd
 from scipy import ndimage, io
 import tqdm
 from nilearn.surface import load_surf_data
+from scipy.ndimage import zoom
 
 def load_szinte2024(resize_factor=1., best_voxels=None):
 
@@ -79,7 +80,7 @@ def extract_zip(zip_path, extract_to):
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(extract_to)
 
-def load_vanes2019(raw_files=False):
+def load_vanes2019(raw_files=False, downsample_stimulus=5.):
     """
     Ensures the fMRI van Es 2019 dataset is available in ~/.braincoder/data.
     Downloads and extracts it if necessary.
@@ -109,7 +110,22 @@ def load_vanes2019(raw_files=False):
     data['ts'] = pd.concat((pd.DataFrame(data_lh, index=pd.Index(np.arange(len(data_lh)), name='vertex')),
                       pd.DataFrame(data_rh, index=pd.Index(np.arange(len(data_rh)), name='vertex'))), keys=['L', 'R'], names=['hemisphere'], axis=0).T
 
+    data['stimulus'] = zoom(io.loadmat(dataset_folder / "vis_design.mat")['stim'], (1./downsample_stimulus, 1./downsample_stimulus, 1)).astype(np.float32)
+    data['stimulus'] = np.clip(np.moveaxis(np.moveaxis(data['stimulus'], -1, 0), -1, 1) / 255., 0, 1)
 
-    data['stimulus'] = io.loadmat(dataset_folder / "vis_design.mat")['stim']
+    # Calculate the degree per pixel scaling factors
+    width_pixels, height_pixels = data['stimulus'].shape[1:]
+    width_degrees = 20
+    dx = width_degrees / width_pixels
+    dy = dx
+    height_degrees = height_pixels * dy
+
+    x_degrees = np.linspace(-width_degrees / 2 + dx / 2, width_degrees / 2 - dx / 2, width_pixels)
+    y_degrees = np.linspace(-height_degrees / 2 + dy / 2, height_degrees / 2 - dy / 2, height_pixels)
+
+    x_mesh, y_mesh = np.meshgrid(x_degrees, y_degrees)
+
+    data['grid_coordinates'] = pd.DataFrame({'x': x_mesh.ravel(), 'y': y_mesh.ravel()}).astype(np.float32)
+    data['tr'] = 1.5
 
     return data
