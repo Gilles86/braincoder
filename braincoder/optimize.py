@@ -277,7 +277,8 @@ class ParameterFitter(object):
         return self.estimated_parameters
 
     def fit_grid(self, *args, fixed_pars=None,
-            use_correlation_cost=False, **kwargs):
+                 use_correlation_cost=False,
+                 positive_amplitude=True, **kwargs):
 
         # Calculate a proper chunk size for cutting up the parameter grid
         n_timepoints, n_voxels = self.data.shape
@@ -342,7 +343,12 @@ class ParameterFitter(object):
                 r = r[0]
 
                 # Make sure all items in r are finite (replace inf with nan)
-                r = tf.where(tf.math.is_finite(r), r, tf.ones_like(r) * -1)
+                
+                if positive_amplitude:
+                    r = tf.where(tf.math.is_finite(r), r, tf.ones_like(r) * -1)
+                else:
+                    r = tf.where(tf.math.is_finite(r), r, tf.zeros_like(r))
+                    r = r**2 # Differentiates better than abs(r)
 
                 best_ixs = tf.argmax(r, 1)
 
