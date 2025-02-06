@@ -391,7 +391,7 @@ class ParameterFitter(object):
 
         return best_pars
 
-    def refine_baseline_and_amplitude(self, parameters, n_iterations=2, positive_amplitude=True, l2_alpha=1.0):
+    def refine_baseline_and_amplitude(self, parameters, n_iterations=1, positive_amplitude=True, l2_alpha=1.0):
 
         data = self.data
         predictions = self.model.predict(parameters=parameters, paradigm=self.paradigm)
