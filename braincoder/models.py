@@ -1877,10 +1877,6 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
             return DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters)
 
 
-    def _predict(self, paradigm, parameters, weights):
-        baseline = parameters[tf.newaxis, :, :, 3]
-        return HRFEncodingModel._predict(self, paradigm, parameters, weights) + baseline
-
 class DiscreteModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
