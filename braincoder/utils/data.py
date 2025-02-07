@@ -110,6 +110,9 @@ def load_vanes2019(raw_files=False, downsample_stimulus=5.):
     data['ts'] = pd.concat((pd.DataFrame(data_lh, index=pd.Index(np.arange(len(data_lh)), name='vertex')),
                       pd.DataFrame(data_rh, index=pd.Index(np.arange(len(data_rh)), name='vertex'))), keys=['L', 'R'], names=['hemisphere'], axis=0).T
 
+    # Convert ts to percent signal change:
+    data['ts'] = (data['ts'] - data['ts'].mean()) / data['ts'].mean() * 100
+
     data['stimulus'] = zoom(io.loadmat(dataset_folder / "vis_design.mat")['stim'], (1./downsample_stimulus, 1./downsample_stimulus, 1)).astype(np.float32)
     data['stimulus'] = np.clip(np.moveaxis(np.moveaxis(data['stimulus'], -1, 0), -1, 1) / 255., 0, 1)
 
