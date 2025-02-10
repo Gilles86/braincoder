@@ -1812,21 +1812,23 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
         mu_x = parameters[:, :, 0, tf.newaxis]
         mu_y = parameters[:, :, 1, tf.newaxis]
         sd = parameters[:, :, 2, tf.newaxis]
-        rf_amplitude = parameters[:, :, 3, tf.newaxis]
         rf_parameters = tf.concat([mu_x, mu_y, sd, tf.zeros_like(mu_x), tf.ones_like(mu_x)], axis=2)
         rf = self._get_rf(self.grid_coordinates, rf_parameters)
 
-        srf_amplitude = parameters[:, :, 4, tf.newaxis]
         srf_size = parameters[:, :, 5, tf.newaxis]
 
         srf_parameters = tf.concat([mu_x, mu_y, sd*srf_size, tf.zeros_like(mu_x), tf.ones_like(mu_x)], axis=2)
 
         srf = self._get_rf(self.grid_coordinates, srf_parameters)
 
-        neural_baseline = parameters[tf.newaxis, :, :, 6]
-        surround_baseline = parameters[tf.newaxis, :, :, 7]
 
-        # [1,150,2365], [1,2365,1]
+        # From n_batches x n_voxels to 
+        # n_batches x n_timespoints x n_populations
+        rf_amplitude = parameters[:, :, 3][:, tf.newaxis, :] 
+        srf_amplitude = parameters[:, :, 4][:, tf.newaxis, :] 
+        neural_baseline = parameters[:, :, 6][:, tf.newaxis, :] 
+        surround_baseline = parameters[:, :, 7][:, tf.newaxis, :] 
+
         neural_activation = rf_amplitude * tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :] + neural_baseline
         normalization = (srf_amplitude * rf_amplitude) * tf.tensordot(paradigm, srf, (2, 2))[:, :, 0, :] + surround_baseline
 
@@ -1862,7 +1864,9 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
 
             return tf.concat([encoding_pars, bold_baseline, hrf_pars], axis=1)
         else:
-            return DivisiveNormalizationGaussianPRF2D._transform_parameters_forward(self, parameters)
+            encoding_pars1 = DivisiveNormalizationGaussianPRF2D._transform_parameters_forward(self, parameters[:, :-1])
+            bold_baseline = parameters[:, -1:]
+            return tf.concat([encoding_pars1, bold_baseline], axis=1)
 
     @tf.function
     def _transform_parameters_backward(self, parameters):
@@ -1873,16 +1877,20 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
             encoding_pars = DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters[:, :-n_hrf_pars-1])
             bold_baseline = parameters[:, -n_hrf_pars-1][:, tf.newaxis]
             hrf_pars = self.hrf_model._transform_parameters_backward(parameters[:, -n_hrf_pars:])
-            
             return tf.concat([encoding_pars, bold_baseline, hrf_pars], axis=1)
+
         else:
-            return DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters)
+            encoding_pars1 =  DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters[:, :-1])
+            bold_baseline = parameters[:, -1:]
+            return tf.concat([encoding_pars1, bold_baseline], axis=1)
 
 
     @tf.function
     def _predict(self, paradigm, parameters, weights):
 
-        pre_convolve = DivisiveNormalizationGaussianPRF2D._predict(self, paradigm, parameters, weights)
+        
+        pre_convolve_parameters = parameters[..., :8]
+        pre_convolve = DivisiveNormalizationGaussianPRF2D._predict(self, paradigm, pre_convolve_parameters, weights)
 
         neural_baseline = parameters[tf.newaxis, :, :, 6]
         surround_baseline = parameters[tf.newaxis, :, :, 7]
