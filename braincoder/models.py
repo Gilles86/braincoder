@@ -10,7 +10,7 @@ from tensorflow.math import softplus, sigmoid
 import pandas as pd
 import scipy.stats as ss
 from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
-from patsy import dmatrix
+from patsy import dmatrix, build_design_matrices
 
 class EncodingModel(object):
 
@@ -123,9 +123,7 @@ class EncodingModel(object):
                                  stddev=noise,
                                  dtype=tf.float32)
 
-        paradigm_ = self._get_paradigm(paradigm)
-
-        return self._predict(paradigm_, parameters, weights) + noise
+        return self._predict(paradigm, parameters, weights) + noise
 
     def _gradient(self, stimuli, parameters):
         stimuli = tf.convert_to_tensor(stimuli)
@@ -462,8 +460,6 @@ class EncodingModel(object):
             else:
                 raise ValueError('Please provide paradigm!')
 
-        paradigm = self.stimulus.clean_paradigm(paradigm)
-
         return paradigm
 
     def _get_paradigm(self, paradigm):
@@ -498,23 +494,21 @@ class EncodingRegressionModel(EncodingModel):
         else:
             raise ValueError('Please provide paradigm!')
 
+        self.base_parameter_labels = self.parameter_labels
+        self.set_paradigm(paradigm, regressors)
+
         super().__init__(paradigm=base_paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
         
-        self.base_parameter_labels = self.parameter_labels
-        self.paradigm = paradigm
 
-        if baseline_parameter_values is None:
-            baseline_parameter_values = {}
+        # If baseline_parameter_values is not provided, use empty dictionary
+        baseline_parameter_values = baseline_parameter_values or {}
 
-        self.baseline_parameter_values = {}
-        for base_parameter in self.base_parameter_labels:
-            if base_parameter in baseline_parameter_values:
-                self.baseline_parameter_values[base_parameter] = baseline_parameter_values[base_parameter]
-            else:
-                self.baseline_parameter_values[base_parameter] = 0.
-                
-        self.set_paradigm(paradigm, regressors)
+        # If parameter is not in baseline_parameter_values, set it to 0
+        self.baseline_parameter_values = {
+            param: baseline_parameter_values.get(param, 0.0)
+            for param in self.base_parameter_labels
+        }
 
         self._basis_basis_predictions = self._basis_predictions
         self._basis_predictions = self._basis_predictions_regressors
@@ -525,21 +519,6 @@ class EncodingRegressionModel(EncodingModel):
         self._transform_parameters_forward = lambda x: x
         self._transform_parameters_backward = lambda x: x
 
-
-    def build_design_matrices(self, paradigm, regressors=None):
-
-        design_matrices = {}
-
-        if regressors is None:
-            regressors = self.regressors
-
-        for parameter in self.base_parameter_labels:
-            if parameter in regressors:
-                design_matrices[parameter] = dmatrix(self.regressors[parameter], paradigm)
-            else:
-                design_matrices[parameter] = dmatrix('1', paradigm)
-
-        return design_matrices
 
     def _get_regressor_parameter_labels(self, design_matrices):
         regressor_parameters = []
@@ -569,20 +548,48 @@ class EncodingRegressionModel(EncodingModel):
 
         return parameters
 
+    def build_design_matrices(self, paradigm, regressors=None):
+
+        design_matrices = {}
+
+        if not hasattr(self, 'design_matrices'):
+            for parameter in self.base_parameter_labels:
+                if parameter in regressors:
+                    design_matrices[parameter] = dmatrix(self.regressors[parameter], paradigm)
+                else:
+                    design_matrices[parameter] = dmatrix('1', paradigm)
+        else:
+            assert regressors is None, 'Regressors should be set when the model is initialized.'
+
+            for parameter in self.base_parameter_labels:
+                design_info = self.design_matrices[parameter].design_info
+                design_matrices[parameter] = build_design_matrices([design_info], paradigm)[0]
+
+        return design_matrices
+
+
     def set_paradigm(self, paradigm, regressors=None):
 
-        if regressors is None:
-            regressors = {}
+        if not hasattr(self, 'paradigm'):
 
-        self.paradigm = paradigm
+            if regressors is None:
+                regressors = {}
 
-        self.design_matrices = self.build_design_matrices(paradigm, self.regressors)
-        self.parameter_labels = self._get_regressor_parameter_labels(self.design_matrices)
+            if regressors is None:
+                raise Exception('For EncodignRegressionModel, the regressors should be set when the model is initialized.')
+                # regressors = self.regressors
 
-        for paradigm_label in self.stimulus.dimension_labels:
-            if paradigm_label not in paradigm:
-                raise ValueError('Paradigm is missing required dimension: ' + paradigm_label + \
-                                  '\nNote that `EncodingRegressionModel` requires a paradigm named stimulus dimensions!')
+            self.paradigm = paradigm
+
+            self.design_matrices = self.build_design_matrices(paradigm, regressors)
+            self.parameter_labels = self._get_regressor_parameter_labels(self.design_matrices)
+
+        else:
+            if regressors is not None:
+                raise Exception('For EncodingRegressionModel, the regressors should be set when the model is initialized.')
+
+            self.design_matrices = self.build_design_matrices(paradigm)
+            self.paradigm = paradigm
 
         self.base_paradigm = paradigm[self.stimulus.dimension_labels]
 
@@ -591,7 +598,13 @@ class EncodingRegressionModel(EncodingModel):
         result = self._basis_basis_predictions(self.base_paradigm.values[:, np.newaxis, :], base_parameters)
         return tf.reshape(result, [1, result.shape[0], -1])
 
-    def get_paradigm(self, paradigm):
+    def _get_paradigm(self, paradigm):
+
+        # if not paradigm.equals(self.paradigm):
+        #     raise Exception('For EncodignRegressionModel, the paradigm should be set when the model is initialized OR using set_paradigm().')
+
+        paradigm = self.stimulus._clean_paradigm(paradigm)
+
         return paradigm
 
     def get_conditionspecific_parameters(self, conditions, parameters):
