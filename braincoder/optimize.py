@@ -397,12 +397,27 @@ class ParameterFitter(object):
         predictions = self.model.predict(parameters=parameters, paradigm=self.paradigm)
         parameters = parameters.copy()
 
-        assert(('baseline' in parameters.columns) and (
-            'amplitude' in parameters)), "Need parameters with amplitude and baseline"
+        
+        if isinstance(parameters.columns, pd.MultiIndex):
+
+            amplitude_ix = ('amplitude_unbounded', 'Intercept')
+            baseline_ix = ('baseline_unbounded', 'Intercept')
+
+            assert (amplitude_ix in parameters.columns and (
+                baseline_ix in parameters.columns)), "Need parameters with amplitude and baseline"
+
+        else:
+
+            assert(('baseline' in parameters.columns) and (
+                'amplitude' in parameters)), "Need parameters with amplitude and baseline"
+
+            amplitude_ix = 'amplitude'
+            baseline_ix = 'baseline'
+
 
         orig_r2 = get_rsq(data, predictions)
 
-        demeaned_predictions = (predictions / parameters.loc[:, 'amplitude']) -  parameters.loc[:, 'baseline'].T
+        demeaned_predictions = (predictions / parameters.loc[:, amplitude_ix]) -  parameters.loc[:, baseline_ix].T
 
         # n batches (voxels) x n_timepoints x regressors (2)
         X = np.stack((np.ones(
@@ -414,11 +429,11 @@ class ParameterFitter(object):
         Y_ = tf.reduce_sum(beta[:, tf.newaxis, :] * X, 2).numpy().T
 
         new_parameters = parameters.copy().astype(np.float32)
-        new_parameters.loc[:, 'baseline'] = beta[:, 0]
-        new_parameters.loc[:, 'amplitude'] = beta[:, 1]
+        new_parameters.loc[:, baseline_ix] = beta[:, 0]
+        new_parameters.loc[:, amplitude_ix] = beta[:, 1]
 
         if positive_amplitude:
-            new_parameters['amplitude'] = np.clip(new_parameters['amplitude'], 1e-4, np.inf)
+            new_parameters[amplitude_ix] = np.clip(new_parameters[amplitude_ix], 1e-4, np.inf)
 
         new_pred = self.model.predict(parameters=new_parameters, paradigm=self.paradigm)
         new_r2 = get_rsq(data, new_pred)
