@@ -479,7 +479,9 @@ class EncodingModel(object):
 class EncodingRegressionModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
-                regressors={}, weights=None, omega=None, verbosity=logging.INFO, **kwargs):
+                regressors={}, weights=None, omega=None,
+                baseline_parameter_values=None,
+                 verbosity=logging.INFO, **kwargs):
 
         self.regressors = regressors
 
@@ -493,16 +495,29 @@ class EncodingRegressionModel(EncodingModel):
 
             base_paradigm = paradigm[self.stimulus.dimension_labels]
 
+        else:
+            raise ValueError('Please provide paradigm!')
+
         super().__init__(paradigm=base_paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
         
         self.base_parameter_labels = self.parameter_labels
         self.paradigm = paradigm
+
+        if baseline_parameter_values is None:
+            baseline_parameter_values = {}
+
+        self.baseline_parameter_values = {}
+        for base_parameter in self.base_parameter_labels:
+            if base_parameter in baseline_parameter_values:
+                self.baseline_parameter_values[base_parameter] = baseline_parameter_values[base_parameter]
+            else:
+                self.baseline_parameter_values[base_parameter] = 0.
+                
         self.set_paradigm(paradigm, regressors)
 
         self._basis_basis_predictions = self._basis_predictions
         self._basis_predictions = self._basis_predictions_regressors
-
 
         self._base_transform_parameters_forward = self._transform_parameters_forward
         self._base_transform_parameters_backward = self._transform_parameters_backward
@@ -511,13 +526,15 @@ class EncodingRegressionModel(EncodingModel):
         self._transform_parameters_backward = lambda x: x
 
 
-    def build_design_matrices(self, paradigm, regressors):
+    def build_design_matrices(self, paradigm, regressors=None):
 
         design_matrices = {}
-        parameter_names = []
+
+        if regressors is None:
+            regressors = self.regressors
 
         for parameter in self.base_parameter_labels:
-            if parameter in self.regressors:
+            if parameter in regressors:
                 design_matrices[parameter] = dmatrix(self.regressors[parameter], paradigm)
             else:
                 design_matrices[parameter] = dmatrix('1', paradigm)
@@ -543,7 +560,7 @@ class EncodingRegressionModel(EncodingModel):
             end_ix = ix + design_matrices[parameter].shape[1]
 
             parameters.append(tf.reduce_sum(np.asarray(design_matrices[parameter], dtype=np.float32)[:, np.newaxis, :] * \
-                                      regressor_parameters[:, :, ix:end_ix], axis=2))
+                                      regressor_parameters[:, :, ix:end_ix], axis=2) + self.baseline_parameter_values[parameter])
 
             ix = end_ix
 
@@ -1723,7 +1740,6 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
         standard_prf = super()._get_rf(grid_coordinates, parameters)
 
         srf_pars = tf.concat([mu_x, mu_y, sd*srf_size, tf.zeros_like(mu_x), srf_amplitude*amplitude*srf_size], axis=2)
-        print(parameters.shape, srf_pars.shape)
         sprf = super()._get_rf(grid_coordinates, srf_pars)
 
         return standard_prf - sprf
