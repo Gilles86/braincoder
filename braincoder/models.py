@@ -594,26 +594,26 @@ class EncodingRegressionModel(EncodingModel):
     def get_paradigm(self, paradigm):
         return paradigm
 
-def get_transformed_parameters(self, paradigm, parameters):
-    design_matrices = self.build_design_matrices(paradigm, self.regressors)
+    def get_conditionspecific_parameters(self, conditions, parameters):
 
+        design_matrices = self.build_design_matrices(conditions)
 
-    if hasattr(parameters, 'values'):
-        parameters_ = parameters.values
-    else:
-        parameters_ = np.array(parameters)
+        if hasattr(parameters, 'values'):
+            parameters_ = parameters.values
+        else:
+            parameters_ = np.array(parameters)
 
-    parameters_ = parameters_[np.newaxis, ...]
+        parameters_ = parameters_[np.newaxis, ...]
 
-    transformed_parameters = self._get_base_parameters(design_matrices, parameters_).numpy()
+        transformed_parameters = self._get_base_parameters(design_matrices, parameters_).numpy()
 
-    transformed_parameters = np.reshape(transformed_parameters, (-1, transformed_parameters.shape[-1]))
+        transformed_parameters = np.reshape(transformed_parameters, (-1, transformed_parameters.shape[-1]))
 
-    transformed_parameters = pd.DataFrame(transformed_parameters,
-                                          index=pd.MultiIndex.from_product([paradigm.index, parameters.index]),
-                                          columns=self.base_parameter_labels)
+        transformed_parameters = pd.DataFrame(transformed_parameters,
+                                            index=pd.MultiIndex.from_product([conditions.index, parameters.index]),
+                                            columns=self.base_parameter_labels)
 
-    return transformed_parameters
+        return transformed_parameters
 
 
 
