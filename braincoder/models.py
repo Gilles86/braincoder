@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from .utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
 from tensorflow_probability import distributions as tfd
-from tensorflow.math import softplus, sigmoid
+from braincoder.utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
 import pandas as pd
 import scipy.stats as ss
 from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
@@ -827,14 +827,14 @@ class GaussianPRF(EncodingModel):
     @tf.function
     def _transform_parameters_forward1(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          aggressive_softplus(parameters[:, 1][:, tf.newaxis]), 
                           parameters[:, 2][:, tf.newaxis],
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
     @tf.function
     def _transform_parameters_backward1(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
+                          aggressive_softplus_inverse(
                               parameters[:, 1][:, tf.newaxis]),
                           parameters[:, 2][:, tf.newaxis],
                           parameters[:, 3][:, tf.newaxis]], axis=1)
@@ -842,17 +842,17 @@ class GaussianPRF(EncodingModel):
     @tf.function
     def _transform_parameters_forward2(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          aggressive_softplus(parameters[:, 1][:, tf.newaxis]),
+                          aggressive_softplus(parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
     @tf.function
     def _transform_parameters_backward2(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
+                          aggressive_softplus_inverse(
                               parameters[:, 1][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
+                            aggressive_softplus_inverse(
+                                parameters[:, 2][:, tf.newaxis]),
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
 class RegressionGaussianPRF(EncodingRegressionModel, GaussianPRF):

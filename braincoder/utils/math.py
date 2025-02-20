@@ -1,4 +1,5 @@
 import tensorflow as tf
+import tensorflow_probability as tfp
 import pandas as pd
 import numpy as np
 
@@ -62,3 +63,10 @@ def von_mises_pdf(x, mu, kappa):
     pdf = tf.exp(kappa * tf.cos(x - mu)) / (TWO_PI * tf.math.bessel_i0(kappa))
 
     return pdf
+
+    import tensorflow as tf
+
+# Aggressive softplus with alpha=100
+alpha = 100
+aggressive_softplus = lambda x: (1./alpha) * tf.math.softplus(alpha*x)
+aggressive_softplus_inverse = lambda y: (1./alpha) * tfp.math.softplus_inverse(alpha * y)
