@@ -460,6 +460,8 @@ class EncodingModel(object):
             else:
                 raise ValueError('Please provide paradigm!')
 
+        paradigm = self.stimulus.clean_paradigm(paradigm)
+
         return paradigm
 
     def _get_paradigm(self, paradigm):
