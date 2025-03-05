@@ -1927,7 +1927,7 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
         surround_baseline = parameters[tf.newaxis, :, :, 7]
         bold_baseline = parameters[tf.newaxis, :, :, 8]
 
-        pre_convolve = pre_convolve - (neural_baseline + surround_baseline)
+        pre_convolve = pre_convolve - (neural_baseline / surround_baseline)
 
 
         kwargs = {}
