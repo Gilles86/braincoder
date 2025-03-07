@@ -1826,8 +1826,8 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
                           tfp.math.softplus_inverse(
                               parameters[:, 4][:, tf.newaxis]),
                           tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis] - 1),
-                          tf.math.softplus(parameters[:, 6][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 7][:, tf.newaxis])], axis=1)
+                          tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(parameters[:, 7][:, tf.newaxis])], axis=1)
 
 
     @tf.function
