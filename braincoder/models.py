@@ -1008,6 +1008,83 @@ class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
 class LogGaussianPRFWithHRF(LogGaussianPRF, HRFEncodingModel):
     pass
 
+
+class AlphaGaussianPRF(GaussianPRF):
+
+    parameter_labels = ['mu', 'sd', 'alpha', 'amplitude', 'baseline']
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
+                 model_stimulus_amplitude=False,
+                 **kwargs):
+
+        if model_stimulus_amplitude:
+            raise NotImplementedError("Modeling stimulus amplitude is not implemented for AlphaGaussianPRF")
+
+        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
+                         weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+                          verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
+                          **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward1(self, parameters):
+        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward1(self, parameters):
+        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          parameters[:, 3][:, tf.newaxis],
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
+    @tf.function
+    def _transform_parameters_forward2(self, parameters):
+        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
+                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          tf.math.softplus(parameters[:, 3][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+    
+    @tf.function
+    def _transform_parameters_backward2(self, parameters):
+        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
+                          tfp.math.softplus_inverse(
+                              parameters[:, 1][:, tf.newaxis]),
+                          parameters[:, 2][:, tf.newaxis],
+                          tfp.math.softplus_inverse(parameters[:, 3][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis]], axis=1)
+
+    @tf.function
+    def _basis_predictions_without_amplitude(self, paradigm, parameters):
+        def alpha_transform(x, alpha, eps=1e-6):
+            """ Computes a numerically stable alpha transformation. """
+            return tf.where(
+                tf.abs(alpha) < eps,
+                tf.math.log(x),  # Directly use log(x) when alpha ≈ 0
+                (tf.pow(x, alpha) - 1) / alpha
+            )
+
+        def f_x(x, mu_x, sigma_mu, alpha):
+            """ Computes p_x(x | mu_x, sigma_x) using the given formula. """
+            mu_alpha_x = alpha_transform(x, alpha)  # Using your transformation
+            mu_alpha_mu = alpha_transform(mu_x, alpha)  # Using your transformation
+            exponent = -tf.square(mu_alpha_x - mu_alpha_mu) / (2 * tf.square(sigma_mu))
+            return tf.exp(exponent)
+
+        return f_x(paradigm[..., tf.newaxis, 0],
+                    parameters[:, tf.newaxis, :, 0],
+                    parameters[:, tf.newaxis, :, 1],
+                    parameters[:, tf.newaxis, :, 2]) * \
+            parameters[:, tf.newaxis, :, 3] + parameters[:, tf.newaxis, :, 4]
+
+class RegressionAlphaGaussianPRF(EncodingRegressionModel, AlphaGaussianPRF):
+    pass
+
 class GaussianPRFOnGaussianSignal(GaussianPRF):
 
     stimulus_type = OneDimensionalGaussianStimulus
