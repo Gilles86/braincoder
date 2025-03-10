@@ -244,27 +244,6 @@ class ParameterFitter(object):
             self.estimated_parameters = format_parameters(
                 best_parameters.numpy(), self.model.parameter_labels)
 
-        elif optimizer.endswith('bfgs'):
-
-            def bfgs_cost(trans_parameters):
-                parameters = self.model._transform_parameters_forward(
-                    trans_parameters)
-                return tfp.math.value_and_gradient(get_ssq, parameters)
-
-            if optimizer == 'bfgs':
-                optim_results = tfp.optimizer.bfgs_minimize(bfgs_cost,
-                                                            initial_position=init_pars, tolerance=1e-6,
-                                                            max_iterations=500)
-            elif optimizer == 'lbfgs':
-                optim_results = tfp.optimizer.lbfgs_minimize(bfgs_cost,
-                                                             initial_position=init_pars, tolerance=1e-6,
-                                                             max_iterations=500)
-
-            self.estimated_parameters = format_parameters(
-                optim_results.position, self.model.parameter_labels)
-
-            ssq = get_ssq(optim_results.position)
-
         self.estimated_parameters.index = self.data.columns
 
         if not self.estimated_parameters.index.name:
