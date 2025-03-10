@@ -216,7 +216,7 @@ class ParameterFitter(object):
 
                 if hasattr(self, 'summary_write'):
                     with self.summary_writer.as_default():
-                        tf.summary.scalar('mean R2', mean_r2, step=step)
+                        tf.summary.scalar('mean R2', mean_current_r2, step=step)
 
                 if store_intermediate_parameters:
                     p = untransformed_parameters.numpy().T
