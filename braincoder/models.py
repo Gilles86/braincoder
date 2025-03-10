@@ -1048,7 +1048,7 @@ class AlphaGaussianPRF(GaussianPRF):
                           tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
                           parameters[:, 2][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 3][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
     
     @tf.function
     def _transform_parameters_backward2(self, parameters):
@@ -1057,7 +1057,7 @@ class AlphaGaussianPRF(GaussianPRF):
                               parameters[:, 1][:, tf.newaxis]),
                           parameters[:, 2][:, tf.newaxis],
                           tfp.math.softplus_inverse(parameters[:, 3][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
+                          parameters[:, 4][:, tf.newaxis]], axis=1)
 
     @tf.function
     def _basis_predictions_without_amplitude(self, paradigm, parameters):
