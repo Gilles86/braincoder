@@ -68,6 +68,7 @@ class ParameterFitter(object):
             confounds=None,
             optimizer=None,
             fixed_pars=None,
+            shared_pars=None,  # New: Parameters to be shared across voxels
             store_intermediate_parameters=False,
             r2_atol=0.000001,
             lag=100,
@@ -81,176 +82,200 @@ class ParameterFitter(object):
         y = self.data.values
 
         if optimizer is None:
-
             if legacy_adam:
                 opt = tf.keras.optimizers.legacy.Adam(learning_rate=learning_rate, **kwargs)
             else:
                 opt = tf.optimizers.Adam(learning_rate=learning_rate, **kwargs)
 
         if init_pars is None:
-            init_pars = self.model.get_init_pars(
-                data=y, paradigm=self.paradigm, confounds=confounds)
+            init_pars = self.model.get_init_pars(data=y, paradigm=self.paradigm, confounds=confounds)
             print('using get_init_pars')
 
         init_pars = self.model._get_parameters(init_pars)
         init_pars = self.model._transform_parameters_backward(init_pars.values.astype(np.float32))
 
-        ssq_data = tf.reduce_sum(
-            (y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
-
-        # Voxels with no variance to explain can confuse the optimizer to a large degree,
-        # since the gradient landscape is completely flat.
-        # Therefore, we only optimize voxels where there is variance to explain
+        ssq_data = tf.reduce_sum((y - tf.reduce_mean(y, 0)[tf.newaxis, :])**2, 0)
         meaningful_ts = ssq_data > 0.0
 
+        # Handle fixed parameters
         if fixed_pars is None:
             parameter_ix = range(n_pars)
         else:
             parameter_ix = [ix for ix, label in enumerate(self.model.parameter_labels) if label not in fixed_pars]
 
-            print('*** Only fitting: ***')
-            for ix in parameter_ix:
+        print('*** Fitting: ***')
+        for ix in parameter_ix:
+            print(f' * {self.model.parameter_labels[ix]}')
+
+        if len(parameter_ix) != n_pars:
+            print('*** Fixed Parameters: ***')
+            for label in fixed_pars:
+                print(f' * {label}')
+
+        # Handle shared parameters
+        if shared_pars is not None:
+            shared_parameter_ix = tf.constant(
+                [ix for ix, label in enumerate(self.model.parameter_labels) if label in shared_pars], dtype=tf.int32
+        )
+            voxel_specific_parameters_ix = [ix for ix in parameter_ix if ix not in shared_parameter_ix.numpy()]
+
+            print('*** Shared Parameters: ***')
+            for ix in shared_parameter_ix.numpy():
                 print(f' * {self.model.parameter_labels[ix]}')
 
-        parameter_ix = tf.constant(parameter_ix, dtype=tf.int32)
+        else:
+            voxel_specific_parameters_ix = parameter_ix
 
         n_meaningful_ts = tf.reduce_sum(tf.cast(meaningful_ts, tf.int32))
-        n_trainable_pars = len(parameter_ix)
 
-        update_feature_ix, update_parameter_ix = tf.meshgrid(tf.cast(tf.where(meaningful_ts), tf.int32), parameter_ix)
-        update_ix = tf.stack((tf.reshape(update_feature_ix, tf.size(update_feature_ix)),
-                              tf.reshape(update_parameter_ix, tf.size(update_parameter_ix))), 1)
+        # **Voxel-Specific Parameter Updates**
+        voxel_parameter_update_ix, update_parameter_ix = tf.meshgrid(tf.cast(tf.where(meaningful_ts), tf.int32), voxel_specific_parameters_ix)
+        voxel_parameter_update_ix = tf.stack((tf.reshape(voxel_parameter_update_ix, tf.size(voxel_parameter_update_ix)),
+                            tf.reshape(update_parameter_ix, tf.size(update_parameter_ix))), 1)
 
-        print(
-            f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int32))}')
-        print(
-            f'Number of voxels remaining (mask): {tf.reduce_sum(tf.cast(meaningful_ts == True, tf.int32))}')
+        print(f'Number of problematic voxels (mask): {tf.reduce_sum(tf.cast(meaningful_ts == False, tf.int32))}')
+        print(f'Number of voxels remaining (mask): {tf.reduce_sum(tf.cast(meaningful_ts == True, tf.int32))}')
 
-        trainable_parameters = tf.Variable(initial_value=tf.gather_nd(init_pars, update_ix),
-                                           shape=(n_meaningful_ts*n_trainable_pars),
-                                           name='estimated_parameters', dtype=tf.float32)
+        # **Initialize Trainable Parameters**
+        trainable_voxel_specific_parameters = tf.Variable(
+            initial_value=tf.gather_nd(init_pars, voxel_parameter_update_ix),
+            shape=(n_meaningful_ts * len(voxel_specific_parameters_ix),),
+            name='voxel_specific_parameters',
+            dtype=tf.float32
+        )
 
-        trainable_variables = [trainable_parameters]
+        if shared_pars is not None:
+            # Compute the mean of selected parameters
+            shared_parameter_init_values = tf.gather(init_pars, shared_parameter_ix, axis=1)
 
-        if confounds is not None:
-            # n_voxels x 1 x n_timepoints x n variables
-            confounds = tf.repeat(
-                confounds[tf.newaxis, tf.newaxis, :, :], n_voxels, 0)
+            if len(shared_parameter_ix.shape) == 0:  # If only one parameter is shared
+                shared_parameter_init_values = shared_parameter_init_values[:, tf.newaxis]
+
+            trainable_shared_parameters = tf.Variable(
+                initial_value=tf.reduce_mean(shared_parameter_init_values, axis=0),
+                shape=(len(shared_parameter_ix),),
+                name='shared_parameters',
+                dtype=tf.float32)
+
+            # Combine trainable variables
+            trainable_variables = [trainable_voxel_specific_parameters, trainable_shared_parameters]
+
+            # Expand shared parameters across all voxels
+            voxel_indices = tf.range(n_voxels, dtype=tf.int32)[:, tf.newaxis]  # Shape: [n_voxels, 1]
+
+            # Create a meshgrid to assign shared parameters to every voxel
+            voxel_indices, shared_parameter_ix = tf.meshgrid(voxel_indices, shared_parameter_ix, indexing="ij")  # Correct indexing
+            shared_parameter_ix_expanded = tf.reshape(shared_parameter_ix, [-1])  # Flatten
+            voxel_indices_expanded = tf.reshape(voxel_indices, [-1])  # Flatten only once!
+
+            # Create the correct index tensor for scatter update
+            shared_parameter_update_ix = tf.stack([voxel_indices_expanded, shared_parameter_ix_expanded], axis=-1)  # Shape: [n_voxels * n_shared_params, 2]
+
+        else:
+            trainable_variables = [trainable_voxel_specific_parameters]
 
         if store_intermediate_parameters:
             intermediate_parameters = []
 
         mean_best_r2s = []
-
         paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
 
-        if confounds is None:
-            @tf.function
-            def get_ssq(parameters):
-                predictions = self.model._predict(
-                    paradigm_[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
+        @tf.function
+        def get_ssq(parameters):
+            predictions = self.model._predict(
+                paradigm_[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
 
-                residuals = y - predictions[0]
+            residuals = y - predictions[0]
 
-                ssq = tf.reduce_sum(residuals**2, 0)
-                return ssq
+            ssq = tf.reduce_sum(residuals**2, 0)
+            return ssq
 
-        else:
-            @tf.function
-            def get_ssq(parameters):
-                predictions_ = self.model._predict(
-                    paradigm_[tf.newaxis, ...], parameters[tf.newaxis, ...], None)
+        # Optimization Loop
+        pbar = range(max_n_iterations)
+        if progressbar:
+            from tqdm import tqdm
+            pbar = tqdm(pbar)
 
-                predictions = tf.transpose(predictions_)[
-                    :, tf.newaxis, :, tf.newaxis]
-                X = tf.concat([predictions, confounds], -1)
-                beta = tf.linalg.lstsq(X, tf.transpose(
-                    y)[:, tf.newaxis, :, tf.newaxis])
-                predictions = tf.transpose((X @ beta)[:, 0, :, 0])
+        best_r2 = tf.ones(y.shape[1]) * -1e3
+        best_parameters = tf.zeros(init_pars.shape)
 
-                residuals = y - predictions[0]
-
-                ssq = tf.squeeze(tf.reduce_sum(residuals**2))
-                ssq = tf.clip_by_value(
-                    tf.math.reduce_variance(residuals, 0), 1e-6, 1e12)
-                return ssq
-
-        if optimizer is None:
-            pbar = range(max_n_iterations)
-            if progressbar:
-                pbar = tqdm(pbar)
-
-            best_r2 = tf.ones(y.shape[1]) * -1e3
-            best_parameters = tf.zeros(init_pars.shape)
-
-            for step in pbar:
-                with tf.GradientTape() as t:
+        for step in pbar:
+            with tf.GradientTape() as tape:
+                # Update voxelwise parameters
+                parameters = tf.tensor_scatter_nd_update(
+                    init_pars, voxel_parameter_update_ix, trainable_voxel_specific_parameters)
+                                                        
+                if shared_pars is not None:
+                    tiled_trainable_shared_parameters = tf.reshape(
+                        tf.tile(trainable_shared_parameters[tf.newaxis, :], [n_voxels, 1]),
+                        [-1]
+                    )
                     parameters = tf.tensor_scatter_nd_update(
-                        init_pars, update_ix, trainable_parameters)
-                    untransformed_parameters = self.model._transform_parameters_forward(
-                        parameters)
+                        parameters,
+                        shared_parameter_update_ix,
+                        tiled_trainable_shared_parameters)
 
-                    ssq = get_ssq(untransformed_parameters)
-                    cost = tf.reduce_sum(ssq)
+                untransformed_parameters = self.model._transform_parameters_forward(
+                    parameters)
 
-                gradients = t.gradient(cost, trainable_variables)
-                r2 = (1 - (ssq / ssq_data))
+                ssq = get_ssq(untransformed_parameters)
+                cost = tf.reduce_sum(ssq)
 
+            gradients = tape.gradient(cost, trainable_variables)
+            r2 = (1 - (ssq / ssq_data))
+
+            if shared_pars is None:
                 improved_r2s = r2 > best_r2
                 best_parameters = tf.where(
                     improved_r2s[:, tf.newaxis], untransformed_parameters, best_parameters)
                 best_r2 = tf.where(improved_r2s, r2, best_r2)
+            else:
+                best_parameters = untransformed_parameters
+                best_r2 = r2
 
-                mean_current_r2 = r2[meaningful_ts].numpy().mean()
-                mean_best_r2 = best_r2[meaningful_ts].numpy().mean()
+            mean_current_r2 = r2[meaningful_ts].numpy().mean()
+            mean_best_r2 = best_r2[meaningful_ts].numpy().mean()
 
-                if step >= min_n_iterations:
-                    r2_diff = mean_best_r2 - \
-                        mean_best_r2s[np.max((step - lag, 0))]
-                    if (r2_diff >= 0.0) & (r2_diff < r2_atol):
-                        if progressbar:
-                            pbar.close()
-                        break
+            if step >= min_n_iterations:
+                r2_diff = mean_best_r2 - mean_best_r2s[np.max((step - lag, 0))]
+                if (r2_diff >= 0.0) & (r2_diff < r2_atol):
+                    if progressbar:
+                        pbar.close()
+                    break
 
-                mean_best_r2s.append(mean_best_r2)
+            mean_best_r2s.append(mean_best_r2)
+            opt.apply_gradients(zip(gradients, trainable_variables))
 
-                if hasattr(self, 'summary_write'):
-                    with self.summary_writer.as_default():
-                        tf.summary.scalar('mean R2', mean_current_r2, step=step)
-
-                if store_intermediate_parameters:
-                    p = untransformed_parameters.numpy().T
-                    intermediate_parameters.append(
-                        np.reshape(p, np.prod(p.shape)))
-                    intermediate_parameters[-1] = np.concatenate(
-                        (intermediate_parameters[-1], r2), 0)
-
-                opt.apply_gradients(zip(gradients, trainable_variables))
-
-                if progressbar:
-                    pbar.set_description(
-                        f'Current R2: {mean_current_r2:0.5f}/Best R2: {mean_best_r2:0.5f}')
+            if progressbar:
+                pbar.set_description(f'Current R2: {mean_current_r2:0.5f}/Best R2: {mean_best_r2:0.5f}')
 
             if store_intermediate_parameters:
-                columns = pd.MultiIndex.from_product([self.model.parameter_labels + ['r2'],
-                                                      np.arange(n_voxels)],
-                                                     names=['parameter', 'voxel'])
+                p = untransformed_parameters.numpy().T
+                intermediate_parameters.append(
+                    np.reshape(p, np.prod(p.shape)))
+                intermediate_parameters[-1] = np.concatenate(
+                    (intermediate_parameters[-1], r2), 0)
 
-                self.intermediate_parameters = pd.DataFrame(intermediate_parameters,
-                                                            columns=columns,
-                                                            index=pd.Index(np.arange(len(intermediate_parameters)),
-                                                                           name='step'))
 
-            self.estimated_parameters = format_parameters(
-                best_parameters.numpy(), self.model.parameter_labels)
+        self.estimated_parameters = format_parameters(
+            best_parameters.numpy(), self.model.parameter_labels)
 
         self.estimated_parameters.index = self.data.columns
 
         if not self.estimated_parameters.index.name:
             self.estimated_parameters.index.name = 'source'
 
-        self.predictions = self.model.predict(
-            self.paradigm, self.estimated_parameters, self.model.weights)
+        if store_intermediate_parameters:
+            columns = pd.MultiIndex.from_product([self.model.parameter_labels + ['r2'],
+                                                    np.arange(n_voxels)],
+                                                    names=['parameter', 'voxel'])
+
+            self.intermediate_parameters = pd.DataFrame(intermediate_parameters,
+                                                        columns=columns,
+                                                        index=pd.Index(np.arange(len(intermediate_parameters)),
+                                                                        name='step'))
+
+        self.predictions = self.model.predict(self.paradigm, self.estimated_parameters, self.model.weights)
         self.r2 = pd.Series(best_r2.numpy(), index=self.data.columns)
 
         return self.estimated_parameters
