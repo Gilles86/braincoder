@@ -739,13 +739,17 @@ class GaussianPRF(EncodingModel):
 
         paradigm = self.get_paradigm(paradigm)
         parameters = self._get_parameters(parameters)
+            
+        paradigm_ = self._get_paradigm(paradigm)[np.newaxis, ...]
+        parameters_ = parameters.values[np.newaxis, ...] if parameters is not None else None
 
-        if hasattr(parameters, 'values'):
-            parameters = parameters.values
+        # predictions = self._predict(paradigm_, parameters_, weights_)[0]
+        # if hasattr(parameters, 'values'):
+        #     parameters = parameters.values
 
-        parameters = np.float32(parameters)
+        # parameters = np.float32(parameters)
 
-        return self._basis_predictions(self.stimulus._generate_stimulus(paradigm.values), parameters[np.newaxis, ...])[0]
+        return self._basis_predictions(paradigm_, parameters_)[0]
 
     def get_init_pars(self, data, paradigm, confounds=None):
 
