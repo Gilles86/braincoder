@@ -79,7 +79,8 @@ class EncodingModel(object):
         else:
             return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=weights.columns)
 
-    def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.):
+    def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.,
+                 n_repeats=1):
 
         weights, weights_ = self._get_weights(weights)
         paradigm = self.get_paradigm(paradigm)
@@ -92,21 +93,30 @@ class EncodingModel(object):
 
         parameters = self._get_parameters(parameters)
 
-        if np.isscalar(noise):
-            simulated_data = self._simulate(
-                self.stimulus._generate_stimulus(paradigm_)[np.newaxis, ...],
-                parameters.values[np.newaxis, ...],
-                weights_, noise).numpy()[0]
+        stimulus = self.stimulus._generate_stimulus(paradigm_) 
+
+        stimulus = np.repeat(stimulus[np.newaxis, ...], n_repeats, axis=0)
+
+        # if np.isscalar(noise):
+        simulated_data = self._simulate(
+            stimulus,
+            parameters.values[np.newaxis, ...],
+            weights_, noise).numpy()
+
+
+        # Collapse the first two dimensions
+        simulated_data = np.reshape(simulated_data, (n_repeats*paradigm.shape[0], simulated_data.shape[2]))
+
+        if n_repeats == 1:
+            index = pd.Index(paradigm.index, name='stimulus')
         else:
-            assert(noise.ndim == 2), 'noise should be either a scalar or a square covariance matrix'
-            pred = self.predict(paradigm, parameters, weights)
-            noise = ss.multivariate_normal(np.zeros(pred.shape[1]), cov=noise).rvs(len(pred)).astype(np.float32)
-            simulated_data = pred + noise
+            # index = pd.MultiIndex.from_product([paradigm.index, np.arange(n_repeats)], names=['stimulus', 'repeat'])
+            index = pd.MultiIndex.from_product([np.arange(n_repeats), paradigm.index], names=['repeat', 'stimulus'])
 
         if weights is None:
-            return pd.DataFrame(simulated_data, index=paradigm.index, columns=parameters.index)
+            return pd.DataFrame(simulated_data, index=index, columns=parameters.index)
         else:
-            return pd.DataFrame(simulated_data, index=paradigm.index, columns=weights.columns)
+            return pd.DataFrame(simulated_data, index=index, columns=weights.columns)
 
     def _simulate(self, paradigm, parameters, weights, noise=1.):
 
@@ -118,10 +128,14 @@ class EncodingModel(object):
         else:
             n_voxels = weights.shape[2]
 
-        noise = tf.random.normal(shape=(n_batches, n_timepoints, n_voxels),
-                                 mean=0.0,
-                                 stddev=noise,
-                                 dtype=tf.float32)
+        if tf.experimental.numpy.isscalar(noise):
+            noise = tf.random.normal(shape=(n_batches, n_timepoints, n_voxels),
+                                    mean=0.0,
+                                    stddev=noise,
+                                    dtype=tf.float32)
+        else:
+            mvn = tfd.MultivariateNormalTriL(tf.zeros(n_voxels, dtype=np.float32),  tf.linalg.cholesky(noise))
+            noise = mvn.sample((n_batches, n_timepoints))
 
         return self._predict(paradigm, parameters, weights) + noise
 
