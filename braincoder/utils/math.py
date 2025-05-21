@@ -70,3 +70,34 @@ def von_mises_pdf(x, mu, kappa):
 alpha = 100
 aggressive_softplus = lambda x: (1./alpha) * tf.math.softplus(alpha*x)
 aggressive_softplus_inverse = lambda y: (1./alpha) * tfp.math.softplus_inverse(alpha * y)
+
+
+def get_expected_value(stimulus_pdf, normalize=True):
+
+    x = stimulus_pdf.columns.astype(np.float32)
+
+    if normalize:
+        stimulus_pdf /= np.trapz(stimulus_pdf, x=x, axis=1)[:, np.newaxis]
+
+
+    E = np.trapz(stimulus_pdf * x, x=x, axis=1)
+
+    return pd.Series(E, name='E', index=stimulus_pdf.index)
+
+
+def get_sd_posterior(stimulus_pdf, E=None, normalize=True):
+
+    x = stimulus_pdf.columns.astype(np.float32).values
+
+    if normalize:
+        stimulus_pdf /= np.trapz(stimulus_pdf, x=x, axis=1)[:, np.newaxis]
+
+    if E is None:
+        E = get_expected_value(stimulus_pdf, normalize=normalize).values
+    else:
+        if hasattr(E, 'values'):
+            E = E.values
+
+    sd = np.sqrt(np.trapz(stimulus_pdf * (x[np.newaxis, :] - E[:, np.newaxis]) ** 2, x=x, axis=1))
+
+    return pd.Series(sd, name='sd', index=stimulus_pdf.index)
