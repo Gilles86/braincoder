@@ -444,7 +444,7 @@ class ParameterFitter(object):
 
         ix = (new_r2 > orig_r2) & (data.std() != 0.0)
 
-        parameters.loc[ix] = new_parameters.loc[ix]
+        parameters.update(new_parameters.loc[ix].astype(np.float32))
 
         combined_pred = self.model.predict(parameters=parameters, paradigm=self.paradigm)
         combined_r2 = get_rsq(data, combined_pred)
