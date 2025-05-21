@@ -611,6 +611,7 @@ class ResidualFitter(object):
             learning_rate=0.02, rtol=1e-6, lag=100,
             init_alpha=0.99,
             init_beta=0.0,
+            spherical=False,
             progressbar=True):
 
         n_voxels = self.data.shape[1]
@@ -627,26 +628,31 @@ class ResidualFitter(object):
 
         tau_ = tf.Variable(initial_value=softplus_inverse(init_tau), shape=(
             1, n_voxels), name='tau_trans', dtype=tf.float32)
-        rho_ = tf.Variable(initial_value=logit(
-            init_rho), shape=None, name='rho_trans', dtype=tf.float32)
-        sigma2_ = tf.Variable(initial_value=softplus_inverse(
-            init_sigma2), shape=None, name='sigma2_trans', dtype=tf.float32)
+        
+        if not spherical:
+            rho_ = tf.Variable(initial_value=logit(
+                init_rho), shape=None, name='rho_trans', dtype=tf.float32)
+            sigma2_ = tf.Variable(initial_value=softplus_inverse(
+                init_sigma2), shape=None, name='sigma2_trans', dtype=tf.float32)
 
-        if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
-            print('USING A PSEUDO-WWT!')
-            WWT = self.model.get_pseudoWWT()
+            if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
+                print('USING A PSEUDO-WWT!')
+                WWT = self.model.get_pseudoWWT()
+            else:
+                WWT = self.model.get_WWT()
+
+            if hasattr(WWT, 'values'):
+                WWT = WWT.values
+
+            WWT = tf.clip_by_value(WWT, -1e10, 1e10)
+            print(f'WWT max: {np.max(WWT)}')
+            if normalize_WWT:
+                WWT /= np.mean(WWT)
+
+            trainable_variables = [tau_, rho_, sigma2_]
         else:
-            WWT = self.model.get_WWT()
 
-        if hasattr(WWT, 'values'):
-            WWT = WWT.values
-
-        WWT = tf.clip_by_value(WWT, -1e10, 1e10)
-        print(f'WWT max: {np.max(WWT)}')
-        if normalize_WWT:
-            WWT /= np.mean(WWT)
-
-        trainable_variables = [tau_, rho_, sigma2_]
+            trainable_variables = [tau_]
 
 
 
@@ -656,30 +662,63 @@ class ResidualFitter(object):
             def transform_variables(trainable_variables):
                 tau_, rho_, sigma2_ = trainable_variables[:3]
 
-                tau = softplus(tau_)
-                rho = sigmoid(rho_)
-                sigma2 = softplus(sigma2_)
+                if spherical:
+                    return softplus(tau_)
+                else:
+                    tau = softplus(tau_)
+                    rho = sigmoid(rho_)
+                    sigma2 = softplus(sigma2_)
 
-                return tau, rho, sigma2
+                    return tau, rho, sigma2
 
-            @tf.function
-            def get_omega(trainable_variables):
-                tau, rho, sigma2 = transform_variables(trainable_variables)
-                omega = self._get_omega(tau, rho, sigma2, WWT)
+            if spherical:
 
-                return omega
+                transform_variables = lambda x: softplus(x[0])
 
-            def get_pbar_description(cost, best_cost, trainable_variables):
-                tau, rho, sigma2 = transform_variables(trainable_variables)
-                mean_tau = tf.reduce_mean(tau).numpy()
 
-                print_str = f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}'
+                @tf.function
+                def get_omega(trainable_variables):
+                    tau = transform_variables(trainable_variables)
+                    return tf.linalg.tensor_diag(tf.squeeze(tau**2))
 
-                if len(trainable_variables) == 4:
-                    dof = softplus(trainable_variables[3]).numpy()
-                    print_str += f', dof: {dof:0.1f}'
 
-                return print_str
+                def get_pbar_description(cost, best_cost, trainable_variables):
+                    tau = transform_variables(trainable_variables)
+                    mean_tau = tf.reduce_mean(tau).numpy()
+
+                    print_str = f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f},  mean tau: {mean_tau:0.4f}'
+
+                    return print_str
+            else:
+
+                @tf.function
+                def transform_variables(trainable_variables):
+                    tau_, rho_, sigma2_ = trainable_variables[:3]
+
+                    tau = softplus(tau_)
+                    rho = sigmoid(rho_)
+                    sigma2 = softplus(sigma2_)
+
+                    return tau, rho, sigma2
+
+                @tf.function
+                def get_omega(trainable_variables):
+                    tau, rho, sigma2 = transform_variables(trainable_variables)
+                    omega = self._get_omega(tau, rho, sigma2, WWT)
+
+                    return omega
+
+                def get_pbar_description(cost, best_cost, trainable_variables):
+                    tau, rho, sigma2 = transform_variables(trainable_variables)
+                    mean_tau = tf.reduce_mean(tau).numpy()
+
+                    print_str = f'fit stat: {cost.numpy():0.4f} (best: {best_cost:0.4f}, rho: {rho.numpy():0.3f}, sigma2: {sigma2.numpy():0.3f}, mean tau: {mean_tau:0.4f}'
+
+                    if len(trainable_variables) == 4:
+                        dof = softplus(trainable_variables[3]).numpy()
+                        print_str += f', dof: {dof:0.1f}'
+
+                    return print_str
 
         else:
 
