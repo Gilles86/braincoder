@@ -80,7 +80,8 @@ class EncodingModel(object):
             return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=weights.columns)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.,
-                 n_repeats=1):
+                dof=None,
+                n_repeats=1):
 
         weights, weights_ = self._get_weights(weights)
         paradigm = self.get_paradigm(paradigm)
@@ -101,7 +102,7 @@ class EncodingModel(object):
         simulated_data = self._simulate(
             stimulus,
             parameters.values[np.newaxis, ...],
-            weights_, noise).numpy()
+            weights_, noise, dof).numpy()
 
 
         # Collapse the first two dimensions
@@ -118,7 +119,7 @@ class EncodingModel(object):
         else:
             return pd.DataFrame(simulated_data, index=index, columns=weights.columns)
 
-    def _simulate(self, paradigm, parameters, weights, noise=1.):
+    def _simulate(self, paradigm, parameters, weights, noise=1., dof=None):
 
         n_batches = paradigm.shape[0]
         n_timepoints = paradigm.shape[1]
@@ -128,15 +129,24 @@ class EncodingModel(object):
         else:
             n_voxels = weights.shape[2]
 
-        if tf.experimental.numpy.isscalar(noise):
-            noise = tf.random.normal(shape=(n_batches, n_timepoints, n_voxels),
-                                    mean=0.0,
-                                    stddev=noise,
-                                    dtype=tf.float32)
+        if dof is None:
+            if tf.experimental.numpy.isscalar(noise):
+                noise = tf.random.normal(shape=(n_batches, n_timepoints, n_voxels),
+                                        mean=0.0,
+                                        stddev=noise,
+                                        dtype=tf.float32)
+            else:
+                mvn = tfd.MultivariateNormalTriL(tf.zeros(n_voxels, dtype=np.float32),  tf.linalg.cholesky(noise))
+                noise = mvn.sample((n_batches, n_timepoints))
         else:
-            mvn = tfd.MultivariateNormalTriL(tf.zeros(n_voxels, dtype=np.float32),  tf.linalg.cholesky(noise))
-            noise = mvn.sample((n_batches, n_timepoints))
+            if tf.experimental.numpy.isscalar(noise):
+                dist = tfd.StudentT(df=dof, loc=0.0, scale=noise)
+                noise = dist.sample((n_batches, n_timepoints, n_voxels))
+            else:
+                mvn = tfd.MultivariateStudentTLinearOperator(df=dof, loc=tf.zeros(n_voxels, dtype=np.float32), scale=tf.linalg.LinearOperatorLowerTriangular(noise))
+                noise = mvn.sample((n_batches, n_timepoints))
 
+        print(noise.shape)
         return self._predict(paradigm, parameters, weights) + noise
 
     def _gradient(self, stimuli, parameters):
