@@ -56,15 +56,12 @@ def lognormal_pdf_mode_fwhm(x, mode, fwhm):
 
 def von_mises_pdf(x, mu, kappa):
     # Constants
-    PI = tf.constant(np.pi)
     TWO_PI = tf.constant(2 * np.pi)
 
     # Calculate the PDF formula
     pdf = tf.exp(kappa * tf.cos(x - mu)) / (TWO_PI * tf.math.bessel_i0(kappa))
 
     return pdf
-
-    import tensorflow as tf
 
 # Aggressive softplus with alpha=100
 alpha = 100

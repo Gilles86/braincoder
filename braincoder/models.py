@@ -21,6 +21,10 @@ class EncodingModel(object):
                  weights=None, omega=None, verbosity=logging.INFO):
 
         if paradigm is not None:
+
+            if paradigm.ndim == 1:
+                paradigm = paradigm[:, np.newaxis]
+
             self.stimulus = self._get_stimulus(n_dimensions=paradigm.shape[1])
             self.paradigm = self.stimulus.clean_paradigm(paradigm)
         else:
@@ -136,6 +140,7 @@ class EncodingModel(object):
                                         stddev=noise,
                                         dtype=tf.float32)
             else:
+                noise = noise.astype(np.float32)
                 mvn = tfd.MultivariateNormalTriL(tf.zeros(n_voxels, dtype=np.float32),  tf.linalg.cholesky(noise))
                 noise = mvn.sample((n_batches, n_timepoints))
         else:
@@ -143,6 +148,7 @@ class EncodingModel(object):
                 dist = tfd.StudentT(df=dof, loc=0.0, scale=noise)
                 noise = dist.sample((n_batches, n_timepoints, n_voxels))
             else:
+                noise = noise.astype(np.float32)
                 mvn = tfd.MultivariateStudentTLinearOperator(df=dof, loc=tf.zeros(n_voxels, dtype=np.float32), scale=tf.linalg.LinearOperatorLowerTriangular(noise))
                 noise = mvn.sample((n_batches, n_timepoints))
 
@@ -1822,29 +1828,9 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
     # srf factor is limited to be above 1
     parameter_labels = ['x', 'y', 'sd', 'baseline',
                         'amplitude', 'srf_amplitude', 'srf_size']
-    @tf.function
-    def _transform_parameters_forward(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          parameters[:, 1][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 4][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 5][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1], axis=1)
 
-    @tf.function
-    def _transform_parameters_backward(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          parameters[:, 1][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
-                              parameters[:, 4][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 5][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis] - 1)], axis=1)
-
+    transformations = ['identity', 'identity', 'softplus', 'identity',
+                       'softplus', 'softplus', 'softplus']
     @tf.function
     def _get_rf(self, grid_coordinates, parameters):
 
