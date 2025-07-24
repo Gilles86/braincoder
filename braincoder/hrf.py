@@ -90,10 +90,19 @@ def gamma_pdf(t, a, d):
     """Compute the gamma probability density function at t."""
     return tf.pow(t, a - 1) * tf.exp(-t / d) / (tf.pow(d, a) * tf.exp(tf.math.lgamma(a)))
 
-def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6):
+def gamma_pdf_with_loc(t, a, d, loc=0):
+    # Applies location shift before evaluation
+    t_shifted = t - loc
+    return tf.where(
+        t_shifted > 0,
+        tf.pow(t_shifted, a - 1) * tf.exp(-t_shifted / d) / (tf.pow(d, a) * tf.exp(tf.math.lgamma(a))),
+        tf.zeros_like(t)
+    )
+
+def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, loc= 0.):
     """Compute the SPM canonical HRF at time points t."""
-    hrf = gamma_pdf(t, a1, d1) - c * gamma_pdf(t, a2, d2)
-    return hrf
+    hrf = gamma_pdf_with_loc(t, a1, d1, loc=loc) - c * gamma_pdf_with_loc(t, a2, d2, loc=loc)
+    return hrf / tf.reduce_sum(hrf)
 
 class SPMHRFModel(HRFModel):
 
@@ -124,16 +133,15 @@ class SPMHRFModel(HRFModel):
 
         super().__init__(unique_hrfs=unique_hrfs)
 
-    def get_hrf(self, hrf_delay=None, hrf_dispersion=None):
-
-        if hrf_delay is None:
-            hrf_delay = self.hrf_delay
-
-        if hrf_dispersion is None:
-            hrf_dispersion = self.hrf_dispersion
-
-        return spm_hrf(self.time_stamps, a1=hrf_delay, d1=hrf_dispersion,
-                             a2=self.undershoot, d2=self.u_dispersion, c=self.ratio)
+    def get_hrf(self, hrf_delay=6., hrf_dispersion=1.):
+        peak_shape = hrf_delay / hrf_dispersion
+        undershoot_shape = self.undershoot / self.u_dispersion
+        hrf = spm_hrf(self.time_stamps, 
+            a1=peak_shape, d1=hrf_dispersion,
+            a2=undershoot_shape, d2=self.u_dispersion,
+            c=self.ratio,
+            loc=self.dt)
+        return hrf
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
