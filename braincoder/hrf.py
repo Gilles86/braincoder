@@ -250,6 +250,81 @@ class SPMHRFModel(HRFModel):
 
         return tf.concat([delay, dispersion], axis=1)
 
+
+class SPMHRFDerivativeModel(HRFModel):
+    parameter_labels = ['delay_weight', 'dispersion_weight']
+    n_parameters = 2
+
+    def __init__(self, tr, unique_hrfs=False, oversampling=1, time_length=32., onset=0.,
+                 delay=6., dispersion=1., undershoot=16., u_dispersion=1., ratio=0.167,
+                 max_weight=2.0):
+
+        self.tr = tr
+        self.oversampling = oversampling
+        self.time_length = time_length
+        self.onset = onset
+
+        self.delay = delay
+        self.dispersion = dispersion
+        self.undershoot = undershoot
+        self.u_dispersion = u_dispersion
+        self.ratio = ratio
+        self.max_weight = max_weight  # how much derivative can be mixed in
+
+        self.dt = self.tr / self.oversampling
+        self.time_stamps = np.linspace(1e-4, self.time_length,
+                                       np.rint(float(self.time_length) / self.dt).astype(np.int32)).astype(np.float32)
+        self.time_stamps -= self.onset
+        self.time_stamps = self.time_stamps[:, np.newaxis]  # time x 1
+
+        super().__init__(unique_hrfs=unique_hrfs)
+
+    def get_hrf(self, delay_weight=0., dispersion_weight=0.):
+        # Compute base HRF
+        base_hrf = spm_hrf(self.time_stamps,
+                           a1=self.delay / self.dispersion + 1., d1=self.dispersion,
+                           a2=self.undershoot / self.u_dispersion, d2=self.u_dispersion,
+                           c=self.ratio,
+                           dt=self.dt)
+
+        # Small perturbations for numerical derivatives
+        eps = 1e-2
+
+        # Temporal derivative: ∂HRF/∂delay
+        d_delay = spm_hrf(self.time_stamps,
+                          a1=(self.delay + eps) / self.dispersion + 1., d1=self.dispersion,
+                          a2=self.undershoot / self.u_dispersion, d2=self.u_dispersion,
+                          c=self.ratio,
+                          dt=self.dt)
+        derivative_delay = (d_delay - base_hrf) / eps
+
+        # Dispersion derivative: ∂HRF/∂dispersion
+        d_disp = spm_hrf(self.time_stamps,
+                         a1=self.delay / (self.dispersion + eps) + 1., d1=self.dispersion + eps,
+                         a2=self.undershoot / self.u_dispersion, d2=self.u_dispersion,
+                         c=self.ratio,
+                         dt=self.dt)
+        derivative_disp = (d_disp - base_hrf) / eps
+
+        # Linear combination
+        hrf = base_hrf \
+              + delay_weight * derivative_delay \
+              + dispersion_weight * derivative_disp
+
+        return hrf
+
+    def _transform_parameters_forward(self, parameters):
+        weights = tf.sigmoid(parameters)  # (n, 2), values in (0, 1)
+        weights = weights * 2 * self.max_weight - self.max_weight  # range [-max_weight, max_weight]
+        return weights
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        weights = (parameters + self.max_weight) / (2 * self.max_weight)  # back to [0,1]
+        weights = tf.math.log(weights / (1.0 - weights))  # logit
+        return weights
+
+
 class CustomHRFModel(HRFModel):
 
     def __init__(self, hrf):
