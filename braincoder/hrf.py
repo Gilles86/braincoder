@@ -180,7 +180,9 @@ class SPMHRFModel(HRFModel):
 
     def __init__(self, tr, unique_hrfs=False, oversampling=1, time_length=32., onset=0.,
                  delay=6., undershoot=16., dispersion=1.,
-                 u_dispersion=1., ratio=0.167):
+                 u_dispersion=1., ratio=0.167,
+                 min_hrf_delay=3.5, max_hrf_delay=8.0,
+                 min_dispersion=0.5, max_dispersion=3.0):
 
         self.tr = tr
         self.oversampling = oversampling
@@ -191,6 +193,11 @@ class SPMHRFModel(HRFModel):
         self.hrf_dispersion = dispersion
         self.u_dispersion = u_dispersion
         self.ratio = ratio
+
+        self.min_hrf_delay = min_hrf_delay
+        self.max_hrf_delay = max_hrf_delay
+        self.min_dispersion = min_dispersion
+        self.max_dispersion = max_dispersion
 
         self.dt = self.tr / self.oversampling
         self.time_stamps = np.linspace(1e-4, self.time_length,
@@ -203,55 +210,41 @@ class SPMHRFModel(HRFModel):
         super().__init__(unique_hrfs=unique_hrfs)
 
     def get_hrf(self, hrf_delay=6., hrf_dispersion=1.):
-
-        # hrf_delay can be a scalar or a [1 x n_hrfs] tensor
-        # hrf_dispersion can be a scalar or a [1 x n_hrfs] tensor
-
-        # peak_shape = hrf_delay / hrf_dispersion
         peak_shape = hrf_delay / hrf_dispersion + 1.
-
         undershoot_shape = self.undershoot / self.u_dispersion
-        hrf = spm_hrf(self.time_stamps, 
-            a1=peak_shape, d1=hrf_dispersion,
-            a2=undershoot_shape, d2=self.u_dispersion,
-            c=self.ratio,
-            dt=self.dt)
+        hrf = spm_hrf(self.time_stamps,
+                      a1=peak_shape, d1=hrf_dispersion,
+                      a2=undershoot_shape, d2=self.u_dispersion,
+                      c=self.ratio,
+                      dt=self.dt)
         return hrf
 
     def _transform_parameters_forward(self, parameters):
-        # Extract delay and dispersion
         delay = parameters[:, 0][:, tf.newaxis]
         dispersion = parameters[:, 1][:, tf.newaxis]
 
-        # Apply sigmoid transformation
         delay = tf.sigmoid(delay)
         dispersion = tf.sigmoid(dispersion)
 
-        # Scale delay to be between [2*tr, 8.0]
-        range_delay = 8.0 - 2.0 * self.tr
-        delay = range_delay * delay + 2.0 * self.tr
+        delay_range = self.max_hrf_delay - self.min_hrf_delay
+        dispersion_range = self.max_dispersion - self.min_dispersion
 
-        # Scale dispersion to be between [0.75, 3.0]
-        range_dispersion = 2.25
-        dispersion = range_dispersion * dispersion + 0.75
+        delay = delay * delay_range + self.min_hrf_delay
+        dispersion = dispersion * dispersion_range + self.min_dispersion
 
         return tf.concat([delay, dispersion], axis=1)
 
     @tf.function
     def _transform_parameters_backward(self, parameters):
-        # Extract delay and dispersion
         delay = parameters[:, 0][:, tf.newaxis]
         dispersion = parameters[:, 1][:, tf.newaxis]
 
-        # Reverse scaling for delay
-        range_delay = 8.0 - 2.0 * self.tr
-        delay = (delay - 2.0 * self.tr) / range_delay
+        delay_range = self.max_hrf_delay - self.min_hrf_delay
+        dispersion_range = self.max_dispersion - self.min_dispersion
 
-        # Reverse scaling for dispersion
-        range_dispersion = 2.25
-        dispersion = (dispersion - 0.75) / range_dispersion
+        delay = (delay - self.min_hrf_delay) / delay_range
+        dispersion = (dispersion - self.min_dispersion) / dispersion_range
 
-        # Apply logit transformation
         delay = tf.math.log(delay / (1.0 - delay))
         dispersion = tf.math.log(dispersion / (1.0 - dispersion))
 
