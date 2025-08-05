@@ -101,6 +101,10 @@ class ParameterFitter(object):
         if fixed_pars is None:
             parameter_ix = range(n_pars)
         else:
+            for fixed_par in fixed_pars:
+                if fixed_par not in self.model.parameter_labels:
+                    raise ValueError(f'Fixed parameter "{fixed_par}" not in model parameters: {self.model.parameter_labels}')
+
             parameter_ix = [ix for ix, label in enumerate(self.model.parameter_labels) if label not in fixed_pars]
 
         print('*** Fitting: ***')
@@ -114,6 +118,11 @@ class ParameterFitter(object):
 
         # Handle shared parameters
         if shared_pars is not None:
+
+            for shared_par in shared_pars:
+                if shared_par not in self.model.parameter_labels:
+                    raise ValueError(f'Shared parameter "{shared_par}" not in model parameters: {self.model.parameter_labels}')
+
             shared_parameter_ix = tf.constant(
                 [ix for ix, label in enumerate(self.model.parameter_labels) if label in shared_pars], dtype=tf.int32
         )
