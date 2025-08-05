@@ -207,7 +207,9 @@ class SPMHRFModel(HRFModel):
         # hrf_delay can be a scalar or a [1 x n_hrfs] tensor
         # hrf_dispersion can be a scalar or a [1 x n_hrfs] tensor
 
-        peak_shape = hrf_delay / hrf_dispersion
+        # peak_shape = hrf_delay / hrf_dispersion
+        peak_shape = hrf_delay / hrf_dispersion + 1.
+
         undershoot_shape = self.undershoot / self.u_dispersion
         hrf = spm_hrf(self.time_stamps, 
             a1=peak_shape, d1=hrf_dispersion,
