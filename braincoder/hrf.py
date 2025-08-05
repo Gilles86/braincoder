@@ -86,23 +86,92 @@ class HRFModel(object):
 
         return tf.squeeze(timeseries_downsampled)
 
-def gamma_pdf(t, a, d):
-    """Compute the gamma probability density function at t."""
-    return tf.pow(t, a - 1) * tf.exp(-t / d) / (tf.pow(d, a) * tf.exp(tf.math.lgamma(a)))
+import tensorflow as tf
+import tensorflow_probability as tfp
+import tensorflow as tf
+import tensorflow_probability as tfp
 
-def gamma_pdf_with_loc(t, a, d, loc=0):
-    # Applies location shift before evaluation
-    t_shifted = t - loc
-    return tf.where(
-        t_shifted > 0,
-        tf.pow(t_shifted, a - 1) * tf.exp(-t_shifted / d) / (tf.pow(d, a) * tf.exp(tf.math.lgamma(a))),
-        tf.zeros_like(t)
-    )
+def gamma_pdf(t, a, d, eps=1e-6):
+    """Numerically stable gamma PDF.
 
-def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, loc= 0.):
-    """Compute the SPM canonical HRF at time points t."""
-    hrf = gamma_pdf_with_loc(t, a1, d1, loc=loc) - c * gamma_pdf_with_loc(t, a2, d2, loc=loc)
-    return hrf / tf.reduce_sum(hrf)
+    Args:
+        t: Tensor of times [T, M]
+        a: Shape parameter (scalar or [1, M])
+        d: Scale parameter (scalar or [1, M])
+        eps: Small constant to avoid evaluating at t = 0
+
+    Returns:
+        Tensor of shape [T, M] with gamma pdf values
+    """
+    t = tf.maximum(t, eps)  # Ensure t > 0 for numerical stability
+    coef = tf.pow(t, a - 1) * tf.exp(-t / d)
+    denom = tf.pow(d, a) * tf.exp(tf.math.lgamma(a))
+    return coef / denom
+
+
+def gamma_pdf_with_loc(t, a, d, dt, loc=0.0):
+    """
+    Gamma PDF shifted by a delay 'loc', with zero-padding for pre-onset times.
+
+    Args:
+        t: Tensor of shape [T, M], time values
+        a: Shape parameter (scalar or [1, M])
+        d: Scale parameter (scalar or [1, M])
+        dt: Time resolution (scalar float)
+        loc: Delay offset (scalar float, in same units as t)
+
+    Returns:
+        Tensor of shape [T, M] representing the shifted and padded gamma PDF
+    """
+    t = tf.convert_to_tensor(t, dtype=tf.float32)
+    a = tf.convert_to_tensor(a, dtype=tf.float32)
+    d = tf.convert_to_tensor(d, dtype=tf.float32)
+
+    # Shift time by 'loc'
+    shifted_t = t - loc
+
+    # Only evaluate gamma PDF where t >= loc; avoid computing PDF on invalid (negative) inputs
+    mask = shifted_t >= 0
+    safe_t = tf.where(mask, shifted_t, tf.ones_like(shifted_t))  # dummy value for masked-out entries
+    pdf_vals = tf.where(mask, gamma_pdf(safe_t, a, d), 0.0)
+
+    # Convert 'loc' into number of time steps to pad
+    loc_steps = int(round(float(loc) / float(dt)))
+
+    if loc_steps > 0:
+        # Shift the function forward in time by padding zeros at the beginning
+        trimmed = pdf_vals[:-loc_steps, :]
+        padding = tf.zeros([loc_steps, tf.shape(trimmed)[1]], dtype=pdf_vals.dtype)
+        result = tf.concat([padding, trimmed], axis=0)
+    else:
+        # No shift needed
+        result = pdf_vals
+
+    # Optional check for debugging numerical issues
+    # tf.debugging.check_numerics(result, "NaNs or Infs in result")
+
+    return result
+
+def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, dt=0.):
+    """
+    Compute SPM canonical HRF(s).
+
+    Args:
+        t: tensor [T, M]
+        a1, d1, a2, d2, c: scalars or tensors broadcastable to [T, M]
+        dt: scalar time step
+
+    Returns:
+        Tensor [T, M] normalized HRFs
+    """
+    hrf1 = gamma_pdf_with_loc(t, a1, d1, dt, loc=dt)
+    hrf2 = gamma_pdf_with_loc(t, a2, d2, dt, loc=dt)
+
+    hrf = hrf1 - c * hrf2
+    hrf_sum = tf.reduce_sum(hrf, axis=0, keepdims=True)
+    hrf_norm = hrf / hrf_sum
+
+    return hrf_norm
 
 class SPMHRFModel(HRFModel):
 
@@ -124,7 +193,7 @@ class SPMHRFModel(HRFModel):
         self.ratio = ratio
 
         self.dt = self.tr / self.oversampling
-        self.time_stamps = np.linspace(0, self.time_length,
+        self.time_stamps = np.linspace(1e-4, self.time_length,
                                   np.rint(float(self.time_length) / self.dt).astype(np.int32)).astype(np.float32)
         self.time_stamps -= self.onset
 
@@ -134,35 +203,55 @@ class SPMHRFModel(HRFModel):
         super().__init__(unique_hrfs=unique_hrfs)
 
     def get_hrf(self, hrf_delay=6., hrf_dispersion=1.):
+
+        # hrf_delay can be a scalar or a [1 x n_hrfs] tensor
+        # hrf_dispersion can be a scalar or a [1 x n_hrfs] tensor
+
         peak_shape = hrf_delay / hrf_dispersion
         undershoot_shape = self.undershoot / self.u_dispersion
         hrf = spm_hrf(self.time_stamps, 
             a1=peak_shape, d1=hrf_dispersion,
             a2=undershoot_shape, d2=self.u_dispersion,
             c=self.ratio,
-            loc=self.dt)
+            dt=self.dt)
         return hrf
 
-    @tf.function
     def _transform_parameters_forward(self, parameters):
-        delay = sigmoid(parameters[:, 0][:, tf.newaxis])
-        dispersion = sigmoid(parameters[:, 1][:, tf.newaxis])
+        # Extract delay and dispersion
+        delay = parameters[:, 0][:, tf.newaxis]
+        dispersion = parameters[:, 1][:, tf.newaxis]
 
-        # Scale delay to be between [1.0, 10.0]
-        delay = 9.0 * delay + 1.0
+        # Apply sigmoid transformation
+        delay = tf.sigmoid(delay)
+        dispersion = tf.sigmoid(dispersion)
+
+        # Scale delay to be between [2*tr, 8.0]
+        range_delay = 8.0 - 2.0 * self.tr
+        delay = range_delay * delay + 2.0 * self.tr
 
         # Scale dispersion to be between [0.75, 3.0]
-        dispersion = 2.25 * dispersion + 0.75
+        range_dispersion = 2.25
+        dispersion = range_dispersion * dispersion + 0.75
 
         return tf.concat([delay, dispersion], axis=1)
 
     @tf.function
     def _transform_parameters_backward(self, parameters):
+        # Extract delay and dispersion
         delay = parameters[:, 0][:, tf.newaxis]
-        delay = logit((delay - 1.0) / 9.0)
-
         dispersion = parameters[:, 1][:, tf.newaxis]
-        dispersion = logit((dispersion - 0.75) / 2.25)
+
+        # Reverse scaling for delay
+        range_delay = 8.0 - 2.0 * self.tr
+        delay = (delay - 2.0 * self.tr) / range_delay
+
+        # Reverse scaling for dispersion
+        range_dispersion = 2.25
+        dispersion = (dispersion - 0.75) / range_dispersion
+
+        # Apply logit transformation
+        delay = tf.math.log(delay / (1.0 - delay))
+        dispersion = tf.math.log(dispersion / (1.0 - dispersion))
 
         return tf.concat([delay, dispersion], axis=1)
 

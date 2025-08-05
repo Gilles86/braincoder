@@ -1753,44 +1753,36 @@ class GaussianPRF2DAngle(GaussianPRF2D):
 
 
 class GaussianPRF2DWithHRF(HRFEncodingModel, GaussianPRF2D):
-
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
                  positive_image_values_only=True,
                  weights=None, hrf_model=None, flexible_hrf_parameters=False, verbosity=logging.INFO, **kwargs):
 
-        GaussianPRF2DAngle.__init__(self, grid_coordinates=grid_coordinates, paradigm=paradigm, data=data, parameters=parameters, weights=weights, verbosity=verbosity,
-                        positive_image_values_only=positive_image_values_only, **kwargs)
-
+        GaussianPRF2D.__init__(self, grid_coordinates=grid_coordinates, paradigm=paradigm, data=data,
+                               parameters=parameters, weights=weights, verbosity=verbosity,
+                               positive_image_values_only=positive_image_values_only, **kwargs)
         HRFEncodingModel.__init__(self, hrf_model=hrf_model, flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
 
     def to_linear_model(self):
         return LinearModelWithBaselineHRF(self.paradigm, self.data,
-                                          self.parameters[[
-                                              'baseline']], weights=self.get_rf().T,
+                                          self.parameters[['baseline']], weights=self.get_rf().T,
                                           hrf_model=self.hrf_model)
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
-
         if self.flexible_hrf_parameters:
             n_hrf_pars = len(self.hrf_model.parameter_labels)
-
             encoding_pars = GaussianPRF2D._transform_parameters_forward(self, parameters[:, :-n_hrf_pars])
             hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars:])
-            
             return tf.concat([encoding_pars, hrf_pars], axis=1)
         else:
             return GaussianPRF2D._transform_parameters_forward(self, parameters)
 
     @tf.function
     def _transform_parameters_backward(self, parameters):
-        
         if self.flexible_hrf_parameters:
             n_hrf_pars = len(self.hrf_model.parameter_labels)
-
             encoding_pars = GaussianPRF2D._transform_parameters_backward(self, parameters[:, :-n_hrf_pars])
             hrf_pars = self.hrf_model._transform_parameters_backward(parameters[:, -n_hrf_pars:])
-            
             return tf.concat([encoding_pars, hrf_pars], axis=1)
         else:
             return GaussianPRF2D._transform_parameters_backward(self, parameters)
