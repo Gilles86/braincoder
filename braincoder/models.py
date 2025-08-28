@@ -992,7 +992,7 @@ class LogGaussianPRF(GaussianPRF):
                           verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
                           **kwargs)
 
-        if self.allow_neg_amplitudes:
+        if allow_neg_amplitudes:
             self.transformations = ['softplus', 'softplus', 'identity', 'identity']
         else:
             self.transformations = ['softplus', 'softplus', 'softplus', 'identity']
@@ -1049,10 +1049,10 @@ class AlphaGaussianPRF(GaussianPRF):
                           verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
                           **kwargs)
 
-        if self.allow_neg_amplitudes:
-            self.transformations = ['softplus', 'softplus', 'softplus', 'identity', 'identity']
+        if allow_neg_amplitudes:
+            self.transformations = ['softplus', 'softplus', 'identity', 'identity', 'identity']
         else:
-            self.transformations = ['softplus', 'softplus', 'softplus', 'softplus', 'identity']
+            self.transformations = ['softplus', 'softplus', 'identity', 'softplus', 'identity']
 
     @tf.function
     def _basis_predictions_without_amplitude(self, paradigm, parameters):
