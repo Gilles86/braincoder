@@ -219,7 +219,14 @@ class SPMHRFModel(HRFModel):
 
         super().__init__(unique_hrfs=unique_hrfs)
 
-    def get_hrf(self, hrf_delay=6., hrf_dispersion=1.):
+    def get_hrf(self, hrf_delay=None, hrf_dispersion=None):
+
+        if hrf_delay is None:
+            hrf_delay = self.hrf_delay
+
+        if hrf_dispersion is None:
+            hrf_dispersion = self.hrf_dispersion
+
         peak_shape = hrf_delay / hrf_dispersion + 1.
         undershoot_shape = self.undershoot / self.u_dispersion
         hrf = spm_hrf(self.time_stamps,
