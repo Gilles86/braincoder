@@ -196,8 +196,8 @@ class SPMHRFModel(HRFModel):
     def __init__(self, tr, unique_hrfs=False, highres_dt=0.1, time_length=32., onset=0.,
                  delay=6., undershoot=16., dispersion=1.,
                  u_dispersion=1., ratio=0.167,
-                 min_hrf_delay=3.5, max_hrf_delay=8.0,
-                 min_dispersion=0.5, max_dispersion=3.0):
+                 min_hrf_delay=3., max_hrf_delay=7.0,
+                 min_dispersion=0.3, max_dispersion=2.0):
         self.tr = tr
         self.highres_dt = highres_dt
         self.time_length = time_length
