@@ -302,7 +302,8 @@ class EncodingModel(object):
 
         return likelihood
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True):
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
+                         include_multidimensional_stimulus_index=False):
 
         if hasattr(data, 'values'):
             time_index = data.index
@@ -354,8 +355,12 @@ class EncodingModel(object):
             ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
                 stimulus_range[:, 0, 0], name='stimulus'))
         else:
-            index = pd.MultiIndex.from_frame(pd.DataFrame(stimulus_range[:, 0, :],
-                                             columns=self.stimulus.dimension_labels))
+            if include_multidimensional_stimulus_index:
+                index = pd.MultiIndex.from_frame(pd.DataFrame(stimulus_range[:, 0, :],
+                                                columns=self.stimulus.dimension_labels))
+            else:
+                index = None
+
             ll = pd.DataFrame(ll.T, index=time_index, columns=index)
 
         # Normalize, working from log likelihoods (otherwise we get numerical issues)
