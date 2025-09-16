@@ -404,7 +404,7 @@ class ParameterFitter(object):
 
         return best_pars
 
-    def refine_baseline_and_amplitude(self, parameters, n_iterations=1, positive_amplitude=True, l2_alpha=1.0):
+    def refine_baseline_and_amplitude(self, parameters, n_iterations=1, positive_amplitude=True, l2_alpha=1e-3):
 
         data = self.data
         predictions = self.model.predict(parameters=parameters, paradigm=self.paradigm)
@@ -430,7 +430,7 @@ class ParameterFitter(object):
 
         orig_r2 = get_rsq(data, predictions)
 
-        demeaned_predictions = (predictions / parameters.loc[:, amplitude_ix]) -  parameters.loc[:, baseline_ix].T
+        demeaned_predictions = (predictions -  parameters.loc[:, baseline_ix].T) / parameters.loc[:, amplitude_ix]
 
         # n batches (voxels) x n_timepoints x regressors (2)
         X = np.stack((np.ones(
@@ -454,9 +454,6 @@ class ParameterFitter(object):
         ix = (new_r2 > orig_r2) & (data.std() != 0.0)
 
         parameters.update(new_parameters.loc[ix].astype(np.float32))
-
-        combined_pred = self.model.predict(parameters=parameters, paradigm=self.paradigm)
-        combined_r2 = get_rsq(data, combined_pred)
 
         if n_iterations == 1:
             return parameters
