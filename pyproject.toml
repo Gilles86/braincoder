@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "braincoder"
+version = "0.1.0"
+description = "A modern neuroimaging modeling package"
+authors = [
+    {name = "Gilles de Hollander", email = "gilles.dehollander@gmail.com"}
+]
+requires-python = ">=3.8"  # <-- Move this here
+dependencies = [
+    "numpy",
+    "tensorflow",
+    "tensorflow-probability",
+    "matplotlib",
+    "seaborn",
+    "pandas",
+]
+readme = "README.rst"
+license = "MIT"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["braincoder*"]
+exclude = ["notebooks*"]
