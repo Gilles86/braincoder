@@ -1979,7 +1979,7 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
 
             encoding_pars = DivisiveNormalizationGaussianPRF2D._transform_parameters_forward(self, parameters[:, :-n_hrf_pars-1])
             bold_baseline = parameters[:, -n_hrf_pars-1][:, tf.newaxis]
-            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars-1:])
+            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars:])
 
             return tf.concat([encoding_pars, bold_baseline, hrf_pars], axis=1)
         else:
