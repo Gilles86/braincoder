@@ -665,6 +665,34 @@ class EncodingRegressionModel(EncodingModel):
 
         return transformed_parameters
 
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
+                            include_multidimensional_stimulus_index=False):
+
+
+        print("Note that non-stimulus dimensions (e.g., the regressors) are part of the likelihood calculation!")
+
+        self.set_paradigm(stimulus_range)
+
+        pred = self.predict(stimulus_range, parameters=parameters, weights=weights)
+
+        # n_predictions x n_timepoints x n_units
+        residuals = data.values[np.newaxis, :, :] - pred.values[:, np.newaxis, :]
+
+        omega_chol = np.linalg.cholesky(omega)
+        n_units = data.shape[1]
+
+        residual_dist = self.get_residual_dist(n_units, omega_chol, dof)
+        # we use log likelihood to correct for very small numbers
+        ll = residual_dist.log_prob(residuals).numpy()
+        ll = pd.DataFrame(ll, index=pd.MultiIndex.from_frame(stimulus_range), columns=data.index).T
+        
+        if normalize:
+            ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
+        else:
+            ll = np.exp(ll)
+
+        return ll
+        
 
 
 class HRFEncodingModel(object):
