@@ -669,7 +669,7 @@ class EncodingRegressionModel(EncodingModel):
                             include_multidimensional_stimulus_index=False):
 
 
-        print("Note that non-stimulus dimensions (e.g., the regressors) are part of the likelihood calculation!")
+        # print("Note that non-stimulus dimensions (e.g., the regressors) are part of the likelihood calculation!")
 
         self.set_paradigm(stimulus_range)
 
@@ -687,9 +687,10 @@ class EncodingRegressionModel(EncodingModel):
         ll = pd.DataFrame(ll, index=pd.MultiIndex.from_frame(stimulus_range), columns=data.index).T
         
         if normalize:
-            ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
-        else:
-            ll = np.exp(ll)
+            # Subtract max for numerical stability before exponentiating
+            ll = ll.sub(ll.max(axis=1), axis=0)
+        
+        ll = np.exp(ll)
 
         return ll
         
