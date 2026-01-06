@@ -5,6 +5,12 @@ from tensorflow.math import sigmoid
 from .utils import logit
 
 class HRFModel(object):
+    """Base class that handles HRF generation and convolution with predictions.
+
+    Subclasses implement ``get_hrf`` (not shown here) while this class exposes
+    shared/voxel-specific convolution strategies that operate on TensorFlow
+    tensors compatible with the encoding models.
+    """
     def set_unique_hrfs(self, unique_hrfs):
         self.unique_hrfs = unique_hrfs
         self._convolve = self._convolve_unique if unique_hrfs else self._convolve_shared
@@ -189,6 +195,11 @@ def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, highres_dt=0.1):
     return hrf_interp
 
 class SPMHRFModel(HRFModel):
+    """Canonical SPM-style HRF parameterized by delay/dispersion bounds.
+
+    Provides TF-friendly HRF sampling plus helper attributes so encoding models
+    can expose HRF parameters alongside the main receptive-field parameters.
+    """
 
     parameter_labels = ['hrf_delay', 'hrf_dispersion']
     n_parameters = 2

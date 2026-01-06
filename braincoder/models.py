@@ -13,12 +13,21 @@ from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGauss
 from patsy import dmatrix, build_design_matrices
 
 class EncodingModel(object):
+    """Abstract base class for encoding models.
+
+    Handles paradigm/parameter formatting, TensorFlow prediction graphs,
+    and utilities such as simulation, gradients, and noise injection. Most
+    concrete models only need to implement ``_basis_predictions`` (and
+    optionally ``_predict``) to become drop-in replacements across the
+    fitting/decoding stack.
+    """
 
     parameter_labels = None
     stimulus_type = Stimulus
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
+        """Normalize paradigm/parameter inputs and set shared attributes."""
 
         if paradigm is not None:
 
@@ -44,10 +53,12 @@ class EncodingModel(object):
             self.omega_chol = np.linalg.cholesky(omega)
 
     def get_parameter_labels(self):
+        """Return the ordered list of parameter labels used by the model."""
         return self.parameter_labels
 
     @tf.function
     def _predict(self, paradigm, parameters, weights=None):
+        """Low-level TF prediction graph used by ``predict``/``simulate``."""
 
         # paradigm: n_batch x n_timepoints x n_stimulus_features
         # parameters: n_batch x n_units x n_parameters
@@ -60,12 +71,15 @@ class EncodingModel(object):
             return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (2, 1))[:, :, 0, :]
 
     def _get_stimulus_type(self, **kwargs):
+        """Return the ``Stimulus`` subclass used to clean/generate paradigms."""
         return self.stimulus_type
-
+    
     def _get_stimulus(self, **kwargs):
+        """Instantiate the configured ``Stimulus`` type."""
         return self.stimulus_type(**kwargs)
-
+    
     def predict(self, paradigm=None, parameters=None, weights=None):
+        """Return pandas predictions for the provided paradigm/parameters."""
 
         weights, weights_ = self._get_weights(weights)
         
@@ -86,6 +100,7 @@ class EncodingModel(object):
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.,
                 dof=None,
                 n_repeats=1):
+        """Generate synthetic data by adding Gaussian/Student noise to predictions."""
 
         weights, weights_ = self._get_weights(weights)
         paradigm = self.get_paradigm(paradigm)
@@ -124,6 +139,7 @@ class EncodingModel(object):
             return pd.DataFrame(simulated_data, index=index, columns=weights.columns)
 
     def _simulate(self, paradigm, parameters, weights, noise=1., dof=None):
+        """TensorFlow implementation of ``simulate`` supporting noise sampling."""
 
         n_batches = paradigm.shape[0]
         n_timepoints = paradigm.shape[1]
@@ -156,6 +172,7 @@ class EncodingModel(object):
         return self._predict(paradigm, parameters, weights) + noise
 
     def _gradient(self, stimuli, parameters):
+        """Compute d(predictions)/d(stimuli) using TF Jacobians."""
         stimuli = tf.convert_to_tensor(stimuli)
         
         with tf.GradientTape() as tape:
@@ -173,10 +190,12 @@ class EncodingModel(object):
 
     @property
     def data(self):
+        """Formatted data matrix (pandas DataFrame)."""
         return self._data
 
     @data.setter
     def data(self, data):
+        """Setter that ensures incoming data is converted to the expected format."""
         if data is None:
             self._data = None
         else:
@@ -184,13 +203,16 @@ class EncodingModel(object):
 
     @property
     def weights(self):
+        """Basis weights used for discrete/basis-function models (DataFrame)."""
         return self._weights
 
     @weights.setter
     def weights(self, weights):
+        """Setter that casts/validates provided weights."""
         self._weights = format_weights(weights)
 
     def to_discrete_model(self, grid, parameters=None, weights=None):
+        """Return a ``DiscreteModel`` evaluated on ``grid`` stimulus coordinates."""
 
         grid = np.array(grid, dtype=np.float32)[:, np.newaxis]
         parameters = format_parameters(parameters)
@@ -213,6 +235,7 @@ class EncodingModel(object):
                              data=self.data)
 
     def likelihood(self, stimuli, data=None, parameters=None, weights=None, omega=None, dof=None, logp=False, normalize=True):
+        """Log-likelihood of observing ``data`` given stimuli and model parameters."""
 
         if data is None:
             data = self.data
@@ -261,6 +284,7 @@ class EncodingModel(object):
 
     def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
                          include_multidimensional_stimulus_index=False):
+        """Evaluate posterior over stimuli for each time point given data."""
 
         if hasattr(data, 'values'):
             time_index = data.index
@@ -332,6 +356,7 @@ class EncodingModel(object):
         return ll
 
     def apply_mask(self, mask):
+        """Subset voxels/weights/parameters according to ``mask`` boolean array."""
 
         if self.data is not None:
             self.data = self.data.loc[:, mask]
@@ -343,9 +368,11 @@ class EncodingModel(object):
             self.weights = self.weights.loc[:, mask]
 
     def get_WWT(self):
+        """Return WᵀW — either from stored weights or the cached pseudo matrix."""
         return self.weights.T.dot(self.weights)
 
     def get_residual_dist(self, n_voxels, omega_chol, dof):
+        """Create the residual distribution (Gaussian or Student-t)."""
 
         if dof is None:
             residual_dist = tfd.MultivariateNormalTriL(
@@ -361,6 +388,7 @@ class EncodingModel(object):
 
     @tf.function
     def _likelihood(self, stimuli, data, parameters, weights, omega_chol, dof, logp=False, normalize=False):
+        """TensorFlow helper that computes likelihoods for batches of stimuli."""
 
         # stimuli: n_batches x n_timepoints x n_stimulus_features
         # data: n_batches x n_timepoints x n_units
@@ -375,6 +403,7 @@ class EncodingModel(object):
 
     @tf.function
     def _likelihood_timeseries(self, data, prediction, omega_chol, dof, logp=False, normalize=False):
+        """Evaluate log-probabilities for each residual timeseries."""
         # n_timepoints x n_stimuli x n_units
         n_units = data.shape[2]
 
@@ -476,6 +505,7 @@ class EncodingModel(object):
             return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
 
     def _get_parameters(self, parameters=None):
+        """Return parameters formatted as DataFrame matching ``parameter_labels``."""
 
         if (parameters is None) and (self.parameters is not None):
             parameters = self.parameters
@@ -488,6 +518,7 @@ class EncodingModel(object):
         return parameters
 
     def get_paradigm(self, paradigm):
+        """Return the cleaned paradigm DataFrame, falling back to stored one."""
             
         if paradigm is None:
             if self.paradigm is not None:
@@ -500,6 +531,7 @@ class EncodingModel(object):
         return paradigm
 
     def _get_paradigm(self, paradigm):
+        """Tensor-ready paradigm (np.array) used inside TF functions."""
             
         if paradigm is None:
             paradigm = self.get_paradigm(paradigm)
@@ -510,11 +542,13 @@ class EncodingModel(object):
 
 
 class EncodingRegressionModel(EncodingModel):
+    """Encoding model whose parameters are linear combinations of regressors."""
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                 regressors={}, weights=None, omega=None,
                 baseline_parameter_values=None,
                  verbosity=logging.INFO, **kwargs):
+        """Build Patsy design matrices and tie parameter values to regressors."""
 
         self.regressors = regressors
 
@@ -558,6 +592,7 @@ class EncodingRegressionModel(EncodingModel):
 
 
     def _get_regressor_parameter_labels(self, design_matrices):
+        """MultiIndex of (parameter, regressor) pairs used for coefficients."""
         regressor_parameters = []
 
         for parameter in self.base_parameter_labels:
@@ -567,6 +602,7 @@ class EncodingRegressionModel(EncodingModel):
         return pd.MultiIndex.from_tuples(regressor_parameters, names=['parameter', 'regressor'])
 
     def _get_base_parameters(self, design_matrices, regressor_parameters):
+        """Transform regressor weights back into native parameter space."""
 
         parameters = []
 
@@ -586,6 +622,7 @@ class EncodingRegressionModel(EncodingModel):
         return parameters
 
     def build_design_matrices(self, paradigm, regressors=None):
+        """Create Patsy design matrices for each parameter."""
 
         design_matrices = {}
 
@@ -606,6 +643,7 @@ class EncodingRegressionModel(EncodingModel):
 
 
     def set_paradigm(self, paradigm, regressors=None):
+        """Update stored paradigm and rebuild design matrices/regressor labels."""
 
         if not hasattr(self, 'paradigm'):
 
@@ -631,11 +669,13 @@ class EncodingRegressionModel(EncodingModel):
         self.base_paradigm = paradigm[self.stimulus.dimension_labels]
 
     def _basis_predictions_regressors(self, paradigm, parameters):
+        """Apply regressors to recover base parameters before prediction."""
         base_parameters = self._get_base_parameters(self.design_matrices, parameters)
         result = self._basis_basis_predictions(self.base_paradigm.values[:, np.newaxis, :], base_parameters)
         return tf.reshape(result, [1, result.shape[0], -1])
 
     def _get_paradigm(self, paradigm):
+        """Override to ensure cleaned paradigm is used (regressors already bound)."""
 
         # if not paradigm.equals(self.paradigm):
         #     raise Exception('For EncodignRegressionModel, the paradigm should be set when the model is initialized OR using set_paradigm().')
@@ -645,6 +685,7 @@ class EncodingRegressionModel(EncodingModel):
         return paradigm
 
     def get_conditionspecific_parameters(self, conditions, parameters):
+        """Evaluate parameter values for specific condition rows."""
 
         design_matrices = self.build_design_matrices(conditions)
 
@@ -697,10 +738,18 @@ class EncodingRegressionModel(EncodingModel):
 
 
 class HRFEncodingModel(object):
+    """Mixin that equips an encoding model with HRF convolution support.
+
+    Wraps another :class:`EncodingModel` to (optionally) append HRF parameters,
+    zero/one-out baseline and amplitude before convolution, and then re-apply
+    those parameters after the HRF is applied.  Accepts any :class:`HRFModel`
+    implementation and can share or individualize HRFs per voxel.
+    """
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                     weights=None, omega=None, hrf_model=None, verbosity=logging.INFO,
                     flexible_hrf_parameters=False, **kwargs):
+        """Wire an ``HRFModel`` into an existing encoding model."""
 
         if hrf_model is None:
             raise ValueError('Please provide HRFModel!')
@@ -721,6 +770,7 @@ class HRFEncodingModel(object):
 
     @tf.function
     def _predict(self, paradigm, parameters, weights):
+        """Convolve base predictions with HRF, reapplying amplitude/baseline."""
 
         standardized_parameters = tf.identity(parameters)
 
@@ -762,9 +812,11 @@ class HRFEncodingModel(object):
 
     @tf.function
     def _predict_no_hrf(self, paradigm, parameters, weights):
+        """Bypass HRF convolution; useful for diagnostics/debugging."""
         return EncodingModel._predict(self, paradigm, parameters, weights)
 
 class GaussianPRF(EncodingModel):
+    """One-dimensional population receptive field with Gaussian tuning."""
 
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
@@ -772,6 +824,7 @@ class GaussianPRF(EncodingModel):
                  weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  model_stimulus_amplitude=False,
                  **kwargs):
+        """Configure Gaussian pRF with optional stimulus amplitude modeling."""
 
         if allow_neg_amplitudes:
             self._transform_parameters_forward = self._transform_parameters_forward1
@@ -788,18 +841,21 @@ class GaussianPRF(EncodingModel):
 
 
     def _get_stimulus_type(self, model_stimulus_amplitude=False):
+        """Select stimulus class depending on whether amplitude is modeled."""
         if model_stimulus_amplitude:
             return OneDimensionalStimulusWithAmplitude
         else:
             return Stimulus
 
     def _get_basis_predictions(self, model_stimulus_amplitude=False):
+        """Return the appropriate basis prediction function handle."""
         if model_stimulus_amplitude:
             return self._basis_predictions_with_amplitude
         else:
             return self._basis_predictions_without_amplitude
 
     def basis_predictions(self, paradigm=None, parameters=None):
+        """Convenience wrapper returning numpy array of basis predictions."""
 
         paradigm = self.get_paradigm(paradigm)
         parameters = self._get_parameters(parameters)
@@ -816,6 +872,7 @@ class GaussianPRF(EncodingModel):
         return self._basis_predictions(paradigm_, parameters_)[0]
 
     def get_init_pars(self, data, paradigm, confounds=None):
+        """Heuristic initialization for mu/sd/amplitude/baseline."""
 
         paradigm = self._get_paradigm(paradigm)
         data = format_data(data)
@@ -845,6 +902,7 @@ class GaussianPRF(EncodingModel):
 
     @tf.function
     def _basis_predictions_without_amplitude(self, paradigm, parameters):
+        """Gaussian tuning without stimulus amplitude modulation."""
         # paradigm: n_batches x n_timepoints x n_stimulus_features
         # parameters:: n_batches x n_voxels x n_parameters
 
@@ -858,6 +916,7 @@ class GaussianPRF(EncodingModel):
 
     @tf.function
     def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        """Gaussian tuning optionally scaled by stimulus amplitude channel."""
         # paradigm: n_batches x n_timepoints x n_stimulus_features
         # parameters:: n_batches x n_voxels x n_parameters
 
@@ -871,6 +930,7 @@ class GaussianPRF(EncodingModel):
 
 
     def init_pseudoWWT(self, stimulus_range, parameters):
+        """Cache WᵀW approximation by integrating basis responses over range."""
 
         stimulus_range = stimulus_range.astype(np.float32)
         W = self.basis_predictions(stimulus_range, parameters)
@@ -881,6 +941,7 @@ class GaussianPRF(EncodingModel):
         return self._pseudoWWT
 
     def get_pseudoWWT(self):
+        """Return cached pseudo WᵀW matrix or compute via weights."""
 
         if self.weights is not None:
             return self.weights.T.dot(self.weights).values
@@ -892,6 +953,7 @@ class GaussianPRF(EncodingModel):
                 'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
 
     def get_WWT(self):
+        """Alias for :meth:`get_pseudoWWT`."""
         return self.get_pseudoWWT()
 
     @tf.function
@@ -926,8 +988,11 @@ class GaussianPRF(EncodingModel):
                           parameters[:, 3][:, tf.newaxis]], axis=1)
 
 class RegressionGaussianPRF(EncodingRegressionModel, GaussianPRF):
-    pass
+    """Gaussian pRF whose parameters are modeled by regression covariates."""
+
+
 class VonMisesPRF(GaussianPRF):
+    """Circular pRF with von Mises tuning (e.g., for polar angle stimuli)."""
 
     parameter_labels = ['mu', 'kappa', 'amplitude', 'baseline']
     stimulus_type = OneDimensionalRadialStimulus
@@ -943,6 +1008,7 @@ class VonMisesPRF(GaussianPRF):
                             **kwargs)
 
     def _get_stimulus_type(self, model_stimulus_amplitude=False):
+        """Select radial stimulus variant (with optional amplitude channel)."""
         if model_stimulus_amplitude:
             return OneDimensionalRadialStimulusWithAmplitude
         else:
@@ -950,6 +1016,7 @@ class VonMisesPRF(GaussianPRF):
 
     @tf.function
     def _basis_predictions_without_amplitude(self, paradigm, parameters):
+        """Von Mises tuning without stimulus amplitude modulation."""
         # paradigm: n_batches x n_timepoints x n_stimulus_features
         # parameters:: n_batches x n_voxels x n_parameters
 
@@ -963,6 +1030,7 @@ class VonMisesPRF(GaussianPRF):
 
     @tf.function
     def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        """Von Mises tuning scaled by a stimulus amplitude channel."""
         # paradigm: n_batches x n_timepoints x n_stimulus_features
         # parameters:: n_batches x n_voxels x n_parameters
 
@@ -975,6 +1043,7 @@ class VonMisesPRF(GaussianPRF):
             parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
 
     def init_pseudoWWT(self, stimulus_range, parameters):
+        """Precompute pseudo WᵀW for circular stimulus space."""
 
         if stimulus_range.ndim == 2:
             stimulus_range = stimulus_range[:, [0]]
@@ -988,6 +1057,7 @@ class VonMisesPRF(GaussianPRF):
         return self._pseudoWWT
 
 class LogGaussianPRF(GaussianPRF):
+    """Log-Gaussian tuning curve with configurable parameterization."""
 
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
@@ -996,6 +1066,7 @@ class LogGaussianPRF(GaussianPRF):
                  model_stimulus_amplitude=False,
                  parameterisation='mu_sd_natural',
                  **kwargs):
+        """Configure whether the model uses (mu, sd) or (mode, FWHM) parameters."""
 
         if parameterisation == 'mu_sd_natural':
             self.parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
@@ -1044,6 +1115,7 @@ class LogGaussianPRF(GaussianPRF):
                           parameters[:, 3][:, tf.newaxis]], axis=1)
     @tf.function
     def _basis_predictions_without_amplitude_n(self, paradigm, parameters):
+        """Log-normal tuning (mu/sd) without external amplitude modulation."""
         return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
@@ -1051,6 +1123,7 @@ class LogGaussianPRF(GaussianPRF):
 
     @tf.function
     def _basis_predictions_with_amplitude_n(self, paradigm, parameters):
+        """Log-normal tuning (mu/sd) scaled by stimulus amplitude."""
         return lognormalpdf_n(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
@@ -1058,6 +1131,7 @@ class LogGaussianPRF(GaussianPRF):
 
     @tf.function
     def _basis_predictions_without_amplitude_mode_fwhm(self, paradigm, parameters):
+        """Mode/FWHM parameterization without amplitude scaling."""
         return lognormal_pdf_mode_fwhm(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
@@ -1065,19 +1139,22 @@ class LogGaussianPRF(GaussianPRF):
 
     @tf.function
     def _basis_predictions_with_amplitude_mode_fwhm(self, paradigm, parameters):
+        """Mode/FWHM parameterization scaled by stimulus amplitude."""
         return lognormal_pdf_mode_fwhm(paradigm[..., tf.newaxis, 0],
                     parameters[:, tf.newaxis, :, 0],
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
 
 class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
-    pass
+    """Combine Gaussian pRF spatial tuning with an explicit HRF convolution."""
+
 
 class LogGaussianPRFWithHRF(LogGaussianPRF, HRFEncodingModel):
-    pass
+    """Log-Gaussian tuning plus HRF parameters."""
 
 
 class AlphaGaussianPRF(GaussianPRF):
+    """Gaussian pRF with additional alpha parameter controlling asymmetry."""
 
     parameter_labels = ['mu', 'sd', 'alpha', 'amplitude', 'baseline']
 
@@ -1085,6 +1162,7 @@ class AlphaGaussianPRF(GaussianPRF):
                  weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  model_stimulus_amplitude=False,
                  **kwargs):
+        """Initialize alpha-Gaussian model (no stimulus amplitude option)."""
 
         if model_stimulus_amplitude:
             raise NotImplementedError("Modeling stimulus amplitude is not implemented for AlphaGaussianPRF")
@@ -1151,9 +1229,11 @@ class AlphaGaussianPRF(GaussianPRF):
             parameters[:, tf.newaxis, :, 3] + parameters[:, tf.newaxis, :, 4]
 
 class RegressionAlphaGaussianPRF(EncodingRegressionModel, AlphaGaussianPRF):
-    pass
+    """Alpha-Gaussian pRF variant whose parameters depend on regressors."""
+
 
 class GaussianPRFOnGaussianSignal(GaussianPRF):
+    """pRF evaluated on Gaussian stimulus summaries (mean + SD)."""
 
     stimulus_type = OneDimensionalGaussianStimulus
 
@@ -1161,6 +1241,7 @@ class GaussianPRFOnGaussianSignal(GaussianPRF):
                  weights=None, omega=None, allow_neg_amplitudes=False,
                   stimulus_grid=None, verbosity=logging.INFO,
                  **kwargs):
+        """Set up Gaussian stimuli characterized by their mean/SD distributions."""
 
         if stimulus_grid is None:
             raise Exception('Need stimulus_grid!')
@@ -1179,6 +1260,7 @@ class GaussianPRFOnGaussianSignal(GaussianPRF):
 
     @tf.function
     def _basis_predictions(self, paradigm, parameters):
+        """Convolve receptive-field Gaussians with Gaussian stimulus inputs."""
         # n_stim-grid x n-batches x n-timepoints x n_voxels
         rf_field = norm(self.stimulus_grid[:, tf.newaxis, tf.newaxis, tf.newaxis],  #grid to evaluate on
                         parameters[tf.newaxis, :, tf.newaxis, :, 0],
@@ -2080,6 +2162,12 @@ class DiscreteModel(EncodingModel):
 
 
 class LinearModel(EncodingModel):
+    """Identity mapping from paradigm features to voxel responses.
+
+    Useful when paradigm features already correspond to predicted activity
+    (e.g., when estimating weights for design-matrix regressors).  No free
+    parameters are tracked, so attempts to set ``parameters`` raise ``ValueError``.
+    """
     
     parameter_labels = []
 
@@ -2113,6 +2201,7 @@ class LinearModel(EncodingModel):
 
 
 class LinearModelWithBaseline(EncodingModel):
+    """Linear encoding model that adds a voxel-specific baseline parameter."""
 
     parameter_labels = ['baseline']
 
@@ -2133,6 +2222,7 @@ class LinearModelWithBaseline(EncodingModel):
 
 
 class LinearModelWithBaselineHRF(LinearModelWithBaseline, HRFEncodingModel):
+    """LinearModelWithBaseline variant that automatically applies an HRF convolution."""
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, hrf_model=None, verbosity=logging.INFO,
