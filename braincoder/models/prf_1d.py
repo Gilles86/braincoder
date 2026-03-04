@@ -211,6 +211,10 @@ class VonMisesPRF(GaussianPRF):
         else:
             return OneDimensionalRadialStimulus
 
+    def _get_stimulus(self, **kwargs):
+        """Instantiate the radial stimulus (ignores n_dimensions — always 1D)."""
+        return self.stimulus_type()
+
     @tf.function
     def _basis_predictions_without_amplitude(self, paradigm, parameters):
         """Von Mises tuning without stimulus amplitude modulation."""
@@ -342,12 +346,38 @@ class LogGaussianPRF(GaussianPRF):
                     parameters[:, tf.newaxis, :, 1]) * \
             parameters[:, tf.newaxis, :, 2] * paradigm[..., tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
 
-class GaussianPRFWithHRF(GaussianPRF, HRFEncodingModel):
+class GaussianPRFWithHRF(HRFEncodingModel, GaussianPRF):
     """Combine Gaussian pRF spatial tuning with an explicit HRF convolution."""
 
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, hrf_model=None,
+                 flexible_hrf_parameters=False, allow_neg_amplitudes=False,
+                 model_stimulus_amplitude=False, verbosity=logging.INFO, **kwargs):
+        GaussianPRF.__init__(self, paradigm=paradigm, data=data, parameters=parameters,
+                             weights=weights, omega=omega,
+                             allow_neg_amplitudes=allow_neg_amplitudes,
+                             model_stimulus_amplitude=model_stimulus_amplitude,
+                             verbosity=verbosity, **kwargs)
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model,
+                                  flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
 
-class LogGaussianPRFWithHRF(LogGaussianPRF, HRFEncodingModel):
+
+class LogGaussianPRFWithHRF(HRFEncodingModel, LogGaussianPRF):
     """Log-Gaussian tuning plus HRF parameters."""
+
+    def __init__(self, paradigm=None, data=None, parameters=None,
+                 weights=None, omega=None, hrf_model=None,
+                 flexible_hrf_parameters=False, allow_neg_amplitudes=False,
+                 model_stimulus_amplitude=False, parameterisation='mu_sd_natural',
+                 verbosity=logging.INFO, **kwargs):
+        LogGaussianPRF.__init__(self, paradigm=paradigm, data=data, parameters=parameters,
+                                weights=weights, omega=omega,
+                                allow_neg_amplitudes=allow_neg_amplitudes,
+                                model_stimulus_amplitude=model_stimulus_amplitude,
+                                parameterisation=parameterisation,
+                                verbosity=verbosity, **kwargs)
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model,
+                                  flexible_hrf_parameters=flexible_hrf_parameters, **kwargs)
 
 
 class AlphaGaussianPRF(GaussianPRF):
