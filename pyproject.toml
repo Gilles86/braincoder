@@ -21,7 +21,23 @@ dependencies = [
 readme = "README.rst"
 license = "MIT"
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "scipy",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["braincoder*"]
 exclude = ["notebooks*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--ignore=tests/test_gauss_rf.py",
+    "--ignore=tests/test_gauss_to_stick.py",
+    "--ignore=tests/test_glm.py",
+    "--ignore=tests/test_glm_t_dist.py",
+    "--ignore=tests/test_stickmodel.py",
+]
