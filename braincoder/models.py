@@ -931,11 +931,28 @@ class GaussianPRF(EncodingModel):
             parameters[:, tf.newaxis, :, 2] * paradigm[:, :, tf.newaxis, 1] + parameters[:, tf.newaxis, :, 3]
 
 
-    def init_pseudoWWT(self, stimulus_range, parameters):
-        """Cache WᵀW approximation by integrating basis responses over range."""
+    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=False):
+        """Cache WᵀW approximation by integrating basis responses over range.
+
+        Parameters
+        ----------
+        subtract_baseline : bool
+            If True, subtract the per-voxel baseline from W before computing
+            WᵀW so that the matrix reflects only stimulus-driven covariance.
+            If ``parameters`` is a DataFrame with a ``'baseline'`` column those
+            values are used directly; otherwise the per-voxel minimum of W
+            across the stimulus range is used as a fallback approximation.
+        """
 
         stimulus_range = stimulus_range.astype(np.float32)
         W = self.basis_predictions(stimulus_range, parameters)
+
+        if subtract_baseline:
+            if hasattr(parameters, 'columns') and 'baseline' in parameters.columns:
+                baseline = parameters['baseline'].values.astype(np.float32)[np.newaxis, :]
+                W = W - baseline
+            else:
+                W = W - tf.reduce_min(W, axis=0, keepdims=True)
 
         pseudoWWT = tf.tensordot(W, W, (0, 0))
         self._pseudoWWT = tf.where(tf.math.is_nan(pseudoWWT), tf.zeros_like(pseudoWWT),
