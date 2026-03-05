@@ -723,12 +723,16 @@ class ResidualFitter(object):
 
                     return tau, rho, sigma2
 
-                @tf.function
-                def get_omega(trainable_variables):
-                    tau, rho, sigma2 = transform_variables(trainable_variables)
-                    omega = self._get_omega(tau, rho, sigma2, WWT)
-
-                    return omega
+                if self.lambd > 0.0:
+                    @tf.function
+                    def get_omega(trainable_variables):
+                        tau, rho, sigma2 = transform_variables(trainable_variables)
+                        return self._get_omega_lambda(tau, rho, sigma2, WWT, self.lambd, sample_cov)
+                else:
+                    @tf.function
+                    def get_omega(trainable_variables):
+                        tau, rho, sigma2 = transform_variables(trainable_variables)
+                        return self._get_omega(tau, rho, sigma2, WWT)
 
                 def get_pbar_description(cost, best_cost, trainable_variables):
                     tau, rho, sigma2 = transform_variables(trainable_variables)
