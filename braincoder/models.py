@@ -303,6 +303,8 @@ class EncodingModel(object):
         if omega is None:
             omega = self.omega
 
+        omega = np.linalg.cholesky(omega)
+
         weights, weights_ = self._get_weights(weights)
 
         # stimuli: n_batches x n_timepoints x n_stimulus_features
