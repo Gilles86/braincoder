@@ -17,6 +17,9 @@ dependencies = [
     "matplotlib",
     "seaborn",
     "pandas",
+    "scipy",
+    "tqdm",
+    "patsy",
 ]
 readme = "README.rst"
 license = "MIT"
@@ -24,7 +27,6 @@ license = "MIT"
 [project.optional-dependencies]
 test = [
     "pytest",
-    "scipy",
 ]
 
 [tool.setuptools.packages.find]
