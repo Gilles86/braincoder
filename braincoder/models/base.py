@@ -1,73 +1,59 @@
-import tensorflow as tf
-import tensorflow_probability as tfp
 import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import keras
+from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
-from tensorflow_probability import distributions as tfd
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
-import pandas as pd
+from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample_mvn, sample_mvt, sample_student_t, compute_gradients
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
 
 class EncodingModel(object):
-    """Abstract base class for encoding models.
-
-    Handles paradigm/parameter formatting, TensorFlow prediction graphs,
-    and utilities such as simulation, gradients, and noise injection. Most
-    concrete models only need to implement ``_basis_predictions`` (and
-    optionally ``_predict``) to become drop-in replacements across the
-    fitting/decoding stack.
-    """
+    """Abstract base class for encoding models."""
 
     parameter_labels = None
     stimulus_type = Stimulus
 
     def _transform_parameters_forward(self, parameters):
-        """Map unconstrained optimizer parameters to the model's native space.
-
-        Dispatches per-parameter transforms declared in ``self.transformations``.
-        Each entry is either a string name ('identity', 'softplus',
-        'aggressive_softplus', 'sigmoid') or a ``(forward, backward)`` callable
-        pair produced by :func:`~braincoder.hrf.bounded_sigmoid_transform`.
-        """
+        """Map unconstrained optimizer parameters to the model's native space."""
         out = []
         for i, t in enumerate(self.transformations):
-            param = parameters[:, i][:, tf.newaxis]
+            param = parameters[:, i][:, None]
             if isinstance(t, tuple):
                 out.append(t[0](param))
             elif t == 'identity':
                 out.append(param)
             elif t == 'softplus':
-                out.append(tf.math.softplus(param))
+                out.append(ops.softplus(param))
             elif t == 'aggressive_softplus':
                 out.append(aggressive_softplus(param))
             elif t == 'sigmoid':
-                out.append(tf.math.sigmoid(param))
+                out.append(ops.sigmoid(param))
             else:
                 raise NotImplementedError(f"Unknown transform: {t!r}")
-        return tf.concat(out, axis=1)
+        return ops.concatenate(out, axis=1)
 
     def _transform_parameters_backward(self, parameters):
         """Inverse of :meth:`_transform_parameters_forward`."""
         out = []
         for i, t in enumerate(self.transformations):
-            param = parameters[:, i][:, tf.newaxis]
+            param = parameters[:, i][:, None]
             if isinstance(t, tuple):
                 out.append(t[1](param))
             elif t == 'identity':
                 out.append(param)
             elif t == 'softplus':
-                out.append(tfp.math.softplus_inverse(param))
+                out.append(softplus_inverse(param))
             elif t == 'aggressive_softplus':
                 out.append(aggressive_softplus_inverse(param))
             elif t == 'sigmoid':
-                out.append(tf.math.log(param / (1.0 - param)))
+                out.append(ops.log(param / (1.0 - param)))
             else:
                 raise NotImplementedError(f"Unknown transform: {t!r}")
-        return tf.concat(out, axis=1)
+        return ops.concatenate(out, axis=1)
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
@@ -100,19 +86,13 @@ class EncodingModel(object):
         """Return the ordered list of parameter labels used by the model."""
         return self.parameter_labels
 
-    @tf.function
     def _predict(self, paradigm, parameters, weights=None):
-        """Low-level TF prediction graph used by ``predict``/``simulate``."""
+        """Low-level prediction used by ``predict``/``simulate``."""
 
-        # paradigm: n_batch x n_timepoints x n_stimulus_features
-        # parameters: n_batch x n_units x n_parameters
-        # weights: n_batch x n_basis_functions x n_units
-
-        # returns: n_batch x n_timepoints x n_units
         if weights is None:
             return self._basis_predictions(paradigm, parameters)
         else:
-            return tf.tensordot(self._basis_predictions(paradigm, parameters), weights, (2, 1))[:, :, 0, :]
+            return ops.tensordot(self._basis_predictions(paradigm, parameters), weights, axes=[[2], [1]])[:, :, 0, :]
 
     def _get_stimulus_type(self, **kwargs):
         """Return the ``Stimulus`` subclass used to clean/generate paradigms."""
@@ -137,14 +117,16 @@ class EncodingModel(object):
         predictions = self._predict(paradigm_, parameters_, weights_)[0]
 
         if weights is None:
-            return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=parameters.index)
+            return pd.DataFrame(predictions if isinstance(predictions, np.ndarray) else predictions.numpy(),
+                                index=paradigm.index, columns=parameters.index)
         else:
-            return pd.DataFrame(predictions.numpy(), index=paradigm.index, columns=weights.columns)
+            return pd.DataFrame(predictions if isinstance(predictions, np.ndarray) else predictions.numpy(),
+                                index=paradigm.index, columns=weights.columns)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.,
                 dof=None,
                 n_repeats=1):
-        """Generate synthetic data by adding Gaussian/Student noise to predictions."""
+        """Generate synthetic data by adding noise to predictions."""
 
         weights, weights_ = self._get_weights(weights)
         paradigm = self.get_paradigm(paradigm)
@@ -161,12 +143,13 @@ class EncodingModel(object):
 
         stimulus = np.repeat(stimulus[np.newaxis, ...], n_repeats, axis=0)
 
-        # if np.isscalar(noise):
         simulated_data = self._simulate(
             stimulus,
             parameters.values[np.newaxis, ...],
-            weights_, noise, dof).numpy()
+            weights_, noise, dof)
 
+        if hasattr(simulated_data, 'numpy'):
+            simulated_data = simulated_data.numpy()
 
         # Collapse the first two dimensions
         simulated_data = np.reshape(simulated_data, (n_repeats*paradigm.shape[0], simulated_data.shape[2]))
@@ -174,7 +157,6 @@ class EncodingModel(object):
         if n_repeats == 1:
             index = pd.Index(paradigm.index, name='stimulus')
         else:
-            # index = pd.MultiIndex.from_product([paradigm.index, np.arange(n_repeats)], names=['stimulus', 'repeat'])
             index = pd.MultiIndex.from_product([np.arange(n_repeats), paradigm.index], names=['repeat', 'stimulus'])
 
         if weights is None:
@@ -183,7 +165,7 @@ class EncodingModel(object):
             return pd.DataFrame(simulated_data, index=index, columns=weights.columns)
 
     def _simulate(self, paradigm, parameters, weights, noise=1., dof=None):
-        """TensorFlow implementation of ``simulate`` supporting noise sampling."""
+        """Compute predictions and add noise."""
 
         n_batches = paradigm.shape[0]
         n_timepoints = paradigm.shape[1]
@@ -194,52 +176,43 @@ class EncodingModel(object):
             n_voxels = weights.shape[2]
 
         if dof is None:
-            if tf.experimental.numpy.isscalar(noise):
-                noise = tf.random.normal(shape=(n_batches, n_timepoints, n_voxels),
-                                        mean=0.0,
-                                        stddev=noise,
-                                        dtype=tf.float32)
+            if np.isscalar(noise):
+                noise_samples = keras.random.normal(shape=(n_batches, n_timepoints, n_voxels),
+                                                    stddev=noise)
             else:
                 noise = noise.astype(np.float32)
-                mvn = tfd.MultivariateNormalTriL(tf.zeros(n_voxels, dtype=np.float32),  tf.linalg.cholesky(noise))
-                noise = mvn.sample((n_batches, n_timepoints))
+                L = ops.cholesky(ops.convert_to_tensor(noise))
+                noise_samples = sample_mvn(L, (n_batches, n_timepoints))
         else:
-            if tf.experimental.numpy.isscalar(noise):
-                dist = tfd.StudentT(df=dof, loc=0.0, scale=noise)
-                noise = dist.sample((n_batches, n_timepoints, n_voxels))
+            if np.isscalar(noise):
+                noise_samples = sample_student_t(dof, noise, (n_batches, n_timepoints, n_voxels))
             else:
                 noise = noise.astype(np.float32)
-                mvn = tfd.MultivariateStudentTLinearOperator(df=dof, loc=tf.zeros(n_voxels, dtype=np.float32), scale=tf.linalg.LinearOperatorLowerTriangular(noise))
-                noise = mvn.sample((n_batches, n_timepoints))
+                L = ops.cholesky(ops.convert_to_tensor(noise))
+                noise_samples = sample_mvt(L, dof, (n_batches, n_timepoints))
 
-        print(noise.shape)
-        return self._predict(paradigm, parameters, weights) + noise
+        return self._predict(paradigm, parameters, weights) + noise_samples
 
     def _gradient(self, stimuli, parameters):
-        """Compute d(predictions)/d(stimuli) using TF Jacobians."""
+        """Compute d(predictions)/d(stimuli) using Jacobians. Requires TF backend."""
+        import tensorflow as tf
         stimuli = tf.convert_to_tensor(stimuli)
 
         with tf.GradientTape() as tape:
             tape.watch(stimuli)
             predictions = self._predict(stimuli, parameters)
 
-        # Compute the Jacobian, expected to result in [1, n, m, 1, n, 1]
         jacobians = tape.jacobian(predictions, stimuli)
-
-        # Correct handling of the Jacobian to transform [1, n, m, 1, n, 1] to [1, n, m]
-        # Sum over redundant dimensions, specifically the input's batch and spatial dimensions (since we want derivative w.r.t. each input independently)
         gradients = tf.reduce_sum(jacobians, axis=[-2, -1])
 
         return tf.squeeze(gradients, axis=-1)
 
     @property
     def data(self):
-        """Formatted data matrix (pandas DataFrame)."""
         return self._data
 
     @data.setter
     def data(self, data):
-        """Setter that ensures incoming data is converted to the expected format."""
         if data is None:
             self._data = None
         else:
@@ -247,16 +220,13 @@ class EncodingModel(object):
 
     @property
     def weights(self):
-        """Basis weights used for discrete/basis-function models (DataFrame)."""
         return self._weights
 
     @weights.setter
     def weights(self, weights):
-        """Setter that casts/validates provided weights."""
         self._weights = format_weights(weights)
 
     def to_discrete_model(self, grid, parameters=None, weights=None):
-        """Return a ``DiscreteModel`` evaluated on ``grid`` stimulus coordinates."""
         from .linear import DiscreteModel
 
         grid = np.array(grid, dtype=np.float32)[:, np.newaxis]
@@ -306,13 +276,6 @@ class EncodingModel(object):
 
         omega_chol = np.linalg.cholesky(omega)
 
-        # stimuli: n_batches x n_timepoints x n_stimulus_features
-        # data: n_batches x n_timepoints x n_units
-        # parameters: n_batches x n_subpops x n_parmeters
-        # weights: n_batches x n_subpops x n_units
-        # omega: n_units x n_units
-
-        # n_batches * n_timepoints x n_stimulus_features
         likelihood = self._likelihood(stimuli.values[np.newaxis, ...],
                                       data.values[np.newaxis, ...],
                                       parameters.values[np.newaxis, ...],
@@ -320,7 +283,10 @@ class EncodingModel(object):
                                       omega_chol,
                                       dof,
                                       logp,
-                                      normalize).numpy()
+                                      normalize)
+
+        if hasattr(likelihood, 'numpy'):
+            likelihood = likelihood.numpy()
 
         likelihood = pd.DataFrame(
             likelihood, index=data.index, columns=stimuli.index)
@@ -350,12 +316,6 @@ class EncodingModel(object):
 
         weights, weights_ = self._get_weights(weights)
 
-        # stimuli: n_batches x n_timepoints x n_stimulus_features
-        # data: n_batches x n_timepoints x n_units
-        # parameters: n_batches x n_subpops x n_parmeters
-        # weights: n_batches x n_subpops x n_units
-        # omega: n_units x n_units
-
         stimulus_range = self.stimulus._clean_paradigm(stimulus_range)
 
         if stimulus_range.ndim == 1:
@@ -365,7 +325,6 @@ class EncodingModel(object):
         else:
             raise Exception('Stimulus range needs to be either 1D or 2D')
 
-        # n_batches * n_timepoints x n_stimulus_features
         ll = self._likelihood(stimulus_range,
                               data[np.newaxis, :, :],
                               parameters[np.newaxis, :, :] if parameters is not None else None,
@@ -373,9 +332,10 @@ class EncodingModel(object):
                               omega,
                               dof,
                               logp=True,
+                              normalize=False)
 
-                              normalize=False).numpy()
-
+        if hasattr(ll, 'numpy'):
+            ll = ll.numpy()
 
         if stimulus_range.shape[-1] == 1:
             ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
@@ -389,11 +349,7 @@ class EncodingModel(object):
 
             ll = pd.DataFrame(ll.T, index=time_index, columns=index)
 
-        # Normalize, working from log likelihoods (otherwise we get numerical issues)
         ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
-        # ll = ll.apply(lambda d: d/d.sum(), axis=1)
-
-        # ll = np.exp(ll)
 
         if normalize:
             ll /= np.trapz(ll, ll.columns)[:, np.newaxis]
@@ -401,8 +357,6 @@ class EncodingModel(object):
         return ll
 
     def apply_mask(self, mask):
-        """Subset voxels/weights/parameters according to ``mask`` boolean array."""
-
         if self.data is not None:
             self.data = self.data.loc[:, mask]
 
@@ -413,60 +367,39 @@ class EncodingModel(object):
             self.weights = self.weights.loc[:, mask]
 
     def get_WWT(self):
-        """Return WᵀW — either from stored weights or the cached pseudo matrix."""
         return self.weights.T.dot(self.weights)
 
-    def get_residual_dist(self, n_voxels, omega_chol, dof):
-        """Create the residual distribution (Gaussian or Student-t)."""
-
-        if dof is None:
-            residual_dist = tfd.MultivariateNormalTriL(
-                tf.zeros(n_voxels),
-                scale_tril=omega_chol, allow_nan_stats=False)
-        else:
-            residual_dist = tfd.MultivariateStudentTLinearOperator(
-                dof,
-                tf.zeros(n_voxels),
-                tf.linalg.LinearOperatorLowerTriangular(omega_chol), allow_nan_stats=False)
-
-        return residual_dist
-
-    @tf.function
     def _likelihood(self, stimuli, data, parameters, weights, omega_chol, dof, logp=False, normalize=False):
-        """TensorFlow helper that computes likelihoods for batches of stimuli."""
-
-        # stimuli: n_batches x n_timepoints x n_stimulus_features
-        # data: n_batches x n_timepoints x n_units
-        # parameters: n_batches x n_subpops x n_parmeters
-        # weights: n_batches x n_subpops x n_units
-        # omega: n_units x n_units
-
-        # n_batches * n_timepoints x n_stimulus_features
+        """Compute likelihoods for batches of stimuli."""
         prediction = self._predict(stimuli, parameters, weights)
-
         return self._likelihood_timeseries(data, prediction, omega_chol, dof, logp, normalize)
 
-    @tf.function
     def _likelihood_timeseries(self, data, prediction, omega_chol, dof, logp=False, normalize=False):
         """Evaluate log-probabilities for each residual timeseries."""
-        # n_timepoints x n_stimuli x n_units
-        n_units = data.shape[2]
-
         residuals = data - prediction
-        residual_dist = self.get_residual_dist(n_units, omega_chol, dof)
 
-        # we use log likelihood to correct for very small numbers
-        p = residual_dist.log_prob(residuals)
+        # Flatten to 2D for log_prob: (n_batches * n_timepoints, n_voxels)
+        n_batches, n_timepoints, n_voxels = residuals.shape
+        residuals_2d = ops.reshape(residuals, (n_batches * n_timepoints, n_voxels))
+
+        omega_chol_t = ops.convert_to_tensor(omega_chol, dtype='float32')
+
+        if dof is None:
+            p_flat = mvn_log_prob(residuals_2d, omega_chol_t)
+        else:
+            p_flat = mvt_log_prob(residuals_2d, omega_chol_t, dof)
+
+        p = ops.reshape(p_flat, (n_batches, n_timepoints))
 
         if logp:
             return p
 
         if normalize:
-            p = p - tf.reduce_max(p, 1)[:, tf.newaxis]
-            p = tf.exp(p)
-            p = p / tf.reduce_sum(p, 1)[:, tf.newaxis]
+            p = p - ops.max(p, axis=1)[:, None]
+            p = ops.exp(p)
+            p = p / ops.sum(p, axis=1)[:, None]
         else:
-            p = tf.exp(p)
+            p = ops.exp(p)
 
         return p
 
@@ -504,50 +437,46 @@ class EncodingModel(object):
             else:
                 parameters = self.parameters
 
-
         parameters_ = parameters.values[np.newaxis, ...].astype(np.float32)
 
         if stimuli.ndim == 1:
             stimuli = stimuli[:, np.newaxis]
 
-
-        L = tf.linalg.cholesky(omega)
+        L = ops.cholesky(ops.convert_to_tensor(omega, dtype='float32'))
 
         if analytical:
+            import tensorflow as tf
             stimuli_ = tf.Variable(stimuli[np.newaxis, ...], name='stimuli')
-            gradient = self._gradient(stimuli_, parameters_)[0] # number of stimuli x number of voxels
+            gradient = self._gradient(stimuli_, parameters_)[0]
 
             y = []
-
             for i in range(gradient.shape[0]):
-                y.append(tf.linalg.triangular_solve(L, gradient[i, :, tf.newaxis], lower=True))
+                y.append(ops.solve_triangular(L, gradient[i, :, None], lower=True))
 
-            y = tf.concat(y, axis=1)
-
-            fisher_info = tf.reduce_sum(y ** 2, axis=0)
+            y = ops.concatenate(y, axis=1)
+            fisher_info = ops.sum(y ** 2, axis=0)
 
         else:
-            stimuli_ = tf.repeat(stimuli[np.newaxis, ...], n, axis=0)
-            stimuli_ = tf.Variable(stimuli_, name='stimuli')
+            import tensorflow as tf
+            stimuli_ = tf.Variable(tf.repeat(stimuli[np.newaxis, ...], n, axis=0), name='stimuli')
 
-            dist = self.get_residual_dist(omega.shape[0], L, dof)
+            noise = sample_mvn(L, (n,)) if dof is None else sample_mvt(L, dof, (n,))
             pred = self._predict(stimuli_, parameters_, weights_)
-            noise = dist.sample(n)
-
-            # Batches (noise) x stimuli x n_voxels
-            data = pred + noise[:, tf.newaxis, :]
+            data = pred + noise[:, None, :]
 
             with tf.GradientTape() as tape:
                 ll = self._likelihood(stimuli_, data, parameters_, weights_, L, dof, logp=True, normalize=False)
 
             dy_dx = tape.gradient(ll, stimuli_)
-
             fisher_info = tf.reduce_mean(dy_dx**2, 0)[..., 0]
 
+        if hasattr(fisher_info, 'numpy'):
+            fisher_info = fisher_info.numpy()
+
         if stimuli.shape[1] == 1:
-            return pd.Series(fisher_info.numpy(), index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
+            return pd.Series(fisher_info, index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
         else:
-            return pd.Series(fisher_info.numpy(), index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
+            return pd.Series(fisher_info, index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
 
     def _get_parameters(self, parameters=None):
         """Return parameters formatted as DataFrame matching ``parameter_labels``."""
@@ -576,7 +505,7 @@ class EncodingModel(object):
         return paradigm
 
     def _get_paradigm(self, paradigm):
-        """Tensor-ready paradigm (np.array) used inside TF functions."""
+        """Tensor-ready paradigm (np.array) used inside computation."""
 
         if paradigm is None:
             paradigm = self.get_paradigm(paradigm)
@@ -593,7 +522,6 @@ class EncodingRegressionModel(EncodingModel):
                 regressors={}, weights=None, omega=None,
                 baseline_parameter_values=None,
                  verbosity=logging.INFO, **kwargs):
-        """Build Patsy design matrices and tie parameter values to regressors."""
 
         self.regressors = regressors
 
@@ -617,10 +545,8 @@ class EncodingRegressionModel(EncodingModel):
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
 
 
-        # If baseline_parameter_values is not provided, use empty dictionary
         baseline_parameter_values = baseline_parameter_values or {}
 
-        # If parameter is not in baseline_parameter_values, set it to 0
         self.baseline_parameter_values = {
             param: baseline_parameter_values.get(param, 0.0)
             for param in self.base_parameter_labels
@@ -637,7 +563,6 @@ class EncodingRegressionModel(EncodingModel):
 
 
     def _get_regressor_parameter_labels(self, design_matrices):
-        """MultiIndex of (parameter, regressor) pairs used for coefficients."""
         regressor_parameters = []
 
         for parameter in self.base_parameter_labels:
@@ -647,7 +572,6 @@ class EncodingRegressionModel(EncodingModel):
         return pd.MultiIndex.from_tuples(regressor_parameters, names=['parameter', 'regressor'])
 
     def _get_base_parameters(self, design_matrices, regressor_parameters):
-        """Transform regressor weights back into native parameter space."""
 
         parameters = []
 
@@ -656,18 +580,17 @@ class EncodingRegressionModel(EncodingModel):
         for parameter in self.base_parameter_labels:
             end_ix = ix + design_matrices[parameter].shape[1]
 
-            parameters.append(tf.reduce_sum(np.asarray(design_matrices[parameter], dtype=np.float32)[:, np.newaxis, :] * \
+            parameters.append(ops.sum(np.asarray(design_matrices[parameter], dtype=np.float32)[:, np.newaxis, :] * \
                                       regressor_parameters[:, :, ix:end_ix], axis=2) + self.baseline_parameter_values[parameter])
 
             ix = end_ix
 
-        parameters = tf.stack(parameters, axis=2)
-        parameters = tf.map_fn(self._base_transform_parameters_forward, parameters)
+        parameters = ops.stack(parameters, axis=2)
+        parameters = keras.ops.map(self._base_transform_parameters_forward, parameters)
 
         return parameters
 
     def build_design_matrices(self, paradigm, regressors=None):
-        """Create Patsy design matrices for each parameter."""
 
         design_matrices = {}
 
@@ -688,7 +611,6 @@ class EncodingRegressionModel(EncodingModel):
 
 
     def set_paradigm(self, paradigm, regressors=None):
-        """Update stored paradigm and rebuild design matrices/regressor labels."""
 
         if not hasattr(self, 'paradigm'):
 
@@ -697,7 +619,6 @@ class EncodingRegressionModel(EncodingModel):
 
             if regressors is None:
                 raise Exception('For EncodignRegressionModel, the regressors should be set when the model is initialized.')
-                # regressors = self.regressors
 
             self.paradigm = paradigm
 
@@ -714,23 +635,15 @@ class EncodingRegressionModel(EncodingModel):
         self.base_paradigm = paradigm[self.stimulus.dimension_labels]
 
     def _basis_predictions_regressors(self, paradigm, parameters):
-        """Apply regressors to recover base parameters before prediction."""
         base_parameters = self._get_base_parameters(self.design_matrices, parameters)
         result = self._basis_basis_predictions(self.base_paradigm.values[:, np.newaxis, :], base_parameters)
-        return tf.reshape(result, [1, result.shape[0], -1])
+        return ops.reshape(result, [1, result.shape[0], -1])
 
     def _get_paradigm(self, paradigm):
-        """Override to ensure cleaned paradigm is used (regressors already bound)."""
-
-        # if not paradigm.equals(self.paradigm):
-        #     raise Exception('For EncodignRegressionModel, the paradigm should be set when the model is initialized OR using set_paradigm().')
-
         paradigm = self.stimulus._clean_paradigm(paradigm)
-
         return paradigm
 
     def get_conditionspecific_parameters(self, conditions, parameters):
-        """Evaluate parameter values for specific condition rows."""
 
         design_matrices = self.build_design_matrices(conditions)
 
@@ -741,7 +654,9 @@ class EncodingRegressionModel(EncodingModel):
 
         parameters_ = parameters_[np.newaxis, ...]
 
-        transformed_parameters = self._get_base_parameters(design_matrices, parameters_).numpy()
+        transformed_parameters = self._get_base_parameters(design_matrices, parameters_)
+        if hasattr(transformed_parameters, 'numpy'):
+            transformed_parameters = transformed_parameters.numpy()
 
         transformed_parameters = np.reshape(transformed_parameters, (-1, transformed_parameters.shape[-1]))
 
@@ -754,26 +669,32 @@ class EncodingRegressionModel(EncodingModel):
     def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
                             include_multidimensional_stimulus_index=False):
 
-
-        # print("Note that non-stimulus dimensions (e.g., the regressors) are part of the likelihood calculation!")
-
         self.set_paradigm(stimulus_range)
 
         pred = self.predict(stimulus_range, parameters=parameters, weights=weights)
 
-        # n_predictions x n_timepoints x n_units
         residuals = data.values[np.newaxis, :, :] - pred.values[:, np.newaxis, :]
 
         omega_chol = np.linalg.cholesky(omega)
         n_units = data.shape[1]
 
-        residual_dist = self.get_residual_dist(n_units, omega_chol, dof)
-        # we use log likelihood to correct for very small numbers
-        ll = residual_dist.log_prob(residuals).numpy()
+        n_batches, n_timepoints, n_voxels = residuals.shape
+        residuals_2d = ops.reshape(ops.convert_to_tensor(residuals, dtype='float32'),
+                                   (n_batches * n_timepoints, n_voxels))
+        omega_chol_t = ops.convert_to_tensor(omega_chol, dtype='float32')
+
+        if dof is None:
+            ll_flat = mvn_log_prob(residuals_2d, omega_chol_t)
+        else:
+            ll_flat = mvt_log_prob(residuals_2d, omega_chol_t, dof)
+
+        ll = ops.reshape(ll_flat, (n_batches, n_timepoints))
+        if hasattr(ll, 'numpy'):
+            ll = ll.numpy()
+
         ll = pd.DataFrame(ll, index=pd.MultiIndex.from_frame(stimulus_range), columns=data.index).T
 
         if normalize:
-            # Subtract max for numerical stability before exponentiating
             ll = ll.sub(ll.max(axis=1), axis=0)
 
         ll = np.exp(ll)
@@ -783,18 +704,11 @@ class EncodingRegressionModel(EncodingModel):
 
 
 class HRFEncodingModel(object):
-    """Mixin that equips an encoding model with HRF convolution support.
-
-    Wraps another :class:`EncodingModel` to (optionally) append HRF parameters,
-    zero/one-out baseline and amplitude before convolution, and then re-apply
-    those parameters after the HRF is applied.  Accepts any :class:`HRFModel`
-    implementation and can share or individualize HRFs per voxel.
-    """
+    """Mixin that equips an encoding model with HRF convolution support."""
 
     def __init__(self, paradigm=None, data=None, parameters=None,
                     weights=None, omega=None, hrf_model=None, verbosity=logging.INFO,
                     flexible_hrf_parameters=False, **kwargs):
-        """Wire an ``HRFModel`` into an existing encoding model."""
 
         if hrf_model is None:
             raise ValueError('Please provide HRFModel!')
@@ -813,49 +727,41 @@ class HRFEncodingModel(object):
         self.parameters = self._get_parameters(parameters)
 
 
-    @tf.function
     def _predict(self, paradigm, parameters, weights):
         """Convolve base predictions with HRF, reapplying amplitude/baseline."""
 
-        standardized_parameters = tf.identity(parameters)
+        n_pars = len(self.parameter_labels)
+        # Build modified parameters with baseline=0 and amplitude=1
+        parts = [parameters[:, :, i:i+1] for i in range(n_pars)]
 
-        n_batches, n_voxels = parameters.shape[0], parameters.shape[1]
-
-         # We define that baseline and amplitude are applied to the HRF-convolved signal
-         # If we don't do that, we can't easily recover these parameters using OLS...
         if 'baseline' in self.parameter_labels:
             baseline_idx = self.parameter_labels.index('baseline')
-            indices_baseline = tf.constant([[i, j, baseline_idx] for i in range(n_batches) for j in range(n_voxels)], dtype=tf.int32)
-            updates_baseline = tf.zeros((n_batches * n_voxels,), dtype=parameters.dtype)
-            standardized_parameters = tf.tensor_scatter_nd_update(standardized_parameters, indices_baseline, updates_baseline)
+            parts[baseline_idx] = ops.zeros_like(parts[baseline_idx])
 
         if 'amplitude' in self.parameter_labels:
             amplitude_idx = self.parameter_labels.index('amplitude')
-            indices_amplitude = tf.constant([[i, j, amplitude_idx] for i in range(n_batches) for j in range(n_voxels)], dtype=tf.int32)
-            updates_amplitude = tf.ones((n_batches * n_voxels,), dtype=parameters.dtype)
-            standardized_parameters = tf.tensor_scatter_nd_update(standardized_parameters, indices_amplitude, updates_amplitude)
+            parts[amplitude_idx] = ops.ones_like(parts[amplitude_idx])
+
+        standardized_parameters = ops.concatenate(parts, axis=2)
 
         pre_convolve = EncodingModel._predict(
             self, paradigm, standardized_parameters, weights)
 
         kwargs = {}
-        # parameters: n_batch x n_units x n_parameters
         if self.flexible_hrf_parameters:
             for ix, label in enumerate(self.hrf_model.parameter_labels):
                 kwargs[label] = parameters[:, :, -len(self.hrf_model.parameter_labels) + ix]
 
-        # pred: n_batch x n_timepoints x n_units
         pred_convolved = self.hrf_model.convolve(pre_convolve, **kwargs)
 
         if 'amplitude' in self.parameter_labels:
-            pred_convolved *= parameters[:, :, amplitude_idx][:, tf.newaxis, :]
+            pred_convolved *= parameters[:, :, amplitude_idx][:, None, :]
 
         if 'baseline' in self.parameter_labels:
-            pred_convolved += parameters[:, :, baseline_idx][:, tf.newaxis, :]
+            pred_convolved += parameters[:, :, baseline_idx][:, None, :]
 
         return pred_convolved
 
-    @tf.function
     def _predict_no_hrf(self, paradigm, parameters, weights):
         """Bypass HRF convolution; useful for diagnostics/debugging."""
         return EncodingModel._predict(self, paradigm, parameters, weights)

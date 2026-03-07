@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
-from tensorflow.linalg import lstsq
+import keras
+from keras import ops
 from ..utils import format_data, format_parameters
 from ..models import LinearModelWithBaseline
 
@@ -8,7 +9,7 @@ from ..models import LinearModelWithBaseline
 class WeightFitter(object):
     """Closed-form solver for voxel weights given fixed parameters.
 
-    Uses TensorFlow's ``lstsq`` to compute weights that best map basis predictions
+    Uses least-squares to compute weights that best map basis predictions
     to measured data, optionally with L2 regularization via ``alpha``.
     """
 
@@ -25,13 +26,27 @@ class WeightFitter(object):
 
         basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
 
-        weights = lstsq(basis_predictions, self.data.values, l2_regularizer=alpha)[0]
+        A = basis_predictions[0]  # (n_timepoints, n_basis)
+        b = self.data.values       # (n_timepoints, n_voxels)
+
+        if alpha > 0.0:
+            # Tikhonov-regularized least squares: (A^T A + alpha*I) x = A^T b
+            n_basis = A.shape[-1] if A.shape[-1] is not None else ops.shape(A)[-1]
+            AtA = ops.matmul(ops.transpose(A), A) + alpha * ops.eye(int(n_basis))
+            Atb = ops.matmul(ops.transpose(A), ops.convert_to_tensor(b, dtype='float32'))
+            import tensorflow as tf
+            weights_vals = tf.linalg.solve(AtA, Atb)
+        else:
+            weights_vals = ops.lstsq(A, ops.convert_to_tensor(b, dtype='float32'))
+
+        if hasattr(weights_vals, 'numpy'):
+            weights_vals = weights_vals.numpy()
 
         if (parameters is None) or type(self.model) == LinearModelWithBaseline:
-            weights = pd.DataFrame(weights.numpy(),
+            weights = pd.DataFrame(weights_vals,
                                columns=self.data.columns)
         else:
-            weights = pd.DataFrame(weights.numpy(), index=self.parameters.index,
+            weights = pd.DataFrame(weights_vals, index=self.parameters.index,
                                columns=self.data.columns)
 
         return weights

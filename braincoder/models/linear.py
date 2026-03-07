@@ -1,11 +1,10 @@
-import tensorflow as tf
-import tensorflow_probability as tfp
 import logging
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+import keras
+from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
-from tensorflow_probability import distributions as tfd
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
@@ -24,21 +23,15 @@ class DiscreteModel(EncodingModel):
 
         super().__init__(paradigm, data, _parameters, weights, verbosity)
 
-    @tf.function
     def _basis_predictions(self, paradigm, parameters):
 
-        parameters_ = tf.linalg.diag_part(parameters)
+        parameters_ = ops.diag(parameters[0])
 
-        return tf.cast(tf.equal(paradigm, parameters_[tf.newaxis, :]), tf.float32)
+        return ops.cast(ops.equal(paradigm, parameters_[None, :]), 'float32')
 
 
 class LinearModel(EncodingModel):
-    """Identity mapping from paradigm features to voxel responses.
-
-    Useful when paradigm features already correspond to predicted activity
-    (e.g., when estimating weights for design-matrix regressors).  No free
-    parameters are tracked, so attempts to set ``parameters`` raise ``ValueError``.
-    """
+    """Identity mapping from paradigm features to voxel responses."""
 
     parameter_labels = []
 
@@ -66,7 +59,6 @@ class LinearModel(EncodingModel):
 
         return super().predict(paradigm, parameters, weights)
 
-    @tf.function
     def _basis_predictions(self, paradigm, parameters):
         return paradigm
 
@@ -76,7 +68,6 @@ class LinearModelWithBaseline(EncodingModel):
 
     parameter_labels = ['baseline']
 
-    @tf.function
     def _predict(self, paradigm, parameters, weights=None):
 
         basis_predictions = self._basis_predictions(paradigm, None)
@@ -84,10 +75,9 @@ class LinearModelWithBaseline(EncodingModel):
         if weights is None:
             return basis_predictions + parameters[..., 0]
         else:
-            return tf.tensordot(basis_predictions, weights, (2, 1))[:, :, 0, :] + \
-                tf.transpose(parameters, [0, 2, 1])
+            return ops.tensordot(basis_predictions, weights, axes=[[2], [1]])[:, :, 0, :] + \
+                ops.transpose(parameters, axes=[0, 2, 1])
 
-    @tf.function
     def _basis_predictions(self, paradigm, parameters):
         return paradigm
 
@@ -107,13 +97,11 @@ class LinearModelWithBaselineHRF(LinearModelWithBaseline, HRFEncodingModel):
                          hrf_model=hrf_model,
                          **kwargs)
 
-    @tf.function
     def _predict(self, paradigm, parameters, weights):
         pre_convolve = LinearModelWithBaseline._predict(
             self, paradigm, parameters, weights)
 
         return self.hrf_model.convolve(pre_convolve)
 
-    @tf.function
     def _predict_no_hrf(self, paradigm, parameters, weights):
         return LinearModelWithBaseline._predict(self, paradigm, parameters, weights)
