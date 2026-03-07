@@ -4,6 +4,17 @@ import tensorflow_probability as tfp
 from tensorflow.math import sigmoid
 from .utils import logit
 
+
+def bounded_sigmoid_transform(min_val, max_val):
+    """Return a (forward, backward) pair that maps reals → [min_val, max_val] via sigmoid."""
+    def forward(x):
+        return tf.sigmoid(x) * (max_val - min_val) + min_val
+    def backward(y):
+        y_scaled = (y - min_val) / (max_val - min_val)
+        return tf.math.log(y_scaled / (1.0 - y_scaled))
+    return (forward, backward)
+
+
 class HRFModel(object):
     """Base class that handles HRF generation and convolution with predictions.
 
@@ -11,6 +22,40 @@ class HRFModel(object):
     shared/voxel-specific convolution strategies that operate on TensorFlow
     tensors compatible with the encoding models.
     """
+    def _transform_parameters_forward(self, parameters):
+        """Map unconstrained optimizer parameters to the model's native space via ``self.transformations``."""
+        out = []
+        for i, t in enumerate(self.transformations):
+            param = parameters[:, i][:, tf.newaxis]
+            if isinstance(t, tuple):
+                out.append(t[0](param))
+            elif t == 'identity':
+                out.append(param)
+            elif t == 'softplus':
+                out.append(tf.math.softplus(param))
+            elif t == 'sigmoid':
+                out.append(tf.math.sigmoid(param))
+            else:
+                raise NotImplementedError(f"Unknown transform: {t!r}")
+        return tf.concat(out, axis=1)
+
+    def _transform_parameters_backward(self, parameters):
+        """Inverse of :meth:`_transform_parameters_forward`."""
+        out = []
+        for i, t in enumerate(self.transformations):
+            param = parameters[:, i][:, tf.newaxis]
+            if isinstance(t, tuple):
+                out.append(t[1](param))
+            elif t == 'identity':
+                out.append(param)
+            elif t == 'softplus':
+                out.append(tfp.math.softplus_inverse(param))
+            elif t == 'sigmoid':
+                out.append(tf.math.log(param / (1.0 - param)))
+            else:
+                raise NotImplementedError(f"Unknown transform: {t!r}")
+        return tf.concat(out, axis=1)
+
     def set_unique_hrfs(self, unique_hrfs):
         self.unique_hrfs = unique_hrfs
         self._convolve = self._convolve_unique if unique_hrfs else self._convolve_shared
@@ -228,6 +273,11 @@ class SPMHRFModel(HRFModel):
         self.time_stamps -= self.onset
         # 1D time vector
 
+        self.transformations = [
+            bounded_sigmoid_transform(self.min_hrf_delay, self.max_hrf_delay),
+            bounded_sigmoid_transform(self.min_dispersion, self.max_dispersion),
+        ]
+
         super().__init__(unique_hrfs=unique_hrfs)
 
     def get_hrf(self, hrf_delay=None, hrf_dispersion=None):
@@ -246,37 +296,6 @@ class SPMHRFModel(HRFModel):
                       c=self.ratio,
                       highres_dt=self.highres_dt)
         return hrf
-
-    def _transform_parameters_forward(self, parameters):
-        delay = parameters[:, 0][:, tf.newaxis]
-        dispersion = parameters[:, 1][:, tf.newaxis]
-
-        delay = tf.sigmoid(delay)
-        dispersion = tf.sigmoid(dispersion)
-
-        delay_range = self.max_hrf_delay - self.min_hrf_delay
-        dispersion_range = self.max_dispersion - self.min_dispersion
-
-        delay = delay * delay_range + self.min_hrf_delay
-        dispersion = dispersion * dispersion_range + self.min_dispersion
-
-        return tf.concat([delay, dispersion], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward(self, parameters):
-        delay = parameters[:, 0][:, tf.newaxis]
-        dispersion = parameters[:, 1][:, tf.newaxis]
-
-        delay_range = self.max_hrf_delay - self.min_hrf_delay
-        dispersion_range = self.max_dispersion - self.min_dispersion
-
-        delay = (delay - self.min_hrf_delay) / delay_range
-        dispersion = (dispersion - self.min_dispersion) / dispersion_range
-
-        delay = tf.math.log(delay / (1.0 - delay))
-        dispersion = tf.math.log(dispersion / (1.0 - dispersion))
-
-        return tf.concat([delay, dispersion], axis=1)
 
 
 class SPMHRFDerivativeModel(HRFModel):
@@ -339,17 +358,6 @@ class SPMHRFDerivativeModel(HRFModel):
               + dispersion_weight * derivative_disp
 
         return hrf
-
-    def _transform_parameters_forward(self, parameters):
-        weights = tf.sigmoid(parameters)  # (n, 2), values in (0, 1)
-        weights = weights * 2 * self.max_weight - self.max_weight  # range [-max_weight, max_weight]
-        return weights
-
-    @tf.function
-    def _transform_parameters_backward(self, parameters):
-        weights = (parameters + self.max_weight) / (2 * self.max_weight)  # back to [0,1]
-        weights = tf.math.log(weights / (1.0 - weights))  # logit
-        return weights
 
 
 class CustomHRFModel(HRFModel):

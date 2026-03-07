@@ -25,6 +25,50 @@ class EncodingModel(object):
     parameter_labels = None
     stimulus_type = Stimulus
 
+    def _transform_parameters_forward(self, parameters):
+        """Map unconstrained optimizer parameters to the model's native space.
+
+        Dispatches per-parameter transforms declared in ``self.transformations``.
+        Each entry is either a string name ('identity', 'softplus',
+        'aggressive_softplus', 'sigmoid') or a ``(forward, backward)`` callable
+        pair produced by :func:`~braincoder.hrf.bounded_sigmoid_transform`.
+        """
+        out = []
+        for i, t in enumerate(self.transformations):
+            param = parameters[:, i][:, tf.newaxis]
+            if isinstance(t, tuple):
+                out.append(t[0](param))
+            elif t == 'identity':
+                out.append(param)
+            elif t == 'softplus':
+                out.append(tf.math.softplus(param))
+            elif t == 'aggressive_softplus':
+                out.append(aggressive_softplus(param))
+            elif t == 'sigmoid':
+                out.append(tf.math.sigmoid(param))
+            else:
+                raise NotImplementedError(f"Unknown transform: {t!r}")
+        return tf.concat(out, axis=1)
+
+    def _transform_parameters_backward(self, parameters):
+        """Inverse of :meth:`_transform_parameters_forward`."""
+        out = []
+        for i, t in enumerate(self.transformations):
+            param = parameters[:, i][:, tf.newaxis]
+            if isinstance(t, tuple):
+                out.append(t[1](param))
+            elif t == 'identity':
+                out.append(param)
+            elif t == 'softplus':
+                out.append(tfp.math.softplus_inverse(param))
+            elif t == 'aggressive_softplus':
+                out.append(aggressive_softplus_inverse(param))
+            elif t == 'sigmoid':
+                out.append(tf.math.log(param / (1.0 - param)))
+            else:
+                raise NotImplementedError(f"Unknown transform: {t!r}")
+        return tf.concat(out, axis=1)
+
     def __init__(self, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, verbosity=logging.INFO):
         """Normalize paradigm/parameter inputs and set shared attributes."""

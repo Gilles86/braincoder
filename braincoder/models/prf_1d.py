@@ -23,12 +23,11 @@ class GaussianPRF(EncodingModel):
                  **kwargs):
         """Configure Gaussian pRF with optional stimulus amplitude modeling."""
 
-        if allow_neg_amplitudes:
-            self._transform_parameters_forward = self._transform_parameters_forward1
-            self._transform_parameters_backward = self._transform_parameters_backward1
-        else:
-            self._transform_parameters_forward = self._transform_parameters_forward2
-            self._transform_parameters_backward = self._transform_parameters_backward2
+        if not hasattr(self, 'transformations'):
+            if allow_neg_amplitudes:
+                self.transformations = ['identity', 'aggressive_softplus', 'identity', 'identity']
+            else:
+                self.transformations = ['identity', 'aggressive_softplus', 'aggressive_softplus', 'identity']
 
         self.stimulus_type = self._get_stimulus_type(model_stimulus_amplitude=model_stimulus_amplitude)
         self._basis_predictions = self._get_basis_predictions(model_stimulus_amplitude=model_stimulus_amplitude)
@@ -153,37 +152,6 @@ class GaussianPRF(EncodingModel):
         """Alias for :meth:`get_pseudoWWT`."""
         return self.get_pseudoWWT()
 
-    @tf.function
-    def _transform_parameters_forward1(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          aggressive_softplus(parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward1(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          aggressive_softplus_inverse(
-                              parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_forward2(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          aggressive_softplus(parameters[:, 1][:, tf.newaxis]),
-                          aggressive_softplus(parameters[:, 2][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward2(self, parameters):
-        return tf.concat([parameters[:, 0][:, tf.newaxis],
-                          aggressive_softplus_inverse(
-                              parameters[:, 1][:, tf.newaxis]),
-                            aggressive_softplus_inverse(
-                                parameters[:, 2][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-
 class RegressionGaussianPRF(EncodingRegressionModel, GaussianPRF):
     """Gaussian pRF whose parameters are modeled by regression covariates."""
 
@@ -280,40 +248,16 @@ class LogGaussianPRF(GaussianPRF):
         else:
             raise ValueError('Unknown parameterisation! Needs to be in [mu_sd_natural, mode_fwhm_natural]')
 
+        if allow_neg_amplitudes:
+            self.transformations = ['softplus', 'softplus', 'identity', 'identity']
+        else:
+            self.transformations = ['softplus', 'softplus', 'softplus', 'identity']
 
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
                           verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
                           **kwargs)
 
-    @tf.function
-    def _transform_parameters_forward1(self, parameters):
-        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward1(self, parameters):
-        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-    @tf.function
-    def _transform_parameters_forward2(self, parameters):
-        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward2(self, parameters):
-        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 1][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
-                          parameters[:, 3][:, tf.newaxis]], axis=1)
     @tf.function
     def _basis_predictions_without_amplitude_n(self, paradigm, parameters):
         """Log-normal tuning (mu/sd) without external amplitude modulation."""
@@ -394,43 +338,16 @@ class AlphaGaussianPRF(GaussianPRF):
         if model_stimulus_amplitude:
             raise NotImplementedError("Modeling stimulus amplitude is not implemented for AlphaGaussianPRF")
 
+        # mu and sd must be positive; alpha is free; amplitude constraint depends on allow_neg_amplitudes
+        if allow_neg_amplitudes:
+            self.transformations = ['softplus', 'softplus', 'identity', 'identity', 'identity']
+        else:
+            self.transformations = ['softplus', 'softplus', 'identity', 'softplus', 'identity']
+
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
                           verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
                           **kwargs)
-
-    @tf.function
-    def _transform_parameters_forward1(self, parameters):
-        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          parameters[:, 3][:, tf.newaxis],
-                          parameters[:, 4][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward1(self, parameters):
-        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          parameters[:, 3][:, tf.newaxis],
-                          parameters[:, 4][:, tf.newaxis]], axis=1)
-    @tf.function
-    def _transform_parameters_forward2(self, parameters):
-        return tf.concat([tf.math.softplus(parameters[:, 0][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 3][:, tf.newaxis]),
-                          parameters[:, 4][:, tf.newaxis]], axis=1)
-
-    @tf.function
-    def _transform_parameters_backward2(self, parameters):
-        return tf.concat([tfp.math.softplus_inverse(parameters[:, 0][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 1][:, tf.newaxis]),
-                          parameters[:, 2][:, tf.newaxis],
-                          tfp.math.softplus_inverse(parameters[:, 3][:, tf.newaxis]),
-                          parameters[:, 4][:, tf.newaxis]], axis=1)
 
     @tf.function
     def _basis_predictions_without_amplitude(self, paradigm, parameters):
