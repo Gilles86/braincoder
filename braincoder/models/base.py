@@ -194,18 +194,13 @@ class EncodingModel(object):
         return self._predict(paradigm, parameters, weights) + noise_samples
 
     def _gradient(self, stimuli, parameters):
-        """Compute d(predictions)/d(stimuli) using Jacobians. Requires TF backend."""
-        import tensorflow as tf
-        stimuli = tf.convert_to_tensor(stimuli)
-
-        with tf.GradientTape() as tape:
-            tape.watch(stimuli)
-            predictions = self._predict(stimuli, parameters)
-
-        jacobians = tape.jacobian(predictions, stimuli)
-        gradients = tf.reduce_sum(jacobians, axis=[-2, -1])
-
-        return tf.squeeze(gradients, axis=-1)
+        """Compute d(predictions)/d(stimuli) using Jacobians."""
+        from ..utils.backend import compute_jacobian
+        stimuli = ops.convert_to_tensor(stimuli)
+        fn = lambda s: self._predict(s, parameters)
+        jacobians = compute_jacobian(fn, stimuli)
+        gradients = ops.sum(jacobians, axis=[-2, -1])
+        return ops.squeeze(gradients, axis=-1)
 
     @property
     def data(self):
@@ -445,8 +440,7 @@ class EncodingModel(object):
         L = ops.cholesky(ops.convert_to_tensor(omega, dtype='float32'))
 
         if analytical:
-            import tensorflow as tf
-            stimuli_ = tf.Variable(stimuli[np.newaxis, ...], name='stimuli')
+            stimuli_ = ops.convert_to_tensor(stimuli[np.newaxis, ...])
             gradient = self._gradient(stimuli_, parameters_)[0]
 
             y = []
@@ -457,18 +451,22 @@ class EncodingModel(object):
             fisher_info = ops.sum(y ** 2, axis=0)
 
         else:
-            import tensorflow as tf
-            stimuli_ = tf.Variable(tf.repeat(stimuli[np.newaxis, ...], n, axis=0), name='stimuli')
+            from ..utils.backend import compute_gradients
+            stimuli_ = ops.convert_to_tensor(
+                ops.tile(stimuli[np.newaxis, ...], [n, 1, 1]))
 
             noise = sample_mvn(L, (n,)) if dof is None else sample_mvt(L, dof, (n,))
             pred = self._predict(stimuli_, parameters_, weights_)
             data = pred + noise[:, None, :]
 
-            with tf.GradientTape() as tape:
-                ll = self._likelihood(stimuli_, data, parameters_, weights_, L, dof, logp=True, normalize=False)
+            stimuli_var = keras.Variable(stimuli_, name='stimuli')
 
-            dy_dx = tape.gradient(ll, stimuli_)
-            fisher_info = tf.reduce_mean(dy_dx**2, 0)[..., 0]
+            def ll_fn():
+                return self._likelihood(stimuli_var, data, parameters_, weights_, L, dof,
+                                        logp=True, normalize=False)
+
+            ll, dy_dx = compute_gradients(ll_fn, [stimuli_var])
+            fisher_info = ops.mean(dy_dx[0] ** 2, 0)[..., 0]
 
         if hasattr(fisher_info, 'numpy'):
             fisher_info = fisher_info.numpy()

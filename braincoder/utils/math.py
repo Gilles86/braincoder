@@ -54,10 +54,9 @@ def lognormal_pdf_mode_fwhm(x, mode, fwhm):
     return p
 
 def von_mises_pdf(x, mu, kappa):
-    # bessel_i0 is TF-specific; VonMisesPRF requires TF backend
-    import tensorflow as tf
+    from .backend import bessel_i0
     TWO_PI = 2 * np.pi
-    pdf = ops.exp(kappa * ops.cos(x - mu)) / (TWO_PI * tf.math.bessel_i0(kappa))
+    pdf = ops.exp(kappa * ops.cos(x - mu)) / (TWO_PI * bessel_i0(kappa))
     return pdf
 
 # Aggressive softplus with alpha=100

@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import tensorflow as tf
 
 
 def format_paradigm(paradigm):
@@ -58,7 +57,7 @@ def format_data(data):
     if isinstance(data, pd.DataFrame):
         return data
 
-    if isinstance(data, tf.Tensor):
+    if hasattr(data, 'numpy') and not isinstance(data, np.ndarray):
         data = data.numpy()
 
     return pd.DataFrame(data,

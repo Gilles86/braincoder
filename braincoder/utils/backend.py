@@ -164,14 +164,107 @@ def sample_student_t(dof, scale, shape, seed=None):
 
 
 # ---------------------------------------------------------------------------
+# Backend-specific differentiable math ops
+# ---------------------------------------------------------------------------
+
+def lgamma(x):
+    """Backend-agnostic log-gamma function (differentiable)."""
+    backend = keras.backend.backend()
+    if backend == 'tensorflow':
+        import tensorflow as tf
+        return tf.math.lgamma(x)
+    elif backend == 'jax':
+        import jax.scipy.special as jss
+        return jss.gammaln(x)
+    elif backend == 'torch':
+        import torch
+        return torch.lgamma(x)
+    else:
+        from scipy.special import gammaln
+        return ops.convert_to_tensor(gammaln(np.array(x)), dtype='float32')
+
+
+def bessel_i0(x):
+    """Backend-agnostic modified Bessel function I₀ (differentiable)."""
+    backend = keras.backend.backend()
+    if backend == 'tensorflow':
+        import tensorflow as tf
+        return tf.math.bessel_i0(x)
+    elif backend == 'jax':
+        import jax.scipy.special as jss
+        return jss.i0(x)
+    elif backend == 'torch':
+        import torch
+        return torch.special.i0(x)
+    else:
+        from scipy.special import i0
+        return ops.convert_to_tensor(i0(np.array(x)), dtype='float32')
+
+
+def interp_regular_1d_grid(x, x_ref_min, x_ref_max, y_ref):
+    """Backend-agnostic linear interpolation on a regular 1-D grid.
+
+    Drop-in replacement for ``tfp.math.interp_regular_1d_grid`` with
+    ``fill_value='constant_extension'`` (clamp to boundary).
+
+    Parameters
+    ----------
+    x         : tensor, shape (n_query,) or (n_query, 1)
+    x_ref_min : scalar — lower end of reference grid
+    x_ref_max : scalar — upper end of reference grid
+    y_ref     : tensor, shape (n_grid, n_cols)
+
+    Returns
+    -------
+    tensor, shape (n_query, n_cols)
+    """
+    n = ops.cast(ops.shape(y_ref)[0], 'float32')
+
+    alpha = (ops.reshape(x, (-1,)) - x_ref_min) / (x_ref_max - x_ref_min) * (n - 1.0)
+    alpha = ops.clip(alpha, 0.0, n - 1.0)           # constant extension
+
+    idx_lo = ops.cast(ops.floor(alpha), 'int32')
+    idx_hi = ops.minimum(idx_lo + 1, ops.cast(n, 'int32') - 1)
+    frac   = alpha - ops.cast(idx_lo, 'float32')    # (n_query,)
+
+    y_lo = ops.take(y_ref, idx_lo, axis=0)           # (n_query, n_cols)
+    y_hi = ops.take(y_ref, idx_hi, axis=0)
+
+    return y_lo * (1.0 - frac[:, None]) + y_hi * frac[:, None]
+
+
+# ---------------------------------------------------------------------------
+# Jacobian computation
+# ---------------------------------------------------------------------------
+
+def compute_jacobian(fn, inputs):
+    """Compute the Jacobian of ``fn(inputs)`` w.r.t. ``inputs``.
+
+    Returns a tensor of shape ``(*output_shape, *input_shape)``.
+    """
+    backend = keras.backend.backend()
+    if backend == 'tensorflow':
+        import tensorflow as tf
+        inputs_var = tf.Variable(ops.convert_to_tensor(inputs))
+        with tf.GradientTape() as tape:
+            outputs = fn(inputs_var)
+        return tape.jacobian(outputs, inputs_var)
+    elif backend == 'jax':
+        import jax
+        return jax.jacobian(fn)(inputs)
+    elif backend == 'torch':
+        import torch
+        return torch.autograd.functional.jacobian(fn, inputs)
+    else:
+        raise NotImplementedError(f"compute_jacobian not implemented for backend: {backend!r}")
+
+
+# ---------------------------------------------------------------------------
 # Gradient computation abstraction
 # ---------------------------------------------------------------------------
 
 def compute_gradients(loss_fn, variables):
     """Compute gradients of ``loss_fn()`` w.r.t. ``variables``.
-
-    Currently implemented for the TensorFlow backend via ``tf.GradientTape``.
-    For JAX or PyTorch backends, swap in the appropriate backend gradient API.
 
     Returns
     -------
@@ -187,22 +280,24 @@ def compute_gradients(loss_fn, variables):
         return loss, grads
     elif backend == 'jax':
         import jax
-        # variables must be plain arrays for jax.grad; use keras.Variable.numpy()
-        var_arrays = [v.numpy() for v in variables]
+        import jax.numpy as jnp
+        var_arrays = [jnp.array(v.numpy()) for v in variables]
+
         def _loss(*arrays):
             for var, arr in zip(variables, arrays):
                 var.assign(arr)
             return loss_fn()
-        loss_val, grads = jax.value_and_grad(_loss)(*var_arrays)
+
+        argnums = tuple(range(len(variables)))
+        loss_val, grads = jax.value_and_grad(_loss, argnums=argnums)(*var_arrays)
         return ops.convert_to_tensor(loss_val), [ops.convert_to_tensor(g) for g in grads]
     elif backend == 'torch':
         import torch
         for v in variables:
-            if hasattr(v, '_value') and isinstance(v._value, torch.Tensor):
-                v._value.requires_grad_(True)
+            v.value.requires_grad_(True)
         loss = loss_fn()
         loss.backward()
-        grads = [v._value.grad for v in variables]
+        grads = [v.value.grad for v in variables]
         return loss, grads
     else:
         raise NotImplementedError(f"compute_gradients not implemented for backend: {backend!r}")

@@ -34,8 +34,7 @@ class WeightFitter(object):
             n_basis = A.shape[-1] if A.shape[-1] is not None else ops.shape(A)[-1]
             AtA = ops.matmul(ops.transpose(A), A) + alpha * ops.eye(int(n_basis))
             Atb = ops.matmul(ops.transpose(A), ops.convert_to_tensor(b, dtype='float32'))
-            import tensorflow as tf
-            weights_vals = tf.linalg.solve(AtA, Atb)
+            weights_vals = ops.solve(AtA, Atb)
         else:
             weights_vals = ops.lstsq(A, ops.convert_to_tensor(b, dtype='float32'))
 

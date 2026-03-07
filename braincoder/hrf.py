@@ -67,53 +67,45 @@ class HRFModel(object):
     def _convolve_shared(self, timeseries, hrf):
         # timeseries: n_batch x n_timepoints x n_units
         # hrf: n_hrf_timepoints (1D) or n_hrf_timepoints x 1
-        # Uses tf.nn.conv2d (TF backend required for this method)
-        import tensorflow as tf
+        # Treat time as height, units as width: 2D conv with a (n_hrf, 1) filter
+        # slides only along the time axis, leaving units unchanged.
         n_hrf = int(hrf.shape[0])
         pad_ = ops.tile(timeseries[:, :1, :], [1, n_hrf, 1])
         timeseries_padded = ops.concatenate((pad_, timeseries), axis=1)
 
         hrf_1d = ops.reshape(hrf, (-1,))  # ensure 1D
-
-        cts = tf.nn.conv2d(timeseries_padded[:, :, :, None],
-                           # reversed HRF filter: (n_hrf, 1, 1, 1)
-                           ops.reshape(hrf_1d, (n_hrf, 1, 1, 1))[::-1],
-                           strides=[1, 1],
-                           padding='VALID')[:, :, :, 0]
+        # ops.conv with 4D kernel → 2D conv; reverse HRF for convolution vs cross-correlation
+        kernel = ops.reshape(hrf_1d[::-1], (n_hrf, 1, 1, 1))  # (fH, fW, in_C, out_C)
+        cts = ops.conv(timeseries_padded[:, :, :, None], kernel,
+                       strides=(1, 1), padding='valid')[:, :, :, 0]
 
         return cts[:, 1:, :]
 
     def _convolve_unique(self, timeseries, hrf):
         # timeseries: n_batch x n_timepoints x n_units
         # hrf: n_hrf_timepoints x n_units
-        import tensorflow as tf
+        # 1D depthwise conv: each unit gets its own HRF filter.
         n, m = timeseries.shape[1], timeseries.shape[2]
         n_hrf = int(hrf.shape[0])
 
         pad_ = ops.tile(timeseries[:, :1, :], [1, n_hrf, 1])
         timeseries_padded = ops.concatenate((pad_, timeseries), axis=1)
+        # timeseries_padded: (1, n+n_hrf, m) — (batch, steps, channels) for 1D depthwise conv
 
-        # Reshape to 4D for depthwise conv
-        timeseries_4d = ops.reshape(timeseries_padded, [1, 1, n + n_hrf, m])
-        hrf_filters_4d = ops.reshape(hrf, [1, n_hrf, m, 1])
+        # kernel: (kernel_size, channels, depth_multiplier); reverse time axis for convolution
+        kernel = ops.reshape(hrf[::-1, :], (n_hrf, m, 1))
 
-        convolved = tf.nn.depthwise_conv2d(
-            input=timeseries_4d,
-            filter=tf.reverse(hrf_filters_4d, axis=[1]),
-            strides=[1, 1, 1, 1],
-            padding='VALID'
-        )
-
-        convolved = convolved[:, :, 1:, :]
-        return ops.reshape(convolved, [1, n, m])
+        convolved = ops.depthwise_conv(timeseries_padded, kernel, strides=1, padding='valid')
+        # convolved: (1, n+1, m) — trim leading timepoint
+        return convolved[:, 1:, :]
 
 
 def gamma_pdf(t, a, d, eps=1e-6):
     """Numerically stable gamma PDF."""
-    import tensorflow as tf
+    from .utils.backend import lgamma
     t = ops.maximum(t, eps)
     coef = ops.power(t, a - 1) * ops.exp(-t / d)
-    denom = ops.power(d, a) * ops.exp(tf.math.lgamma(a))
+    denom = ops.power(d, a) * ops.exp(lgamma(a))
     return coef / denom
 
 
@@ -141,9 +133,7 @@ def gamma_pdf_with_loc(t, a, d, dt, loc=0.0):
 
 def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, highres_dt=0.1):
     """Compute SPM canonical HRF(s)."""
-    # Uses tfp for differentiable interpolation (TF backend required)
-    import tensorflow as tf
-    import tensorflow_probability as tfp
+    from .utils.backend import interp_regular_1d_grid
 
     t = ops.convert_to_tensor(t, dtype='float32')
     a1 = ops.convert_to_tensor(a1, dtype='float32')
@@ -163,21 +153,8 @@ def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, highres_dt=0.1):
     hrf_hr = hrf1_hr - c * hrf2_hr
     hrf_hr /= ops.sum(hrf_hr, axis=0, keepdims=True)
 
-    t_query = ops.expand_dims(t, 1)
-    hrf_interp = tfp.math.interp_regular_1d_grid(
-        x=t_query,
-        x_ref_min=t_min,
-        x_ref_max=t_min + highres_dt * ops.cast(n_steps - 1, 'float32'),
-        y_ref=hrf_hr,
-        axis=0,
-        fill_value='constant_extension'
-    )
-
-    if hrf_interp.shape.rank == 1:
-        hrf_interp = ops.expand_dims(hrf_interp, -1)
-    if hrf_interp.shape.rank == 3:
-        hrf_interp = tf.squeeze(hrf_interp, axis=1)
-    return hrf_interp
+    x_ref_max = t_min + highres_dt * ops.cast(n_steps - 1, 'float32')
+    return interp_regular_1d_grid(t, t_min, x_ref_max, hrf_hr)
 
 class SPMHRFModel(HRFModel):
     """Canonical SPM-style HRF parameterized by delay/dispersion bounds."""
