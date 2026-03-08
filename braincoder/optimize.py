@@ -922,6 +922,14 @@ class ResidualFitter(object):
             lambd * sample_covariance +  \
             tf.linalg.diag(tf.ones(tau.shape[1]) * eps)
 
+    @tf.function
+    def _get_omega_additive(self, tau, rho, sigma2, WWT, lambd, sample_covariance, eps=1e-9):
+        return rho * tf.transpose(tau) @ tau + \
+            (1 - rho) * tf.linalg.tensor_diag(tau[0, :]**2) + \
+            sigma2 * WWT + \
+            lambd * sample_covariance + \
+            tf.linalg.diag(tf.ones(tau.shape[1]) * eps)
+
 class StimulusFitter(object):
 
     def __init__(self, data, model, omega, parameters=None, weights=None, dof=None, stimulus=None, mask=None):

@@ -19,9 +19,11 @@ import numpy as np
 import pandas as pd
 import pytest
 import sys, os
+import tensorflow as tf
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from braincoder.models import GaussianPRF
+from braincoder.optimize import ResidualFitter
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -237,4 +239,93 @@ class TestSubtractWtBaseline:
         np.testing.assert_allclose(
             actual_WWT, expected_WWT, rtol=1e-5, atol=1e-6,
             err_msg="Per-voxel baseline subtraction must handle different baseline values."
+        )
+
+
+# ── Tests for _get_omega_lambda (convex combination) ─────────────────────────
+
+def make_residual_fitter(n_voxels=5, n_trials=40, lambd=0.5, seed=0):
+    """Return a minimal ResidualFitter with synthetic data."""
+    rng = np.random.default_rng(seed)
+    model = GaussianPRF()
+    params = make_gauss_params(n_voxels=n_voxels, seed=seed)
+    stim_1d = make_1d_stimulus_range(n=n_trials)
+    stim_df = pd.DataFrame({'x': stim_1d})
+    data = pd.DataFrame(
+        rng.normal(size=(n_trials, n_voxels)).astype(np.float32),
+        columns=[f'v{i}' for i in range(n_voxels)]
+    )
+    model.parameters = params
+    return ResidualFitter(model, data, stim_df, parameters=params, lambd=lambd)
+
+
+class TestOmegaLambda:
+
+    def _make_inputs(self, n_voxels=4):
+        """Return (tau, rho, sigma2, WWT, sample_cov) as tf tensors."""
+        rng = np.random.default_rng(42)
+        tau = tf.constant(rng.uniform(0.5, 2.0, (1, n_voxels)).astype(np.float32))
+        rho = tf.constant(0.3, dtype=tf.float32)
+        sigma2 = tf.constant(0.1, dtype=tf.float32)
+        A = rng.normal(size=(n_voxels, n_voxels)).astype(np.float32)
+        WWT = tf.constant(A.T @ A)
+        B = rng.normal(size=(n_voxels, n_voxels)).astype(np.float32)
+        sample_cov = tf.constant(B.T @ B)
+        return tau, rho, sigma2, WWT, sample_cov
+
+    def test_lambda0_equals_pure_parametric(self):
+        """At lambda=0, _get_omega_lambda == _get_omega (pure parametric)."""
+        rf = make_residual_fitter(lambd=0.0)
+        tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
+
+        omega_lambda = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.0, sample_cov).numpy()
+        omega_param  = rf._get_omega(tau, rho, sigma2, WWT).numpy()
+
+        np.testing.assert_allclose(omega_lambda, omega_param, rtol=1e-5, atol=1e-5,
+            err_msg="lambda=0 must give the same result as the pure parametric model.")
+
+    def test_lambda1_equals_pure_empirical(self):
+        """At lambda=1, _get_omega_lambda == sample_cov (plus tiny eps diagonal)."""
+        rf = make_residual_fitter(lambd=1.0)
+        tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
+
+        omega_lambda = rf._get_omega_lambda(tau, rho, sigma2, WWT, 1.0, sample_cov).numpy()
+        eps = 1e-9
+        expected = sample_cov.numpy() + np.eye(sample_cov.shape[0]) * eps
+
+        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-5, atol=1e-5,
+            err_msg="lambda=1 must give the pure empirical covariance (+ eps*I).")
+
+    def test_convex_combination_at_midpoint(self):
+        """At lambda=0.5, omega is an equal blend of parametric and empirical."""
+        rf = make_residual_fitter(lambd=0.5)
+        tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
+
+        omega_param   = rf._get_omega(tau, rho, sigma2, WWT).numpy()
+        omega_lambda  = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.5, sample_cov).numpy()
+        eps = 1e-9
+        expected = 0.5 * omega_param + 0.5 * sample_cov.numpy() + np.eye(omega_param.shape[0]) * eps
+
+        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-5, atol=1e-5,
+            err_msg="lambda=0.5 must give an equal blend of parametric and empirical omega.")
+
+    def test_parametric_part_scales_with_1_minus_lambda(self):
+        """
+        The parametric contribution scales with (1-lambda) and the empirical part
+        with lambda.  Concretely:
+            omega(0) - omega(0.5) == 0.5 * (omega_param - sample_cov)
+        because omega(0) = omega_param + eps*I and
+                 omega(0.5) = 0.5*omega_param + 0.5*sample_cov + eps*I.
+        """
+        rf = make_residual_fitter(lambd=0.0)
+        tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
+
+        omega_0    = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.0, sample_cov).numpy()
+        omega_half = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.5, sample_cov).numpy()
+        omega_param = rf._get_omega(tau, rho, sigma2, WWT).numpy()
+
+        expected = 0.5 * (omega_param - sample_cov.numpy())
+        np.testing.assert_allclose(
+            omega_0 - omega_half, expected, rtol=1e-5, atol=1e-5,
+            err_msg="Parametric part must scale linearly with (1-lambda)."
         )
