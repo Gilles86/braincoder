@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from braincoder.utils.backend import to_numpy
 
 
 # ---------------------------------------------------------------------------
@@ -153,27 +154,24 @@ class TestFormatWeights:
 class TestGammaPdf:
 
     def test_output_shape(self):
-        import tensorflow as tf
         from braincoder.hrf import gamma_pdf
-        t = tf.constant([[1.0], [2.0], [3.0]], dtype=tf.float32)
-        result = gamma_pdf(t, a=6.0, d=1.0).numpy()
+        t = np.array([[1.0], [2.0], [3.0]], dtype=np.float32)
+        result = to_numpy(gamma_pdf(t, a=6.0, d=1.0))
         assert result.shape == (3, 1)
 
     def test_positive_values(self):
-        import tensorflow as tf
         from braincoder.hrf import gamma_pdf
-        t = tf.linspace(0.1, 20.0, 100)[:, tf.newaxis]
-        result = gamma_pdf(t, a=6.0, d=1.0).numpy()
+        t = np.linspace(0.1, 20.0, 100, dtype=np.float32)[:, np.newaxis]
+        result = to_numpy(gamma_pdf(t, a=6.0, d=1.0))
         assert np.all(result >= 0), "Gamma PDF values should be non-negative"
 
     def test_peak_near_mode(self):
         """Mode of Gamma(a, d) is (a-1)*d."""
-        import tensorflow as tf
         from braincoder.hrf import gamma_pdf
         a, d = 6.0, 1.0
-        t = tf.linspace(0.1, 20.0, 1000)[:, tf.newaxis]
-        result = gamma_pdf(t, a=a, d=d).numpy()
-        peak_t = t.numpy().flatten()[np.argmax(result)]
+        t = np.linspace(0.1, 20.0, 1000, dtype=np.float32)[:, np.newaxis]
+        result = to_numpy(gamma_pdf(t, a=a, d=d))
+        peak_t = t.flatten()[np.argmax(result)]
         expected_mode = (a - 1) * d  # = 5.0
         assert abs(peak_t - expected_mode) < 0.5, \
             f"Peak at {peak_t:.2f}, expected ~{expected_mode:.1f}"

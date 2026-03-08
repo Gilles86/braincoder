@@ -9,15 +9,14 @@ description = "A modern neuroimaging modeling package"
 authors = [
     {name = "Gilles de Hollander", email = "gilles.dehollander@gmail.com"}
 ]
-requires-python = ">=3.8"  # <-- Move this here
+requires-python = ">=3.10"
 dependencies = [
     "numpy",
-    "tensorflow",
-    "tensorflow-probability",
-    "tf_keras",
+    "keras>=3.0",
     "matplotlib",
     "seaborn",
     "pandas",
+    "pandas_flavor",
     "scipy",
     "tqdm",
     "patsy",

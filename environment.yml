@@ -1,0 +1,32 @@
+name: braincoder
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    # Core scientific stack
+    - numpy>=2.0
+    - pandas>=2.0
+    - pandas_flavor
+    - scipy
+    - matplotlib
+    - seaborn
+    - tqdm
+    - patsy
+    # Dev / notebook
+    - jupyter
+    - ipykernel
+    - pytest
+    # Keras 3 — install backends explicitly
+    - keras>=3.13
+    - tensorflow>=2.20
+    - tensorflow-probability>=0.25
+    - tf_keras>=2.20
+    - jax[cpu]>=0.9
+    - torch>=2.10
+    # JAX-based MCMC
+    - blackjax>=1.0
+    # Install braincoder itself in editable mode
+    - "-e ."

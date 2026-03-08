@@ -10,20 +10,36 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10"]
+        backend: [tensorflow, jax, torch]
+
+    env:
+      KERAS_BACKEND: ${{ matrix.backend }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: pip
 
-      - name: Install package and test dependencies
+      - name: Install core package and test dependencies
         run: pip install -e ".[test]"
+
+      - name: Install TensorFlow backend
+        if: matrix.backend == 'tensorflow'
+        run: pip install "tensorflow>=2.16" "tensorflow-probability>=0.24" "tf_keras>=2.16"
+
+      - name: Install JAX backend
+        if: matrix.backend == 'jax'
+        run: pip install "jax[cpu]"
+
+      - name: Install PyTorch backend (CPU)
+        if: matrix.backend == 'torch'
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Run tests
         run: pytest -v --tb=short

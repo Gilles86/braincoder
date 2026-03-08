@@ -6,7 +6,7 @@ import keras
 from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
-from ..utils.backend import softplus_inverse
+from ..utils.backend import softplus_inverse, to_numpy
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
@@ -448,9 +448,7 @@ class GaussianPRF2D(EncodingModel):
         parameters = self.parameters.values[np.newaxis, ...]
 
         rf = self._get_rf(grid_coordinates, parameters)
-        if hasattr(rf, 'numpy'):
-            rf = rf.numpy()
-        rf = rf[0]
+        rf = to_numpy(rf)[0]
 
         if as_frame:
             rf = pd.concat([pd.DataFrame(e,
@@ -476,8 +474,8 @@ class GaussianPRF2D(EncodingModel):
         if hasattr(grid_coordinates, 'values'):
             grid_coordinates = grid_coordinates.values
 
-        x = grid_coordinates[:, 0][None, None, :]
-        y = grid_coordinates[:, 1][None, None, :]
+        x = ops.convert_to_tensor(grid_coordinates[:, 0][None, None, :], dtype='float32')
+        y = ops.convert_to_tensor(grid_coordinates[:, 1][None, None, :], dtype='float32')
 
         mu_x = parameters[:, :, 0, None]
         mu_y = parameters[:, :, 1, None]
@@ -533,8 +531,9 @@ class GaussianPRF2DAngle(GaussianPRF2D):
         if hasattr(grid_coordinates, 'values'):
             grid_coordinates = grid_coordinates.values
 
-        x = grid_coordinates[:, 0][None, None, :]
-        y = grid_coordinates[:, 1][None, None, :]
+        x = ops.convert_to_tensor(grid_coordinates[:, 0][None, None, :], dtype='float32')
+        y = ops.convert_to_tensor(grid_coordinates[:, 1][None, None, :], dtype='float32')
+        parameters = ops.convert_to_tensor(parameters, dtype='float32')
 
         theta = parameters[:, :, 0, None]
         ecc = parameters[:, :, 1, None]

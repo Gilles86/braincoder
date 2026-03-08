@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from .backend import to_numpy
 
 
 def format_paradigm(paradigm):
@@ -57,8 +58,8 @@ def format_data(data):
     if isinstance(data, pd.DataFrame):
         return data
 
-    if hasattr(data, 'numpy') and not isinstance(data, np.ndarray):
-        data = data.numpy()
+    if not isinstance(data, np.ndarray):
+        data = to_numpy(data)
 
     return pd.DataFrame(data,
                         index=pd.Index(

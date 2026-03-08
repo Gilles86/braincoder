@@ -15,6 +15,22 @@ from keras import ops
 # Inverse transforms
 # ---------------------------------------------------------------------------
 
+def to_numpy(x):
+    """Convert any Keras/JAX/PyTorch tensor to a numpy array.
+
+    Unlike plain ``np.array(x)``, this handles PyTorch MPS tensors
+    (Apple Silicon GPU) by first moving them to CPU.
+    """
+    if isinstance(x, np.ndarray):
+        return x
+    backend_name = keras.backend.backend()
+    if backend_name == 'torch':
+        import torch
+        if isinstance(x, torch.Tensor):
+            return x.detach().cpu().numpy()
+    return np.array(x)
+
+
 def softplus_inverse(x):
     """Numerically stable inverse of softplus: log(exp(x) - 1).
 
@@ -70,11 +86,11 @@ def _lgamma(x):
     try:
         from scipy.special import gammaln
         return ops.convert_to_tensor(
-            np.float32(gammaln(float(ops.convert_to_tensor(x).numpy()))),
+            np.float32(gammaln(float(to_numpy(ops.convert_to_tensor(x))))),
             dtype='float32')
     except Exception:
         # Fallback: Sterling approximation
-        x_val = float(ops.convert_to_tensor(x).numpy())
+        x_val = float(to_numpy(ops.convert_to_tensor(x)))
         return ops.convert_to_tensor(
             np.float32(0.5 * np.log(2 * np.pi / x_val) + x_val * np.log(x_val + 1.0 / (12.0 * x_val))),
             dtype='float32')
@@ -146,7 +162,7 @@ def sample_mvt(L, dof, shape, seed=None):
     flat_n = int(np.prod(shape))
     z = sample_mvn(L, (flat_n,), seed=seed)                 # (N, k)
     # chi2(dof) = Gamma(dof/2, 2), sample via normal: v = sum of dof normals^2
-    dof_int = max(1, int(round(float(ops.convert_to_tensor(dof).numpy()))))
+    dof_int = max(1, int(round(float(to_numpy(ops.convert_to_tensor(dof))))))
     normals = keras.random.normal((flat_n, dof_int), seed=seed)
     v = ops.sum(normals ** 2, axis=1, keepdims=True)        # (N, 1)
     samples = z / ops.sqrt(v / ops.cast(dof, 'float32'))
@@ -156,7 +172,7 @@ def sample_mvt(L, dof, shape, seed=None):
 def sample_student_t(dof, scale, shape, seed=None):
     """Draw i.i.d. samples from Student-T(dof, 0, scale)."""
     n = int(np.prod(shape))
-    dof_int = max(1, int(round(float(ops.convert_to_tensor(dof).numpy()))))
+    dof_int = max(1, int(round(float(to_numpy(ops.convert_to_tensor(dof))))))
     z = keras.random.normal((n,), seed=seed)
     v = ops.sum(keras.random.normal((n, dof_int), seed=seed) ** 2, axis=1)
     samples = z * scale / ops.sqrt(v / ops.cast(dof, 'float32'))
@@ -178,7 +194,7 @@ def lgamma(x):
         return jss.gammaln(x)
     elif backend == 'torch':
         import torch
-        return torch.lgamma(x)
+        return torch.lgamma(ops.convert_to_tensor(x, dtype='float32'))
     else:
         from scipy.special import gammaln
         return ops.convert_to_tensor(gammaln(np.array(x)), dtype='float32')
@@ -281,7 +297,7 @@ def compute_gradients(loss_fn, variables):
     elif backend == 'jax':
         import jax
         import jax.numpy as jnp
-        var_arrays = [jnp.array(v.numpy()) for v in variables]
+        var_arrays = [jnp.array(to_numpy(v)) for v in variables]
 
         def _loss(*arrays):
             for var, arr in zip(variables, arrays):
@@ -290,6 +306,11 @@ def compute_gradients(loss_fn, variables):
 
         argnums = tuple(range(len(variables)))
         loss_val, grads = jax.value_and_grad(_loss, argnums=argnums)(*var_arrays)
+
+        # Restore concrete values — JAX tracing may leave stale tracers in variables
+        for var, arr in zip(variables, var_arrays):
+            var.assign(ops.convert_to_tensor(arr))
+
         return ops.convert_to_tensor(loss_val), [ops.convert_to_tensor(g) for g in grads]
     elif backend == 'torch':
         import torch

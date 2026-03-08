@@ -75,7 +75,7 @@ class HRFModel(object):
 
         hrf_1d = ops.reshape(hrf, (-1,))  # ensure 1D
         # ops.conv with 4D kernel → 2D conv; reverse HRF for convolution vs cross-correlation
-        kernel = ops.reshape(hrf_1d[::-1], (n_hrf, 1, 1, 1))  # (fH, fW, in_C, out_C)
+        kernel = ops.reshape(ops.flip(hrf_1d, axis=0), (n_hrf, 1, 1, 1))  # (fH, fW, in_C, out_C)
         cts = ops.conv(timeseries_padded[:, :, :, None], kernel,
                        strides=(1, 1), padding='valid')[:, :, :, 0]
 
@@ -93,7 +93,7 @@ class HRFModel(object):
         # timeseries_padded: (1, n+n_hrf, m) — (batch, steps, channels) for 1D depthwise conv
 
         # kernel: (kernel_size, channels, depth_multiplier); reverse time axis for convolution
-        kernel = ops.reshape(hrf[::-1, :], (n_hrf, m, 1))
+        kernel = ops.reshape(ops.flip(hrf, axis=0), (n_hrf, m, 1))
 
         convolved = ops.depthwise_conv(timeseries_padded, kernel, strides=1, padding='valid')
         # convolved: (1, n+1, m) — trim leading timepoint

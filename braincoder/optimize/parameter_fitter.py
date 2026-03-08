@@ -7,7 +7,7 @@ import os.path as op
 import os
 from tqdm.auto import tqdm
 from ..utils import format_data, format_parameters, format_paradigm, get_rsq
-from ..utils.backend import compute_gradients
+from ..utils.backend import compute_gradients, to_numpy
 import logging
 
 
@@ -49,7 +49,7 @@ class ParameterFitter(object):
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
 
-        y = self.data.values
+        y = ops.convert_to_tensor(self.data.values, dtype='float32')
 
         if optimizer is None:
             opt = keras.optimizers.Adam(learning_rate=learning_rate, **kwargs)
@@ -59,10 +59,10 @@ class ParameterFitter(object):
             print('using get_init_pars')
 
         init_pars = self.model._get_parameters(init_pars)
-        init_pars = np.array(self.model._transform_parameters_backward(init_pars.values.astype(np.float32)))
+        init_pars = to_numpy(self.model._transform_parameters_backward(init_pars.values.astype(np.float32)))
 
         ssq_data = ops.sum((y - ops.mean(y, axis=0)[None, :])**2, axis=0)
-        meaningful_ts = np.array(ssq_data > 0.0)
+        meaningful_ts = to_numpy(ssq_data > 0.0)
 
         # Handle fixed parameters
         if fixed_pars is None:
@@ -192,8 +192,8 @@ class ParameterFitter(object):
                 best_parameters = untransformed_parameters
                 best_r2 = r2
 
-            mean_current_r2 = float(r2[meaningful_ts].numpy().mean())
-            mean_best_r2 = float(best_r2[meaningful_ts].numpy().mean())
+            mean_current_r2 = float(to_numpy(r2[meaningful_ts]).mean())
+            mean_best_r2 = float(to_numpy(best_r2[meaningful_ts]).mean())
 
             if step >= min_n_iterations:
                 r2_diff = mean_best_r2 - mean_best_r2s[np.max((step - lag, 0))]
@@ -209,13 +209,13 @@ class ParameterFitter(object):
                 pbar.set_description(f'Current R2: {mean_current_r2:0.5f}/Best R2: {mean_best_r2:0.5f}')
 
             if store_intermediate_parameters:
-                p = untransformed_parameters.numpy().T
+                p = to_numpy(untransformed_parameters).T
                 intermediate_parameters.append(np.reshape(p, np.prod(p.shape)))
                 intermediate_parameters[-1] = np.concatenate(
                     (intermediate_parameters[-1], r2), 0)
 
         self.estimated_parameters = format_parameters(
-            best_parameters.numpy(), self.model.parameter_labels)
+            to_numpy(best_parameters), self.model.parameter_labels)
         self.estimated_parameters.index = self.data.columns
 
         if not self.estimated_parameters.index.name:
@@ -230,7 +230,7 @@ class ParameterFitter(object):
                 index=pd.Index(np.arange(len(intermediate_parameters)), name='step'))
 
         self.predictions = self.model.predict(self.paradigm, self.estimated_parameters, self.model.weights)
-        self.r2 = pd.Series(best_r2.numpy(), index=self.data.columns)
+        self.r2 = pd.Series(to_numpy(best_r2), index=self.data.columns)
 
         return self.estimated_parameters
 
@@ -269,7 +269,7 @@ class ParameterFitter(object):
 
         logging.info('Built grid of {len(par_grid)} parameter settings...')
 
-        data = self.data.values
+        data = ops.convert_to_tensor(self.data.values, dtype='float32')
         paradigm_ = self.paradigm.values
 
         if use_correlation_cost:
@@ -305,12 +305,12 @@ class ParameterFitter(object):
 
         for chunk, pg in tqdm(par_grid.groupby('chunk')):
             cost_, best_ix = _cost(pg.values)
-            cost_np  = np.array(cost_)
-            best_ix_np = np.array(best_ix)
+            cost_np  = to_numpy(cost_)
+            best_ix_np = to_numpy(best_ix)
             best_cost[:, chunk] = cost_np[vox_ix, best_ix_np]
             best_pars[:, chunk] = np.array(pg.values)[best_ix_np]
 
-        best_chunks = np.array(ops.argmin(best_cost, axis=1))
+        best_chunks = to_numpy(ops.argmin(ops.convert_to_tensor(best_cost, dtype='float32'), axis=1))
         best_pars = best_pars[vox_ix, best_chunks]
 
         best_pars = pd.DataFrame(best_pars, index=self.data.columns,
@@ -355,9 +355,9 @@ class ParameterFitter(object):
         XtX  = ops.matmul(Xt, X_t)                                  # (n_vox, 2, 2)
         XtY  = ops.matmul(Xt, Y_t)                                  # (n_vox, 2, 1)
         reg  = l2_alpha * ops.eye(2)[None, :, :]
-        beta = ops.solve(XtX + reg, XtY).numpy()[..., 0]            # (n_vox, 2)
+        beta = to_numpy(ops.solve(XtX + reg, XtY))[..., 0]            # (n_vox, 2)
 
-        Y_ = ops.sum(ops.convert_to_tensor(beta[:, None, :]) * X_t, axis=2).numpy().T
+        Y_ = to_numpy(ops.sum(ops.convert_to_tensor(beta[:, None, :]) * X_t, axis=2)).T
 
         new_parameters = parameters.copy().astype(np.float32)
         new_parameters.loc[:, baseline_ix]  = beta[:, 0]
@@ -426,13 +426,13 @@ class ParameterFitter(object):
             pg = par_grid[chunk * chunk_size:(chunk + 1) * chunk_size, :, :]
             print(pg.shape)
             ssq_, best_ix = _get_ssq_for_predictions(pg)
-            ssq_np   = np.array(ssq_)
-            best_ix_np = np.array(best_ix)
+            ssq_np   = to_numpy(ssq_)
+            best_ix_np = to_numpy(best_ix)
             gather_ix = np.stack((best_ix_np, vox_ix), 1)
             best_ssq[:, chunk]    = ssq_np[gather_ix[:, 0], gather_ix[:, 1]]
             best_pars[:, chunk, :] = pg[gather_ix[:, 0], gather_ix[:, 1]]
 
-        best_chunks = np.array(ops.argmin(best_ssq, axis=1))
+        best_chunks = to_numpy(ops.argmin(best_ssq, axis=1))
         best_pars = best_pars[vox_ix, best_chunks]
 
         return pd.DataFrame(best_pars, index=self.data.columns,

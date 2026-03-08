@@ -51,8 +51,8 @@ class GaussianPRF(EncodingModel):
         paradigm = self.get_paradigm(paradigm)
         parameters = self._get_parameters(parameters)
 
-        paradigm_ = self._get_paradigm(paradigm)[np.newaxis, ...]
-        parameters_ = parameters.values[np.newaxis, ...] if parameters is not None else None
+        paradigm_ = ops.convert_to_tensor(self._get_paradigm(paradigm)[np.newaxis, ...], dtype='float32')
+        parameters_ = ops.convert_to_tensor(parameters.values[np.newaxis, ...], dtype='float32') if parameters is not None else None
 
         return self._basis_predictions(paradigm_, parameters_)[0]
 
