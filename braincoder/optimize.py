@@ -643,6 +643,35 @@ class ResidualFitter(object):
 
         sample_cov = tfp.stats.covariance(residuals)
 
+        # When lambd=1 the parametric terms drop out entirely: omega is fixed to
+        # the sample covariance.  There is nothing for gradient descent to do, and
+        # the rank-deficient sample covariance can produce infinite likelihoods.
+        # Short-circuit: return the regularised sample covariance directly, and
+        # (for method='t') fit only the scalar dof via a 1-D optimisation.
+        if self.lambd >= 1.0:
+            from scipy.optimize import minimize_scalar
+            eps = 1e-6
+            omega = sample_cov.numpy() + np.eye(n_voxels) * eps
+            if method == 't':
+                omega_chol = np.linalg.cholesky(omega)
+                omega_chol_tf = tf.constant(omega_chol, dtype=tf.float32)
+
+                def neg_ll(log_dof):
+                    dof = float(np.exp(log_dof))
+                    dist = tfd.MultivariateStudentTLinearOperator(
+                        dof,
+                        tf.zeros(n_voxels),
+                        tf.linalg.LinearOperatorLowerTriangular(omega_chol_tf),
+                        allow_nan_stats=False)
+                    return -tf.reduce_sum(dist.log_prob(residuals)).numpy()
+
+                result = minimize_scalar(neg_ll, bounds=(np.log(0.5), np.log(200.0)),
+                                         method='bounded')
+                dof = float(np.exp(result.x))
+                print(f'lambd=1 short-circuit: dof={dof:.2f}')
+                return omega, dof
+            return omega, None
+
         if init_tau is None:
             init_tau = residuals.std(0)[np.newaxis, :]
 
