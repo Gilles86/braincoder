@@ -143,9 +143,11 @@ class GaussianPointPRF2D(EncodingModel):
                           parameters[:, None, :, 3]) * \
                    parameters[:, None, :, 4] * paradigm[:, :, None, 2] + parameters[:, None, :, 5]
 
-    def init_pseudoWWT(self, stimulus_range, parameters):
+    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
 
         stimulus_range = stimulus_range.astype(np.float32)
+        if subtract_baseline:
+            parameters = self._zero_baseline(parameters)
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = ops.tensordot(W, W, axes=[[0], [0]])
@@ -309,9 +311,11 @@ class GaussianMixturePRF2D(EncodingModel):
                                                             parameters[:, None, :, 3])) * \
                     parameters[:, None, :, 5] + parameters[:, None, :, 6]
 
-    def init_pseudoWWT(self, stimulus_range, parameters):
+    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
 
         stimulus_range = stimulus_range.astype(np.float32)
+        if subtract_baseline:
+            parameters = self._zero_baseline(parameters)
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = ops.tensordot(W, W, axes=[[0], [0]])

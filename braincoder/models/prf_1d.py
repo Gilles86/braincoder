@@ -99,8 +99,10 @@ class GaussianPRF(EncodingModel):
             parameters[:, None, :, 2] * paradigm[:, :, None, 1] + parameters[:, None, :, 3]
 
 
-    def init_pseudoWWT(self, stimulus_range, parameters):
+    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
         stimulus_range = stimulus_range.astype(np.float32)
+        if subtract_baseline:
+            parameters = self._zero_baseline(parameters)
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = ops.tensordot(W, W, axes=[[0], [0]])
@@ -164,11 +166,13 @@ class VonMisesPRF(GaussianPRF):
                     parameters[:, None, :, 1]) * \
             parameters[:, None, :, 2] * paradigm[..., None, 1] + parameters[:, None, :, 3]
 
-    def init_pseudoWWT(self, stimulus_range, parameters):
+    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
         if stimulus_range.ndim == 2:
             stimulus_range = stimulus_range[:, [0]]
 
         stimulus_range = np.stack((stimulus_range, np.ones_like(stimulus_range)), axis=1).astype(np.float32)
+        if subtract_baseline:
+            parameters = self._zero_baseline(parameters)
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = ops.tensordot(W, W, axes=[[0], [0]])

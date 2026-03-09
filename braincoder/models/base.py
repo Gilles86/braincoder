@@ -86,6 +86,21 @@ class EncodingModel(object):
         """Return the ordered list of parameter labels used by the model."""
         return self.parameter_labels
 
+    def _zero_baseline(self, parameters):
+        """Return a copy of parameters with the baseline column set to zero.
+
+        For models whose ``parameter_labels`` contains ``'baseline'`` this
+        removes the DC-offset from basis predictions so that the pseudo-WWT
+        matrix reflects only the signal covariance.  For models without a
+        simple ``'baseline'`` label (e.g. ``EncodingRegressionModel``, whose
+        ``parameter_labels`` is a MultiIndex) the parameters are returned
+        unchanged.
+        """
+        if isinstance(self.parameter_labels, list) and 'baseline' in self.parameter_labels:
+            parameters = parameters.copy()
+            parameters['baseline'] = 0.0
+        return parameters
+
     def _predict(self, paradigm, parameters, weights=None):
         """Low-level prediction used by ``predict``/``simulate``."""
         # Ensure all inputs are backend tensors to avoid mixed numpy/torch MPS issues
