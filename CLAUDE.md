@@ -77,3 +77,4 @@ Tests in `tests/` are integration-style: simulate data from known parameters →
 ## Known gotchas / past bugs
 
 - **`ResidualFitter.lambd` was silently ignored** (fixed 2026-03-17): `_get_omega_lambda()` existed but the `get_omega` closure in `fit()` always called `_get_omega()`, so passing `lambd>0` had no effect. Fixed by branching on `self.lambd > 0.0` inside the closure. When adding new parameters to `__init__`, always verify they are actually wired into the optimization loop.
+- **`ResidualFitter` λ=1 edge case** (fixed 2026-03-17): When `lambd>=1` the parametric parameters have zero gradient (they multiply (1−λ)=0), so Adam wastes iterations and dof drifts toward ∞. Also, the old fixed `1e-9` jitter in `_get_omega_lambda` is too small for real covariance matrices (Cholesky instability). Fixed with: (1) adaptive jitter `1e-4 × mean_diag + 1e-9`; (2) a short-circuit in `fit()` that uses sample_cov directly and fits only dof when `lambd>=1`.
