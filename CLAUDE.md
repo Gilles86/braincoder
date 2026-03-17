@@ -73,3 +73,7 @@ TensorFlow-Probability bijectors (`softplus`, `sigmoid`, periodic transforms) ar
 - **Weights**: basis function weights per voxel (DataFrame)
 
 Tests in `tests/` are integration-style: simulate data from known parameters → fit model → assert recovered parameters correlate with ground truth.
+
+## Known gotchas / past bugs
+
+- **`ResidualFitter.lambd` was silently ignored** (fixed 2026-03-17): `_get_omega_lambda()` existed but the `get_omega` closure in `fit()` always called `_get_omega()`, so passing `lambd>0` had no effect. Fixed by branching on `self.lambd > 0.0` inside the closure. When adding new parameters to `__init__`, always verify they are actually wired into the optimization loop.
