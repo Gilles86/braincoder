@@ -44,6 +44,30 @@ class ResidualFitter(object):
 
         sample_cov = np.cov(residuals.T)
 
+        # ── λ=1 short-circuit ─────────────────────────────────────────────────
+        # When lambd≥1 the parametric component vanishes entirely (gradient=0),
+        # so running the full optimisation is wasteful and dof can drift to ∞.
+        # Instead: use the sample covariance directly (with adaptive jitter) and
+        # fit only dof via a short dedicated loop.
+        if self.lambd >= 1.0:
+            mean_var = float(np.mean(np.diag(sample_cov)))
+            omega = sample_cov + np.eye(n_voxels) * (mean_var * 1e-4 + 1e-9)
+            if method == 't':
+                omega_t = ops.convert_to_tensor(omega, dtype='float32')
+                omega_chol = ops.cholesky(omega_t)
+                residuals_t = ops.convert_to_tensor(residuals, dtype='float32')
+                dof_ = keras.Variable(softplus_inverse(init_dof), name='dof_trans', dtype='float32')
+                opt = keras.optimizers.Adam(learning_rate=learning_rate)
+                for _ in range(max_n_iterations):
+                    def _dof_loss():
+                        return -ops.sum(mvt_log_prob(residuals_t, omega_chol,
+                                                     ops.softplus(dof_)))
+                    _, grads = compute_gradients(_dof_loss, [dof_])
+                    opt.apply_gradients(zip(grads, [dof_]))
+                dof = float(to_numpy(ops.softplus(dof_)))
+                return omega, dof
+            return omega, None
+
         if init_tau is None:
             init_tau = residuals.std(0)[np.newaxis, :]
 
@@ -268,9 +292,19 @@ class ResidualFitter(object):
                 (1 - rho) * ops.diag(tau[0, :]**2) +
                 sigma2 * WWT)
 
-    def _get_omega_lambda(self, tau, rho, sigma2, WWT, lambd, sample_covariance, eps=1e-9):
-        return ((1 - lambd) * (rho * ops.transpose(tau) @ tau +
-                               (1 - rho) * ops.diag(tau[0, :]**2) +
-                               sigma2 * WWT) +
-                lambd * sample_covariance +
-                ops.diag(ops.ones(tau.shape[1]) * eps))
+    def _get_omega_lambda(self, tau, rho, sigma2, WWT, lambd, sample_covariance):
+        """Interpolate between parametric omega (lambd=0) and sample covariance (lambd=1).
+
+        Jitter is adaptive: 1e-4 × mean diagonal so Cholesky stays stable
+        regardless of data scale.  This matters most when lambd→1 and the
+        sample covariance dominates (its smallest eigenvalue can be very small
+        when n_voxels is close to n_timepoints).
+        """
+        result = ((1 - lambd) * (rho * ops.transpose(tau) @ tau +
+                                 (1 - rho) * ops.diag(tau[0, :]**2) +
+                                 sigma2 * WWT) +
+                  lambd * sample_covariance)
+        # Adaptive jitter: scales with the matrix so it's never swamped by
+        # the signal or invisible against large diagonal values.
+        mean_diag = ops.mean(ops.diag(result))
+        return result + ops.eye(tau.shape[1], dtype='float32') * (mean_diag * 1e-4 + 1e-9)
