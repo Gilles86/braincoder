@@ -15,8 +15,11 @@ from .models import (
     DivisiveNormalizationGaussianPRF2D, DivisiveNormalizationGaussianPRF2DWithHRF,
     DiscreteModel, LinearModel, LinearModelWithBaseline, LinearModelWithBaselineHRF,
 )
-from .optimize import (
-    WeightFitter, ParameterFitter, ResidualFitter,
-    StimulusFitter, CustomStimulusFitter,
-    SzinteStimulus, SzinteStimulus2, make_aperture_stimuli,
-)
+from .optimize import WeightFitter, ParameterFitter, ResidualFitter
+try:
+    from .optimize import (
+        StimulusFitter, CustomStimulusFitter,
+        SzinteStimulus, SzinteStimulus2, make_aperture_stimuli,
+    )
+except ImportError:
+    pass

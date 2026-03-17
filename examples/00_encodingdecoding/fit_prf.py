@@ -58,7 +58,7 @@ baseline = [0.0]
 amplitude = [1.0]
 
 # Now we can do the grid search
-pars_gauss_grid = par_fitter.fit_grid(x, y, sd, baseline, amplitude, correlation_cost=True)
+pars_gauss_grid = par_fitter.fit_grid(x, y, sd, baseline, amplitude, use_correlation_cost=True)
 
 # And refine the baseline and amplitude parameters using OLS
 pars_gauss_ols = par_fitter.refine_baseline_and_amplitude(pars_gauss_grid)

@@ -67,6 +67,8 @@ test_data = model.simulate(paradigm=test_paradigm, noise=noise)
 
 # And decode the test paradigm
 posterior = model.get_stimulus_pdf(test_data, stimulus_range, model.parameters, omega=omega, dof=dof)
+# Rename the row index so it doesn't clash with the column index (both default to 'stimulus')
+posterior.index.name = 'frame'
 
 # %%
 
@@ -90,14 +92,14 @@ g.set(xlabel='Stimulus value', ylabel='Posterior probability density')
 # Let's look at the summary statistics of the posteriors posteriors
 def get_posterior_stats(posterior, normalize=True):
     posterior = posterior.copy()
-    posterior = posterior.div(np.trapz(posterior, posterior.columns,axis=1), axis=0)
+    posterior = posterior.div(np.trapezoid(posterior, posterior.columns,axis=1), axis=0)
 
     # Take integral over the posterior to get to the expectation (mean posterior)
-    E = np.trapz(posterior*posterior.columns.values[np.newaxis,:], posterior.columns, axis=1)
+    E = np.trapezoid(posterior*posterior.columns.values[np.newaxis,:], posterior.columns, axis=1)
     
     # Take the integral over the posterior to get the expectation of the distance to the 
     # mean posterior (i.e., standard deviation)
-    sd = np.trapz(np.abs(E[:, np.newaxis] - posterior.columns.astype(float).values[np.newaxis, :]) * posterior, posterior.columns, axis=1)
+    sd = np.trapezoid(np.abs(E[:, np.newaxis] - posterior.columns.astype(float).values[np.newaxis, :]) * posterior, posterior.columns, axis=1)
 
     stats = pd.DataFrame({'E':E, 'sd':sd}, index=posterior.index)
     return stats

@@ -88,9 +88,10 @@ to optimize the parameters on.
 .. |grid_fit| image:: ../auto_examples/00_encodingdecoding/images/sphx_glr_encoding_model_003.png
 .. centered:: |grid_fit|
 
-We can do even better using *gradient descent* optimisation. Note that because `braincoder` uses 
-`tensorflow`, it uses autodiff-calculated exact gradients, as well as the GPU to speed up the
-computation. This is especially useful for more complex models. `braincoder` is under some
+We can do even better using *gradient descent* optimisation. Note that because `braincoder` uses
+`Keras 3`, it uses autodiff-calculated exact gradients and can leverage hardware acceleration
+(GPU/MPS) via any supported backend (TensorFlow, JAX, or PyTorch).
+This is especially useful for more complex models. `braincoder` is under some
 circumstances multiple orders of magnitude faster than other PRF libraries.
 
 .. literalinclude:: /../examples/00_encodingdecoding/encoding_model.py
@@ -110,7 +111,7 @@ Summary
 In this lesson we have seen:
  * Encoding models define a deterministic mapping from stimulus space to BOLD response space
  * `braincoder` allows us to define all kins of encoding models, and to fit them to data
- * `braincoder` uses tensorflow to speed up the computation, and to allow for gradient descent optimisation
+ * `braincoder` uses Keras 3 (with TensorFlow, JAX, or PyTorch backends) to speed up the computation and to allow for gradient descent optimisation
  * Fitting encoding models usually take the following steps:
    * Set up a grid of possible non-linear parameter values, and find best-fitting ones (``optimizer.fit_grid()``)
    * Fit linear parameters using ordinary least squares (``optimizer.refine_amplitude_baseline()``)

@@ -65,6 +65,8 @@ experimental_paradigm['x (radians)'] = np.random.rand(n)*2*np.pi
 # Amplitudes have some noise
 experimental_paradigm['amplitude'] = np.where(experimental_paradigm.index.get_level_values('condition') == 'attended', ss.norm(1.5, 0.1).rvs(n), ss.norm(.5, 0.1).rvs(n))
 experimental_data = model.simulate(paradigm=experimental_paradigm, noise=noise)
+# Restore the MultiIndex (simulate() flattens it to a single 'stimulus' level)
+experimental_data.index = experimental_paradigm.index
 
 
 # %%
@@ -91,7 +93,8 @@ potential_amplitudes = np.sort(np.append(potential_amplitudes, [0.5, 1.5]))
 potential_stimuli = pd.MultiIndex.from_product([potential_orientations, potential_amplitudes], names=['x (radians)', 'amplitude']).to_frame(index=False)
 
 # Now we get, for each data point, the likelihood of each possible stimulus
-ll = model.get_stimulus_pdf(experimental_data, potential_stimuli)
+ll = model.get_stimulus_pdf(experimental_data, potential_stimuli, omega=omega, dof=dof,
+                            include_multidimensional_stimulus_index=True)
 
 # %%
 
@@ -153,12 +156,12 @@ plot_condition('unattended')
 # Now we can calculate the 1D posterior for specific orientations _or_ amplitudes
 
 # Marginalize out orientations
-amplitudes_posterior = ll.groupby('amplitude', axis=1).sum()
-amplitudes_posterior = amplitudes_posterior.div(np.trapz(amplitudes_posterior, amplitudes_posterior.columns, axis=1), axis=0) # This is the same as normalizing the posterior
+amplitudes_posterior = ll.T.groupby(level='amplitude').sum().T
+amplitudes_posterior = amplitudes_posterior.div(np.trapezoid(amplitudes_posterior, amplitudes_posterior.columns, axis=1), axis=0) # This is the same as normalizing the posterior
 
 # Marginalize out amplitudes
-orientations_posterior = ll.groupby('x (radians)', axis=1).sum()
-orientations_posterior = orientations_posterior.div(np.trapz(orientations_posterior, orientations_posterior.columns, axis=1), axis=0)
+orientations_posterior = ll.T.groupby(level='x (radians)').sum().T
+orientations_posterior = orientations_posterior.div(np.trapezoid(orientations_posterior, orientations_posterior.columns, axis=1), axis=0)
 
 # Plot orientation posteriors
 tmp = orientations_posterior.stack().loc[:8].to_frame('p')
@@ -181,7 +184,7 @@ conditional_orientation_ll = pd.concat((ll.stack().xs('attended', 0, 'condition'
                                         names=['condition']).swaplevel(0, 1).sort_index()
 
 # Normalize!
-conditional_orientation_ll = conditional_orientation_ll.div(np.trapz(conditional_orientation_ll, conditional_orientation_ll.columns, axis=1), axis=0)
+conditional_orientation_ll = conditional_orientation_ll.div(np.trapezoid(conditional_orientation_ll, conditional_orientation_ll.columns, axis=1), axis=0)
 tmp = conditional_orientation_ll.stack().loc[:8].to_frame('p')
 
 g = sns.FacetGrid(tmp.reset_index(), col='frame', col_wrap=3, hue='condition', palette='coolwarm_r')
@@ -225,7 +228,7 @@ def get_posterior_stats(posterior, ground_truth=None):
 
     # Take integral over the posterior to get to the expectation (mean posterior)
     # In this case a complex number that we convert back to an angle between 0 and 2pi
-    E = from_complex(np.trapz(posterior*complex_grid[np.newaxis,:], axis=1))
+    E = from_complex(np.trapezoid(posterior*complex_grid[np.newaxis,:], axis=1))
     
     # Take the integral over the posterior to get the expectation of the distance to the 
     # mean posterior (i.e., standard deviation)
@@ -234,7 +237,7 @@ def get_posterior_stats(posterior, ground_truth=None):
     # Wrap the angle to be between 0 and pi, the error can never be larger than pi (180 degrees)
     relative_error = wrap_angle(relative_error)
     absolute_error = np.abs(relative_error)
-    sd = np.trapz(absolute_error * posterior, posterior.columns, axis=1)
+    sd = np.trapezoid(absolute_error * posterior, posterior.columns, axis=1)
 
     stats = pd.DataFrame({'E':E, 'sd':sd}, index=posterior.index)
 

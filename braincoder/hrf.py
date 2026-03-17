@@ -62,7 +62,16 @@ class HRFModel(object):
 
     def convolve(self, timeseries, **kwargs):
         hrf = self.get_hrf(**kwargs)
-        return self._convolve(timeseries, hrf=hrf)
+        # Dispatch on HRF shape rather than stored state to avoid bugs when
+        # multiple models share the same hrf_model object with different
+        # flexible_hrf_parameters settings.
+        # Shape (n_hrf,) or (n_hrf, 1) → one shared HRF for all units.
+        # Shape (n_hrf, n_units) with n_units > 1 → one HRF per unit.
+        n_cols = int(hrf.shape[-1]) if hrf.ndim >= 2 else 1
+        if n_cols <= 1:
+            return self._convolve_shared(timeseries, hrf=hrf)
+        else:
+            return self._convolve_unique(timeseries, hrf=hrf)
 
     def _convolve_shared(self, timeseries, hrf):
         # timeseries: n_batch x n_timepoints x n_units

@@ -202,7 +202,7 @@ class StimulusFitter(object):
                 @tf.function
                 def likelihood(*pars):
 
-                    pars = tf.stack(pars, axis=0)
+                    pars = tf.stack(pars, axis=1)
                     stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
                     ll = self.model._likelihood(
                         stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)

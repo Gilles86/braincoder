@@ -21,7 +21,7 @@ dependencies = [
     "tqdm",
     "patsy",
 ]
-readme = "README.rst"
+readme = "README.md"
 license = "MIT"
 
 [project.optional-dependencies]

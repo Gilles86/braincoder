@@ -93,11 +93,12 @@ This is often a very good idea in real data!
 Summary
 #######
 In this lesson, we had a look at *linear* encoding models.
-These models
- * Assume a fixed number of neural populations, each with their own parameters :math:`\theta_j`
- * Every voxel then is assumed to be a linear combination of these neural populations
- * The weights of this linear combination can be fit using linear regression
- * This is much faster than fitting the parameters :math:`\theta_j` using non-linear gradient descent
+These models:
+
+* Assume a fixed number of neural populations, each with their own parameters :math:`\theta_j`
+* Every voxel then is assumed to be a linear combination of these neural populations
+* The weights of this linear combination can be fit using linear regression
+* This is much faster than fitting the parameters :math:`\theta_j` using non-linear gradient descent
 
 In the :ref:`next lesson<tutorial_lesson3>`, we will see how we can add a *noise model*
 to the encoding models, which yields a likelihood function which we can invert in 

@@ -1,6 +1,6 @@
-======================
+==========================
 Braincoder documentation
-======================
+==========================
 
 ``braincoder`` provides tools to build encoding models, convolve them with
 hemodynamic response functions, and decode stimuli from neural data.
@@ -53,6 +53,7 @@ More resources
 .. toctree::
    :maxdepth: 1
 
+   installation
    concepts
    api_reference
    tutorial/index

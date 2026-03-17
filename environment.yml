@@ -6,20 +6,7 @@ dependencies:
   - python=3.12
   - pip
   - pip:
-    # Core scientific stack
-    - numpy>=2.0
-    - pandas>=2.0
-    - pandas_flavor
-    - scipy
-    - matplotlib
-    - seaborn
-    - tqdm
-    - patsy
-    # Dev / notebook
-    - jupyter
-    - ipykernel
-    - pytest
-    # Keras 3 — install backends explicitly
+    # Keras 3 + backends (all three included; set KERAS_BACKEND to select one)
     - keras>=3.13
     - tensorflow>=2.20
     - tensorflow-probability>=0.25
@@ -28,5 +15,12 @@ dependencies:
     - torch>=2.10
     # JAX-based MCMC
     - blackjax>=1.0
-    # Install braincoder itself in editable mode
-    - "-e ."
+    # Statistics (circular correlation used in decode2d example)
+    - pingouin
+    # Neuroimaging (required for fit_prf and decode_visual examples)
+    - nilearn
+    # Dev / notebook tools
+    - jupyter
+    - ipykernel
+    # Installs braincoder + all core deps (numpy, pandas, scipy, etc.) + pytest
+    - "-e .[test]"

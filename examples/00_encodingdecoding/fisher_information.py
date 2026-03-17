@@ -118,7 +118,7 @@ omega = np.identity(len(parameters)).astype(np.float32)
 
 
 pdf = model.get_stimulus_pdf(simulated_data, np.linspace(-5, 15, 100), omega=omega)
-E = np.trapz(pdf*pdf.columns.values[np.newaxis, :], x=pdf.columns, axis=1)
+E = np.trapezoid(pdf*pdf.columns.values[np.newaxis, :], x=pdf.columns, axis=1)
 error = np.sqrt((paradigm - E)**2)
 error = pd.Series(error, index=pd.Index(paradigm, name='stimulus')).to_frame('error')
 sns.lineplot(x='stimulus', y='error', data=error)
@@ -129,7 +129,7 @@ plt.title('Objective decoding error')
 
 # %%
 # same goes for the variance of the decoded posterior
-posterior_variance = np.trapz(pdf*(pdf.columns.values[np.newaxis, :] - E[:, np.newaxis])**2, x=pdf.columns, axis=1)
+posterior_variance = np.trapezoid(pdf*(pdf.columns.values[np.newaxis, :] - E[:, np.newaxis])**2, x=pdf.columns, axis=1)
 
 error['posterior sd'] = np.sqrt(posterior_variance)
 plt.figure()

@@ -62,7 +62,7 @@ class EncodingModel(object):
         if paradigm is not None:
 
             if paradigm.ndim == 1:
-                paradigm = paradigm[:, np.newaxis]
+                paradigm = np.asarray(paradigm)[:, np.newaxis]
 
             self.stimulus = self._get_stimulus(n_dimensions=paradigm.shape[1])
             self.paradigm = self.stimulus.clean_paradigm(paradigm)
@@ -328,6 +328,14 @@ class EncodingModel(object):
         if omega is None:
             omega = self.omega
 
+        # Compute Cholesky factor here so callers never need to do it themselves.
+        # Add a small diagonal jitter for numerical stability when the noise
+        # model produces a near-singular covariance matrix.
+        omega_t = ops.convert_to_tensor(omega, dtype='float32')
+        n = ops.shape(omega_t)[0]
+        omega_t = omega_t + 1e-6 * ops.eye(n, dtype='float32')
+        omega_chol = ops.cholesky(omega_t)
+
         weights, weights_ = self._get_weights(weights)
 
         stimulus_range = self.stimulus._clean_paradigm(stimulus_range)
@@ -343,7 +351,7 @@ class EncodingModel(object):
                               data[np.newaxis, :, :],
                               parameters[np.newaxis, :, :] if parameters is not None else None,
                               weights_,
-                              omega,
+                              omega_chol,
                               dof,
                               logp=True,
                               normalize=False)
@@ -364,8 +372,8 @@ class EncodingModel(object):
 
         ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
 
-        if normalize:
-            ll /= np.trapz(ll, ll.columns)[:, np.newaxis]
+        if normalize and not isinstance(ll.columns, pd.MultiIndex):
+            ll /= np.trapezoid(ll, ll.columns)[:, np.newaxis]
 
         return ll
 

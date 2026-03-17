@@ -23,7 +23,7 @@ plt.fill_between(x, y-0.025, y+0.025, alpha=.25, color='k', label='Measured acti
 plt.scatter(1./8.*np.pi, y, c='k')
 plt.scatter(7./8.*np.pi, y, c='k')
 
-plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], ['0', '1/2 $\pi$', '$\pi$', '1.5 $\pi$', '2 $\pi$'])
+plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], [r'0', r'$\frac{1}{2}\pi$', r'$\pi$', r'$\frac{3}{2}\pi$', r'$2\pi$'])
 sns.despine()
 
 plt.legend()
@@ -52,7 +52,7 @@ likelihood = model.likelihood(orientations, data, parameters, weights, omega)
 # And plot it..
 plt.figure()
 plt.plot(orientations, likelihood.T, c='k')
-plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], ['0', '1/2 $\pi$', '$\pi$', '1.5 $\pi$', '2 $\pi$'])
+plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], [r'0', r'$\frac{1}{2}\pi$', r'$\pi$', r'$\frac{3}{2}\pi$', r'$2\pi$'])
 
 sns.despine()
 plt.xlabel('Orientation')
@@ -80,7 +80,7 @@ plt.plot(x, np.ones_like(x)*y2, c=palette[1], ls='-')
 plt.fill_between(x, y1-0.025, y1+0.025, alpha=.25, color=palette[0], label='Measured activity RF1')
 plt.fill_between(x, y2-0.025, y2+0.025, alpha=.25, color=palette[1], label='Measured activity RF2')
 
-plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], ['0', '1/2 $\pi$', '$\pi$', '1.5 $\pi$', '2 $\pi$'])
+plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], [r'0', r'$\frac{1}{2}\pi$', r'$\pi$', r'$\frac{3}{2}\pi$', r'$2\pi$'])
 sns.despine()
 plt.legend()
 
@@ -104,7 +104,7 @@ data = pd.DataFrame([[y1, y2]]).astype(np.float32)
 likelihood = model.likelihood(orientations, data, parameters, None, omega)
 
 plt.plot(orientations, likelihood.T, c='k')
-plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], ['0', '1/2 $\pi$', '$\pi$', '1.5 $\pi$', '2 $\pi$'])
+plt.xticks([0.0, .5*np.pi, np.pi, 1.5*np.pi, 2*np.pi], [r'0', r'$\frac{1}{2}\pi$', r'$\pi$', r'$\frac{3}{2}\pi$', r'$2\pi$'])
 
 sns.despine()
 plt.xlabel('Orientation')

@@ -14,10 +14,13 @@ To get here, we can use Bayes rule:
 .. math::
     p(s|x, \theta) = \frac{p(x|s, \theta) p(s)}{p(x)}
 
-Note that
- * We need to define a prior :math:`p(s)`
- * To be able to integrate over :math:`p(s|x, \theta)` we need to approximate :math:`p(x)` by normalisation.
-..  * For a given :math:`x`, we want to evaluate the likelihood at all possible :math:`s`
+Note that:
+
+* We need to define a prior :math:`p(s)`
+* To be able to integrate over :math:`p(s|x, \theta)` we need to approximate :math:`p(x)` by normalisation.
+
+.. note::
+   For a given :math:`x`, we want to evaluate the likelihood at all possible :math:`s`
 
 In practice, for simple one or two-dimensional stimulus space,
 we can use a uniform prior and evaluate likelihoods at a grid of useful
@@ -73,6 +76,7 @@ If we have two RFs, the situation becomes unambiguous:
 .. note::
 
     The complete Python script and its output can be found :ref:`here<sphx_glr_auto_examples_00_encodingdecoding_invert_model.py>`.
+
 Summary
 #######
 

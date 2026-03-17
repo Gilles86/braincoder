@@ -154,8 +154,8 @@ take the average over the complex numbers that represent the angles. which
 is equivalent to taking the average over the unit circle in the complex plane.
 
 .. include:: ../auto_examples/00_encodingdecoding/decode2d.rst
-    :start-after: .. GENERATED FROM PYTHON SOURCE LINES 217-254
-    :end-before: .. GENERATED FROM PYTHON SOURCE LINES 255-289
+    :start-after: .. GENERATED FROM PYTHON SOURCE LINES 220-257
+    :end-before: .. GENERATED FROM PYTHON SOURCE LINES 258-292
 
 Note how the correlation between the ground truth and posterior mean
 is much higher for the attended condition than the unattended condition.
