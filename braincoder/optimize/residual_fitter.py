@@ -109,6 +109,9 @@ class ResidualFitter(object):
 
                 def get_omega(variables):
                     tau, rho, sigma2 = transform_variables(variables)
+                    if self.lambd > 0.0:
+                        return self._get_omega_lambda(tau, rho, sigma2, WWT,
+                                                      self.lambd, sample_cov)
                     return self._get_omega(tau, rho, sigma2, WWT)
 
                 def get_pbar_description(cost, best_cost, variables):
@@ -141,6 +144,9 @@ class ResidualFitter(object):
 
             def get_omega(variables):
                 tau, rho, sigma2, alpha, beta = transform_variables(variables)
+                if self.lambd > 0.0:
+                    return self._get_omega_lambda(tau, rho, sigma2, WWT,
+                                                  self.lambd, sample_cov)
                 return self._get_omega_distance(tau, rho, sigma2, WWT, alpha, beta, D)
 
             def get_pbar_description(cost, best_cost, variables):
