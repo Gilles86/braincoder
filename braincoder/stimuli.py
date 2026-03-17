@@ -1,12 +1,62 @@
-import tensorflow_probability as tfp
-from tqdm import tqdm
-import tensorflow as tf
 import numpy as np
 import pandas as pd
 import logging
-import tensorflow_probability as tfp
-from tensorflow_probability import bijectors as tfb
-from .utils.mcmc import cleanup_chain, sample_hmc, Periodic
+
+try:
+    import keras.ops as _keras_ops
+    def _softplus(x):
+        return _keras_ops.softplus(x)
+    def _log(x):
+        return _keras_ops.log(x)
+    def _exp(x):
+        return _keras_ops.exp(x)
+except ImportError:
+    def _softplus(x):
+        x = np.asarray(x, dtype=np.float32)
+        return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
+    def _log(x):
+        return np.log(np.asarray(x, dtype=np.float32))
+    def _exp(x):
+        return np.exp(np.asarray(x, dtype=np.float32))
+
+
+class _Identity:
+    """Backend-agnostic identity bijector (replaces tfp.bijectors.Identity)."""
+    def __init__(self, name=None):
+        self.name = name
+
+    def forward(self, x):
+        return x
+
+    def inverse(self, y):
+        return y
+
+
+class _Softplus:
+    """Backend-agnostic softplus bijector (replaces tfp.bijectors.Softplus)."""
+    def __init__(self, name=None):
+        self.name = name
+
+    def forward(self, x):
+        return _softplus(x)
+
+    def inverse(self, y):
+        return _log(_exp(y) - 1.0)
+
+
+class _Periodic:
+    """Backend-agnostic periodic (wrapping) bijector (replaces TFP Periodic)."""
+    def __init__(self, low, high, name=None):
+        self.low = low
+        self.high = high
+        self.width = high - low
+        self.name = name
+
+    def forward(self, x):
+        return ((x - self.low) % self.width) + self.low
+
+    def inverse(self, y):
+        return y
 
 class Stimulus(object):
 
@@ -16,7 +66,7 @@ class Stimulus(object):
         if n_dimensions != 1:
             self.dimension_labels = [f'dim_{ix}' for ix in range(n_dimensions)]
 
-        self.bijectors = [tfp.bijectors.Identity(name=label) for label in self.dimension_labels]
+        self.bijectors = [_Identity(name=label) for label in self.dimension_labels]
 
     def clean_paradigm(self, paradigm):
 
@@ -58,9 +108,9 @@ class Stimulus(object):
         if self.bijectors is not None:
 
             if isinstance(self.bijectors, list):
-                stimulus = np.stack([bijector.forward(stimulus[:, ix]).numpy() for ix, bijector in enumerate(self.bijectors)], axis=1)
+                stimulus = np.stack([np.asarray(bijector.forward(stimulus[:, ix])) for ix, bijector in enumerate(self.bijectors)], axis=1)
             else:
-                stimulus = self.bijectors.forward(stimulus).numpy()
+                stimulus = np.asarray(self.bijectors.forward(stimulus))
 
         return stimulus.astype(np.float32)
 
@@ -69,11 +119,10 @@ class OneDimensionalStimulusWithAmplitude(Stimulus):
     dimension_labels = ['x', 'amplitude']
 
     def __init__(self, positive_only=True):
-        
-        return super().__init__()
+        super().__init__()
 
         if positive_only:
-            self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='amplitude')]
+            self.bijectors = [_Identity(name='x'), _Softplus(name='amplitude')]
 
 class TwoDimensionalStimulus(Stimulus):
     dimension_labels = ['x', 'y']
@@ -85,7 +134,7 @@ class OneDimensionalRadialStimulus(Stimulus):
     def __init__(self):
         
         super().__init__()
-        self.bijectors = [Periodic(low=0.0, high=2*np.pi, name='x')]
+        self.bijectors = [_Periodic(low=0.0, high=2*np.pi, name='x')]
 
 
 class OneDimensionalRadialStimulusWithAmplitude(OneDimensionalStimulusWithAmplitude):
@@ -96,9 +145,9 @@ class OneDimensionalRadialStimulusWithAmplitude(OneDimensionalStimulusWithAmplit
         super().__init__()
 
         if positive_only:
-            self.bijectors = [Periodic(low=0.0, high=2*np.pi, name='x'), tfp.bijectors.Softplus(name='amplitude')]
+            self.bijectors = [_Periodic(low=0.0, high=2*np.pi, name='x'), _Softplus(name='amplitude')]
         else:
-            self.bijectors = [Periodic(low=0.0, high=2*np.pi, name='x'), tfp.bijectors.Identity(name='amplitude')]
+            self.bijectors = [_Periodic(low=0.0, high=2*np.pi, name='x'), _Identity(name='amplitude')]
 
 class OneDimensionalGaussianStimulus(Stimulus):
     dimension_labels = ['x', 'sd']
@@ -106,7 +155,7 @@ class OneDimensionalGaussianStimulus(Stimulus):
     def __init__(self, positive_only=True):
         super().__init__()
 
-        self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd')]
+        self.bijectors = [_Identity(name='x'), _Softplus(name='sd')]
 
 
 class OneDimensionalGaussianStimulusWithAmplitude(Stimulus):
@@ -116,9 +165,9 @@ class OneDimensionalGaussianStimulusWithAmplitude(Stimulus):
         super().__init__()
 
         if positive_only:
-            self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd'), tfp.bijectors.Softplus(name='amplitude')]
+            self.bijectors = [_Identity(name='x'), _Softplus(name='sd'), _Softplus(name='amplitude')]
         else:
-            self.bijectors = [tfp.bijectors.Identity(name='x'), tfp.bijectors.Softplus(name='sd'), tfp.bijectors.Identity(name='amplitude')]
+            self.bijectors = [_Identity(name='x'), _Softplus(name='sd'), _Identity(name='amplitude')]
 
 
 class ImageStimulus(Stimulus):
@@ -127,9 +176,9 @@ class ImageStimulus(Stimulus):
         self.grid_coordinates = pd.DataFrame(grid_coordinates, columns=['x', 'y'])
 
         if positive_only:
-            self.bijectors = tfp.bijectors.Softplus(name='intensity')
+            self.bijectors = _Softplus(name='intensity')
         else:
-            self.bijectors = tfp.bijectors.Identity(name='intensity')
+            self.bijectors = _Identity(name='intensity')
 
         self.dimension_labels = pd.MultiIndex.from_frame(self.grid_coordinates)
 
