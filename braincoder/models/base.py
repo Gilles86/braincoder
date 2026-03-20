@@ -463,7 +463,10 @@ class EncodingModel(object):
         if stimuli.ndim == 1:
             stimuli = stimuli[:, np.newaxis]
 
-        L = ops.cholesky(ops.convert_to_tensor(omega, dtype='float32'))
+        omega_t = ops.convert_to_tensor(omega, dtype='float32')
+        n = ops.shape(omega_t)[0]
+        omega_t = omega_t + 1e-6 * ops.eye(n, dtype='float32')
+        L = ops.cholesky(omega_t)
 
         if analytical:
             stimuli_ = ops.convert_to_tensor(stimuli[np.newaxis, ...])
