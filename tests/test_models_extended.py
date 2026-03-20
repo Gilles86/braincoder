@@ -103,6 +103,92 @@ class TestVonMisesPRF:
 
 
 # ---------------------------------------------------------------------------
+# AxialVonMisesPRF
+# ---------------------------------------------------------------------------
+
+class TestAxialVonMisesPRF:
+    """Tests for the π-periodic (axial) Von Mises pRF.
+
+    Key property: because gabor orientations are π-periodic, a voxel tuned
+    to μ should respond identically to orientations μ and μ + π.
+    """
+
+    @pytest.fixture
+    def orientation_paradigm(self):
+        """Orientations 0 → π (half-circle, gabor space)."""
+        return np.linspace(0, np.pi, 80, dtype=np.float32)[:, np.newaxis]
+
+    @pytest.fixture
+    def model(self, orientation_paradigm):
+        from braincoder.models import AxialVonMisesPRF
+        pars = pd.DataFrame({
+            'mu':        np.array([0.0, np.pi / 4, np.pi / 2], dtype=np.float32),
+            'kappa':     np.array([3., 3., 3.], dtype=np.float32),
+            'amplitude': np.ones(3, dtype=np.float32),
+            'baseline':  np.zeros(3, dtype=np.float32),
+        })
+        return AxialVonMisesPRF(paradigm=orientation_paradigm, parameters=pars)
+
+    def test_predict_shape(self, model, orientation_paradigm):
+        pred = model.predict()
+        assert pred.shape == (len(orientation_paradigm), 3)
+
+    def test_predict_finite(self, model):
+        assert np.all(np.isfinite(model.predict().values))
+
+    def test_pi_periodicity(self):
+        """Core correctness: pdf(x=0, mu=0) must equal pdf(x=π, mu=0)."""
+        from braincoder.utils.math import axial_von_mises_pdf
+        kappa = np.float32(3.0)
+        v0  = float(axial_von_mises_pdf(np.float32(0.0),    np.float32(0.0), kappa))
+        vpi = float(axial_von_mises_pdf(np.float32(np.pi),  np.float32(0.0), kappa))
+        np.testing.assert_allclose(v0, vpi, rtol=1e-5,
+            err_msg='axial_von_mises_pdf must be π-periodic: pdf(0,mu=0) != pdf(π,mu=0)')
+
+    def test_minimum_at_quarter_period(self):
+        """Minimum should be at x = μ + π/2 (quarter-period away)."""
+        from braincoder.utils.math import axial_von_mises_pdf
+        kappa = np.float32(3.0)
+        v_peak = float(axial_von_mises_pdf(np.float32(0.0),      np.float32(0.0), kappa))
+        v_min  = float(axial_von_mises_pdf(np.float32(np.pi / 2), np.float32(0.0), kappa))
+        assert v_peak > v_min
+
+    def test_pi_periodic_differs_from_2pi_periodic(self):
+        """AxialVonMisesPRF must give a different (correct) result than VonMisesPRF at x=π."""
+        from braincoder.utils.math import axial_von_mises_pdf, von_mises_pdf
+        kappa = np.float32(3.0)
+        axial_at_pi = float(axial_von_mises_pdf(np.float32(np.pi), np.float32(0.0), kappa))
+        old_at_pi   = float(von_mises_pdf(np.float32(np.pi),       np.float32(0.0), kappa))
+        # old formula puts the minimum at π; axial puts the peak there
+        assert axial_at_pi > old_at_pi
+
+    def test_peak_at_mu_and_mu_plus_pi(self, orientation_paradigm):
+        """Each voxel should peak at both μ and μ + π (mod π = μ)."""
+        from braincoder.models import AxialVonMisesPRF
+        mu = np.float32(np.pi / 4)
+        pars = pd.DataFrame({
+            'mu': [mu], 'kappa': [5.], 'amplitude': [1.], 'baseline': [0.],
+        }, dtype=np.float32)
+        m = AxialVonMisesPRF(paradigm=orientation_paradigm, parameters=pars)
+        pred = m.predict().iloc[:, 0]
+        stim = orientation_paradigm[:, 0]
+        bin_width = stim[1] - stim[0]
+        peak_x = stim[pred.argmax()]
+        assert abs(peak_x - float(mu)) < 2 * bin_width
+
+    def test_normalisation(self, orientation_paradigm):
+        """PDF should integrate to ~1 over [0, π)."""
+        from braincoder.utils.math import axial_von_mises_pdf
+        x = orientation_paradigm[:, 0].astype(np.float32)
+        kappa = np.float32(2.0)
+        mu    = np.float32(np.pi / 4)
+        pdf_vals = np.array([float(axial_von_mises_pdf(xi, mu, kappa)) for xi in x])
+        integral = np.trapz(pdf_vals, x)
+        np.testing.assert_allclose(integral, 1.0, atol=0.02,
+            err_msg='axial_von_mises_pdf should integrate to ~1 over [0, π)')
+
+
+# ---------------------------------------------------------------------------
 # LogGaussianPRF
 # ---------------------------------------------------------------------------
 

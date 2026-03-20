@@ -59,6 +59,31 @@ def von_mises_pdf(x, mu, kappa):
     pdf = ops.exp(kappa * ops.cos(x - mu)) / (TWO_PI * bessel_i0(kappa))
     return pdf
 
+
+def axial_von_mises_pdf(x, mu, kappa):
+    """Von Mises PDF for axial (π-periodic) data such as gabor orientations.
+
+    Orientations are π-periodic: 0° and 180° represent the same stimulus.
+    The standard Von Mises uses cos(x − μ), which is 2π-periodic and therefore
+    incorrect for orientation space.  The axial Von Mises doubles the angle:
+
+        f(x; μ, κ) = exp(κ · cos(2(x − μ))) / (π · I₀(κ))
+
+    This gives a distribution that is π-periodic, with peaks at x = μ and
+    x = μ + π, correctly treating 0° and 180° as equivalent.
+
+    Parameters
+    ----------
+    x   : stimulus orientation in radians, in [0, π)
+    mu  : preferred orientation in radians, in [0, π)
+    kappa : concentration parameter (≥ 0); higher = sharper tuning
+    """
+    from .backend import bessel_i0
+    TWO = np.float32(2.0)
+    PI  = np.float32(np.pi)
+    pdf = ops.exp(kappa * ops.cos(TWO * (x - mu))) / (PI * bessel_i0(kappa))
+    return pdf
+
 # Aggressive softplus with alpha=100
 alpha = 100
 aggressive_softplus = lambda x: (1./alpha) * ops.softplus(alpha*x)

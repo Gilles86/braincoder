@@ -1,6 +1,6 @@
 from .base import EncodingModel, EncodingRegressionModel, HRFEncodingModel
-from .prf_1d import (GaussianPRF, RegressionGaussianPRF, VonMisesPRF, LogGaussianPRF,
-                     GaussianPRFWithHRF, LogGaussianPRFWithHRF, AlphaGaussianPRF,
+from .prf_1d import (GaussianPRF, RegressionGaussianPRF, VonMisesPRF, AxialVonMisesPRF,
+                     LogGaussianPRF, GaussianPRFWithHRF, LogGaussianPRFWithHRF, AlphaGaussianPRF,
                      RegressionAlphaGaussianPRF, GaussianPRFOnGaussianSignal)
 from .prf_2d import (GaussianPointPRF2D, GaussianMixturePRF2D, GaussianPRF2D,
                      GaussianPRF2DAngle, GaussianPRF2DWithHRF, GaussianPRF2DAngleWithHRF,
@@ -10,7 +10,7 @@ from .linear import DiscreteModel, LinearModel, LinearModelWithBaseline, LinearM
 
 __all__ = [
     'EncodingModel', 'EncodingRegressionModel', 'HRFEncodingModel',
-    'GaussianPRF', 'RegressionGaussianPRF', 'VonMisesPRF', 'LogGaussianPRF',
+    'GaussianPRF', 'RegressionGaussianPRF', 'VonMisesPRF', 'AxialVonMisesPRF', 'LogGaussianPRF',
     'GaussianPRFWithHRF', 'LogGaussianPRFWithHRF', 'AlphaGaussianPRF',
     'RegressionAlphaGaussianPRF', 'GaussianPRFOnGaussianSignal',
     'GaussianPointPRF2D', 'GaussianMixturePRF2D', 'GaussianPRF2D',

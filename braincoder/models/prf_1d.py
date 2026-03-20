@@ -4,10 +4,10 @@ import numpy as np
 from tqdm import tqdm
 import keras
 from keras import ops
-from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
+from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, axial_von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
 import scipy.stats as ss
-from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
+from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalOrientationStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
 from .base import EncodingModel, EncodingRegressionModel, HRFEncodingModel
 
@@ -179,6 +179,45 @@ class VonMisesPRF(GaussianPRF):
         self._pseudoWWT = ops.where(ops.isnan(pseudoWWT), ops.zeros_like(pseudoWWT),
                                    pseudoWWT)
         return self._pseudoWWT
+
+class AxialVonMisesPRF(VonMisesPRF):
+    """Von Mises pRF for π-periodic (axial) stimuli such as gabor orientations.
+
+    Gabor gratings are π-periodic: an orientation of 0° and one of 180° are
+    identical stimuli.  The standard ``VonMisesPRF`` uses ``cos(x − μ)``,
+    which is 2π-periodic and therefore treats 0° and 180° as maximally
+    *dissimilar* — the opposite of correct.
+
+    ``AxialVonMisesPRF`` uses the axial (doubled-angle) formula::
+
+        f(x; μ, κ) = exp(κ · cos(2(x − μ))) / (π · I₀(κ))
+
+    This distribution is π-periodic: it peaks at x = μ **and** at x = μ + π,
+    correctly encoding the equivalence of opposite orientations.
+
+    Parameters
+    ----------
+    Same as ``VonMisesPRF``.  ``mu`` should be in [0, π).
+    """
+
+    def _get_stimulus_type(self, model_stimulus_amplitude=False):
+        return OneDimensionalOrientationStimulus
+
+    def _get_stimulus(self, **kwargs):
+        return OneDimensionalOrientationStimulus()
+
+    def _basis_predictions_without_amplitude(self, paradigm, parameters):
+        return axial_von_mises_pdf(paradigm[..., None, 0],
+                                   parameters[:, None, :, 0],
+                                   parameters[:, None, :, 1]) * \
+            parameters[:, None, :, 2] + parameters[:, None, :, 3]
+
+    def _basis_predictions_with_amplitude(self, paradigm, parameters):
+        return axial_von_mises_pdf(paradigm[..., None, 0],
+                                   parameters[:, None, :, 0],
+                                   parameters[:, None, :, 1]) * \
+            parameters[:, None, :, 2] * paradigm[..., None, 1] + parameters[:, None, :, 3]
+
 
 class LogGaussianPRF(GaussianPRF):
     """Log-Gaussian tuning curve with configurable parameterization."""

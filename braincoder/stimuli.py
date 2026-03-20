@@ -132,9 +132,22 @@ class OneDimensionalRadialStimulus(Stimulus):
     dimension_labels = ['x (radians)']
 
     def __init__(self):
-        
+
         super().__init__()
         self.bijectors = [_Periodic(low=0.0, high=2*np.pi, name='x')]
+
+
+class OneDimensionalOrientationStimulus(Stimulus):
+    """Stimulus for π-periodic orientation data (e.g. gabor gratings).
+
+    Orientations in [0, π) — 0 rad and π rad represent the same grating,
+    so the periodic wrap point is π, not 2π.
+    """
+    dimension_labels = ['x (radians, orientation)']
+
+    def __init__(self):
+        super().__init__()
+        self.bijectors = [_Periodic(low=0.0, high=np.pi, name='x')]
 
 
 class OneDimensionalRadialStimulusWithAmplitude(OneDimensionalStimulusWithAmplitude):
