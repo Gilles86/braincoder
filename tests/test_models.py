@@ -87,6 +87,12 @@ class TestImports:
     def test_optimize_package(self):
         from braincoder.optimize import (
             WeightFitter, ParameterFitter, ResidualFitter,
+        )
+
+    def test_optimize_package_tfp_extras(self):
+        """StimulusFitter and friends still depend on tensorflow_probability."""
+        pytest.importorskip("tensorflow_probability")
+        from braincoder.optimize import (
             StimulusFitter, CustomStimulusFitter,
             SzinteStimulus, SzinteStimulus2, make_aperture_stimuli,
         )
