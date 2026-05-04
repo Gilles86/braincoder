@@ -11,6 +11,6 @@
   "related_identifiers": [
     {"identifier": "https://braincoder-devs.github.io/", "relation": "isDocumentedBy", "resource_type": "publication-other"},
     {"identifier": "https://github.com/Gilles86/braincoder", "relation": "isSupplementedBy", "resource_type": "software"},
-    {"identifier": "10.5281/zenodo.20008828", "relation": "isRelatedTo", "resource_type": "software"}
+    {"identifier": "10.5281/zenodo.20008828", "relation": "references", "resource_type": "software"}
   ]
 }

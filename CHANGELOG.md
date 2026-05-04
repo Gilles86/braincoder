@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1 (2026-05-04)
+
+- Fix invalid `isRelatedTo` relation in `.zenodo.json` (Zenodo schema requires `references` instead). The 0.5.0 GitHub release failed to deposit on Zenodo because of this; 0.5.1 contains no code changes, only the metadata fix.
+
 ## 0.5.0 (2026-05-04)
 
 The headline change is a full **Keras 3 port**: braincoder is now backend-agnostic and runs on TensorFlow, JAX, or PyTorch (including Apple Silicon MPS). The codebase has been refactored into subpackages, the test suite has grown from a handful of integration tests to 170 passing tests across all three backends, and a long list of bugs has been fixed.
