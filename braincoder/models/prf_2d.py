@@ -6,7 +6,7 @@ import keras
 from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
-from ..utils.backend import softplus_inverse, to_numpy
+from ..utils.backend import softplus_inverse
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
@@ -38,7 +38,6 @@ class GaussianPointPRF2D(EncodingModel):
 
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
-
 
     def _get_stimulus_type(self, model_stimulus_amplitude=False):
             return TwoDimensionalStimulus
@@ -166,7 +165,6 @@ class GaussianPointPRF2D(EncodingModel):
             raise ValueError(
                 'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
 
-
     def _transform_parameters_forward1(self, parameters):
 
         if self.correlated_response:
@@ -203,7 +201,6 @@ class GaussianPointPRF2D(EncodingModel):
                              softplus_inverse(parameters[:, 3][:, None]),
                              parameters[:, 4][:, None],
                              parameters[:, 5][:, None]], axis=1)
-
 
     def _transform_parameters_forward2(self, parameters):
 
@@ -268,7 +265,6 @@ class GaussianMixturePRF2D(EncodingModel):
 
         super().__init__(paradigm=paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
-
 
     def _get_stimulus_type(self):
         return TwoDimensionalStimulus
@@ -373,7 +369,6 @@ class GaussianMixturePRF2D(EncodingModel):
                             parameters[:, 5][:, None],
                             parameters[:, 6][:, None]], axis=1)
 
-
     def _transform_parameters_forward2(self, parameters):
         if self.same_rfs:
             return ops.concatenate([parameters[:, 0][:, None],
@@ -443,7 +438,6 @@ class GaussianPRF2D(EncodingModel):
         if omega is not None:
             self.omega_chol = np.linalg.cholesky(omega)
 
-
     def get_rf(self, as_frame=False, unpack=False, parameters=None):
 
         grid_coordinates = self.grid_coordinates.values
@@ -452,7 +446,7 @@ class GaussianPRF2D(EncodingModel):
         parameters = self.parameters.values[np.newaxis, ...]
 
         rf = self._get_rf(grid_coordinates, parameters)
-        rf = to_numpy(rf)[0]
+        rf = ops.convert_to_numpy(rf)[0]
 
         if as_frame:
             rf = pd.concat([pd.DataFrame(e,
@@ -579,7 +573,6 @@ class GaussianPRF2DAngle(GaussianPRF2D):
                 paradigm=self.paradigm, data=self.data, parameters=parameters,
                      weights=self.weights, omega=self.omega)
 
-
 class GaussianPRF2DWithHRF(HRFEncodingModel, GaussianPRF2D):
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
                  positive_image_values_only=True,
@@ -667,7 +660,6 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
         return standard_prf - sprf
 
-
 class DifferenceOfGaussiansPRF2DWithHRF(HRFEncodingModel, DifferenceOfGaussiansPRF2D):
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
@@ -728,7 +720,6 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
                           softplus_inverse(parameters[:, 5][:, None] - 1),
                           softplus_inverse(parameters[:, 6][:, None]),
                           softplus_inverse(parameters[:, 7][:, None])], axis=1)
-
 
     def _basis_predictions(self, paradigm, parameters):
 
@@ -801,7 +792,6 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
             encoding_pars1 = DivisiveNormalizationGaussianPRF2D._transform_parameters_backward(self, parameters[:, :-1])
             bold_baseline = parameters[:, -1:]
             return ops.concatenate([encoding_pars1, bold_baseline], axis=1)
-
 
     def _predict(self, paradigm, parameters, weights):
 

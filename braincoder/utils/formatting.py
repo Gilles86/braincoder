@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
-from .backend import to_numpy
-
+from keras import ops
 
 def format_paradigm(paradigm):
     if paradigm is None:
@@ -20,7 +19,6 @@ def format_paradigm(paradigm):
 
     return pd.DataFrame(paradigm, index=pd.Index(range(len(paradigm)), name='time'),
                         columns=pd.Index(range(paradigm.shape[1]), name='stimulus dimension')).astype(np.float32)
-
 
 def format_parameters(parameters, parameter_labels=None):
 
@@ -41,7 +39,6 @@ def format_parameters(parameters, parameter_labels=None):
                         columns=parameter_labels,
                         index=pd.Index(range(len(parameters)), name='source')).astype(np.float32)
 
-
 def format_weights(weights):
     if weights is not None:
         if isinstance(weights, pd.DataFrame):
@@ -52,14 +49,13 @@ def format_weights(weights):
                                     range(1, len(weights) + 1), name='population'),
                                 columns=pd.Index(np.arange(weights.shape[1]), name='unit')).astype(np.float32)
 
-
 def format_data(data):
 
     if isinstance(data, pd.DataFrame):
         return data
 
     if not isinstance(data, np.ndarray):
-        data = to_numpy(data)
+        data = ops.convert_to_numpy(data)
 
     return pd.DataFrame(data,
                         index=pd.Index(

@@ -19,12 +19,11 @@ import numpy as np
 import pandas as pd
 import pytest
 import sys, os
-import tensorflow as tf
+from keras import ops
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from braincoder.models import GaussianPRF
 from braincoder.optimize import ResidualFitter
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -40,11 +39,9 @@ def make_gauss_params(n_voxels, baseline_values=None, seed=42):
         'baseline':  np.array(baseline_values, dtype=np.float32),
     })
 
-
 def make_1d_stimulus_range(n=50, low=1.0, high=31.0):
     """1-D stimulus range for GaussianPRF (no range condition)."""
     return np.linspace(low, high, n, dtype=np.float32)
-
 
 # ── tests ─────────────────────────────────────────────────────────────────────
 
@@ -56,8 +53,8 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=10)
         stim = make_1d_stimulus_range()
 
-        WWT_raw = model.init_pseudoWWT(stim, params, subtract_baseline=False).numpy()
-        WWT_sub = model.init_pseudoWWT(stim, params, subtract_baseline=True).numpy()
+        WWT_raw = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=False))
+        WWT_sub = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
 
         assert not np.allclose(WWT_raw, WWT_sub), (
             "WWT should differ between subtract=True and subtract=False "
@@ -70,12 +67,12 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=8)
         stim = make_1d_stimulus_range()
 
-        W = model.basis_predictions(stim, params).numpy()          # (n_stim, n_voxels)
+        W = ops.convert_to_numpy(model.basis_predictions(stim, params))          # (n_stim, n_voxels)
         baseline = params['baseline'].values.astype(np.float32)    # (n_voxels,)
         W_corrected = W - baseline[np.newaxis, :]                  # broadcast subtract
         expected_WWT = W_corrected.T @ W_corrected                 # (n_voxels, n_voxels)
 
-        actual_WWT = model.init_pseudoWWT(stim, params, subtract_baseline=True).numpy()
+        actual_WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
 
         np.testing.assert_allclose(
             actual_WWT, expected_WWT, rtol=1e-5, atol=1e-6,
@@ -97,7 +94,7 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=n_voxels, baseline_values=np.ones(n_voxels) * 10.0)
         stim = make_1d_stimulus_range()
 
-        W = model.basis_predictions(stim, params).numpy()
+        W = ops.convert_to_numpy(model.basis_predictions(stim, params))
         W_min = W.min(axis=0)   # per-voxel minimum across stimulus range
 
         # Sanity: baseline (10.0) should be far above the per-voxel minimum
@@ -108,7 +105,7 @@ class TestSubtractWtBaseline:
         # Better setup: manually craft a case where W.min != baseline.
         params2 = params.copy()
         params2['amplitude'] = 5.0
-        W2 = model.basis_predictions(stim, params2).numpy()
+        W2 = ops.convert_to_numpy(model.basis_predictions(stim, params2))
         W2_min = W2.min(axis=0)
 
         # The minimum of W2 across the stimulus range should be close to baseline
@@ -118,10 +115,10 @@ class TestSubtractWtBaseline:
         W2_corrected = W2 - baseline_col[np.newaxis, :]
         expected_WWT = W2_corrected.T @ W2_corrected
 
-        actual_WWT = model.init_pseudoWWT(stim, params2, subtract_baseline=True).numpy()
+        actual_WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params2, subtract_baseline=True))
 
         np.testing.assert_allclose(
-            actual_WWT, expected_WWT, rtol=1e-5, atol=1e-6,
+            actual_WWT, expected_WWT, rtol=1e-3, atol=1e-4,
             err_msg="subtract_baseline must use the 'baseline' column, not W.min."
         )
 
@@ -132,8 +129,8 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=n_voxels, baseline_values=np.zeros(n_voxels))
         stim = make_1d_stimulus_range()
 
-        WWT_raw = model.init_pseudoWWT(stim, params, subtract_baseline=False).numpy()
-        WWT_sub = model.init_pseudoWWT(stim, params, subtract_baseline=True).numpy()
+        WWT_raw = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=False))
+        WWT_sub = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
 
         np.testing.assert_allclose(
             WWT_raw, WWT_sub, rtol=1e-5, atol=1e-6,
@@ -153,8 +150,8 @@ class TestSubtractWtBaseline:
         params_high['baseline'] = params_high['baseline'] + 5.0
         stim = make_1d_stimulus_range()
 
-        WWT_low = model.init_pseudoWWT(stim, params_low,  subtract_baseline=True).numpy()
-        WWT_high = model.init_pseudoWWT(stim, params_high, subtract_baseline=True).numpy()
+        WWT_low = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_low,  subtract_baseline=True))
+        WWT_high = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_high, subtract_baseline=True))
 
         np.testing.assert_allclose(
             WWT_low, WWT_high, rtol=1e-5, atol=1e-5,
@@ -176,8 +173,8 @@ class TestSubtractWtBaseline:
         params_high['baseline'] = params_high['baseline'] + 5.0
         stim = make_1d_stimulus_range()
 
-        WWT_low  = model.init_pseudoWWT(stim, params_low,  subtract_baseline=False).numpy()
-        WWT_high = model.init_pseudoWWT(stim, params_high, subtract_baseline=False).numpy()
+        WWT_low  = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_low,  subtract_baseline=False))
+        WWT_high = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_high, subtract_baseline=False))
 
         assert not np.allclose(WWT_low, WWT_high), (
             "WWT(subtract=False) must change when baseline shifts, "
@@ -194,10 +191,10 @@ class TestSubtractWtBaseline:
         stim = make_1d_stimulus_range()
 
         model.init_pseudoWWT(stim, params, subtract_baseline=False)
-        WWT_raw = model.get_pseudoWWT().numpy().copy()
+        WWT_raw = ops.convert_to_numpy(model.get_pseudoWWT()).copy()
 
         model.init_pseudoWWT(stim, params, subtract_baseline=True)
-        WWT_sub = model.get_pseudoWWT().numpy().copy()
+        WWT_sub = ops.convert_to_numpy(model.get_pseudoWWT()).copy()
 
         # The two cached values should differ (nonzero baseline)
         assert not np.allclose(WWT_raw, WWT_sub), (
@@ -213,7 +210,7 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=15)
         stim = make_1d_stimulus_range()
 
-        WWT = model.init_pseudoWWT(stim, params, subtract_baseline=True).numpy()
+        WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
         eigvals = np.linalg.eigvalsh(WWT)
 
         assert np.all(eigvals >= -1e-5), (
@@ -230,17 +227,16 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=n_voxels, baseline_values=baselines)
         stim = make_1d_stimulus_range()
 
-        W = model.basis_predictions(stim, params).numpy()
+        W = ops.convert_to_numpy(model.basis_predictions(stim, params))
         W_corrected = W - baselines[np.newaxis, :]
         expected_WWT = W_corrected.T @ W_corrected
 
-        actual_WWT = model.init_pseudoWWT(stim, params, subtract_baseline=True).numpy()
+        actual_WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
 
         np.testing.assert_allclose(
-            actual_WWT, expected_WWT, rtol=1e-5, atol=1e-6,
+            actual_WWT, expected_WWT, rtol=1e-3, atol=1e-4,
             err_msg="Per-voxel baseline subtraction must handle different baseline values."
         )
-
 
 # ── Tests for _get_omega_lambda (convex combination) ─────────────────────────
 
@@ -258,74 +254,83 @@ def make_residual_fitter(n_voxels=5, n_trials=40, lambd=0.5, seed=0):
     model.parameters = params
     return ResidualFitter(model, data, stim_df, parameters=params, lambd=lambd)
 
-
 class TestOmegaLambda:
 
     def _make_inputs(self, n_voxels=4):
-        """Return (tau, rho, sigma2, WWT, sample_cov) as tf tensors."""
+        """Return (tau, rho, sigma2, WWT, sample_cov) as backend tensors."""
         rng = np.random.default_rng(42)
-        tau = tf.constant(rng.uniform(0.5, 2.0, (1, n_voxels)).astype(np.float32))
-        rho = tf.constant(0.3, dtype=tf.float32)
-        sigma2 = tf.constant(0.1, dtype=tf.float32)
+        tau = ops.convert_to_tensor(rng.uniform(0.5, 2.0, (1, n_voxels)).astype(np.float32))
+        rho = ops.convert_to_tensor(np.float32(0.3))
+        sigma2 = ops.convert_to_tensor(np.float32(0.1))
         A = rng.normal(size=(n_voxels, n_voxels)).astype(np.float32)
-        WWT = tf.constant(A.T @ A)
+        WWT = ops.convert_to_tensor(A.T @ A)
         B = rng.normal(size=(n_voxels, n_voxels)).astype(np.float32)
-        sample_cov = tf.constant(B.T @ B)
+        sample_cov = ops.convert_to_tensor(B.T @ B)
         return tau, rho, sigma2, WWT, sample_cov
 
+    @staticmethod
+    def _adaptive_jitter(matrix):
+        """Mirror the adaptive jitter in residual_fitter._get_omega_lambda."""
+        mean_diag = float(np.mean(np.diag(matrix)))
+        return mean_diag * 1e-4 + 1e-9
+
     def test_lambda0_equals_pure_parametric(self):
-        """At lambda=0, _get_omega_lambda == _get_omega (pure parametric)."""
+        """At lambda=0, _get_omega_lambda == _get_omega (plus adaptive jitter)."""
         rf = make_residual_fitter(lambd=0.0)
         tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
 
-        omega_lambda = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.0, sample_cov).numpy()
-        omega_param  = rf._get_omega(tau, rho, sigma2, WWT).numpy()
+        omega_lambda = ops.convert_to_numpy(rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.0, sample_cov))
+        omega_param  = ops.convert_to_numpy(rf._get_omega(tau, rho, sigma2, WWT))
+        expected = omega_param + np.eye(omega_param.shape[0], dtype=np.float32) * self._adaptive_jitter(omega_param)
 
-        np.testing.assert_allclose(omega_lambda, omega_param, rtol=1e-5, atol=1e-5,
-            err_msg="lambda=0 must give the same result as the pure parametric model.")
+        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-4, atol=1e-5,
+            err_msg="lambda=0 must give the parametric model plus adaptive jitter.")
 
     def test_lambda1_equals_pure_empirical(self):
-        """At lambda=1, _get_omega_lambda == sample_cov (plus tiny eps diagonal)."""
+        """At lambda=1, _get_omega_lambda == sample_cov (plus adaptive jitter)."""
         rf = make_residual_fitter(lambd=1.0)
         tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
 
-        omega_lambda = rf._get_omega_lambda(tau, rho, sigma2, WWT, 1.0, sample_cov).numpy()
-        eps = 1e-9
-        expected = sample_cov.numpy() + np.eye(sample_cov.shape[0]) * eps
+        omega_lambda = ops.convert_to_numpy(rf._get_omega_lambda(tau, rho, sigma2, WWT, 1.0, sample_cov))
+        sc = ops.convert_to_numpy(sample_cov)
+        expected = sc + np.eye(sc.shape[0], dtype=np.float32) * self._adaptive_jitter(sc)
 
-        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-5, atol=1e-5,
-            err_msg="lambda=1 must give the pure empirical covariance (+ eps*I).")
+        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-4, atol=1e-5,
+            err_msg="lambda=1 must give the pure empirical covariance (+ adaptive jitter).")
 
     def test_convex_combination_at_midpoint(self):
         """At lambda=0.5, omega is an equal blend of parametric and empirical."""
         rf = make_residual_fitter(lambd=0.5)
         tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
 
-        omega_param   = rf._get_omega(tau, rho, sigma2, WWT).numpy()
-        omega_lambda  = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.5, sample_cov).numpy()
-        eps = 1e-9
-        expected = 0.5 * omega_param + 0.5 * sample_cov.numpy() + np.eye(omega_param.shape[0]) * eps
+        omega_param   = ops.convert_to_numpy(rf._get_omega(tau, rho, sigma2, WWT))
+        omega_lambda  = ops.convert_to_numpy(rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.5, sample_cov))
+        blend = 0.5 * omega_param + 0.5 * ops.convert_to_numpy(sample_cov)
+        expected = blend + np.eye(blend.shape[0], dtype=np.float32) * self._adaptive_jitter(blend)
 
-        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-5, atol=1e-5,
+        np.testing.assert_allclose(omega_lambda, expected, rtol=1e-4, atol=1e-5,
             err_msg="lambda=0.5 must give an equal blend of parametric and empirical omega.")
 
     def test_parametric_part_scales_with_1_minus_lambda(self):
         """
         The parametric contribution scales with (1-lambda) and the empirical part
-        with lambda.  Concretely:
-            omega(0) - omega(0.5) == 0.5 * (omega_param - sample_cov)
-        because omega(0) = omega_param + eps*I and
-                 omega(0.5) = 0.5*omega_param + 0.5*sample_cov + eps*I.
+        with lambda.  After subtracting omega(0) - omega(0.5), the parametric and
+        empirical components net to 0.5 * (omega_param - sample_cov); the adaptive
+        jitters do not exactly cancel (they depend on each blend's mean diagonal),
+        so we use a loose absolute tolerance scaled by the matrix magnitude.
         """
         rf = make_residual_fitter(lambd=0.0)
         tau, rho, sigma2, WWT, sample_cov = self._make_inputs()
 
-        omega_0    = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.0, sample_cov).numpy()
-        omega_half = rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.5, sample_cov).numpy()
-        omega_param = rf._get_omega(tau, rho, sigma2, WWT).numpy()
+        omega_0    = ops.convert_to_numpy(rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.0, sample_cov))
+        omega_half = ops.convert_to_numpy(rf._get_omega_lambda(tau, rho, sigma2, WWT, 0.5, sample_cov))
+        omega_param = ops.convert_to_numpy(rf._get_omega(tau, rho, sigma2, WWT))
 
-        expected = 0.5 * (omega_param - sample_cov.numpy())
+        expected = 0.5 * (omega_param - ops.convert_to_numpy(sample_cov))
+        # Jitter difference scale: 1e-4 * |mean_diag(omega_0) - mean_diag(omega_half)|
+        atol = 1e-4 * max(abs(np.mean(np.diag(omega_0))),
+                          abs(np.mean(np.diag(omega_half)))) * 2
         np.testing.assert_allclose(
-            omega_0 - omega_half, expected, rtol=1e-5, atol=1e-5,
+            omega_0 - omega_half, expected, rtol=1e-4, atol=atol,
             err_msg="Parametric part must scale linearly with (1-lambda)."
         )

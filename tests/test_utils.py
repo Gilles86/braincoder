@@ -1,9 +1,8 @@
 """Tests for braincoder utility functions (formatting, math, stats)."""
 import numpy as np
+from keras import ops
 import pandas as pd
 import pytest
-from braincoder.utils.backend import to_numpy
-
 
 # ---------------------------------------------------------------------------
 # format_paradigm
@@ -53,7 +52,6 @@ class TestFormatParadigm:
         result = format_paradigm(arr)
         assert result.dtypes.iloc[0] == np.float32
 
-
 # ---------------------------------------------------------------------------
 # format_parameters
 # ---------------------------------------------------------------------------
@@ -83,7 +81,6 @@ class TestFormatParameters:
         arr = np.ones((2, 3), dtype=np.float32)
         result = format_parameters(arr)
         assert list(result.columns) == ['par1', 'par2', 'par3']
-
 
 # ---------------------------------------------------------------------------
 # format_data
@@ -116,7 +113,6 @@ class TestFormatData:
         result = format_data(arr)
         assert result.index.name == 'time'
 
-
 # ---------------------------------------------------------------------------
 # format_weights
 # ---------------------------------------------------------------------------
@@ -146,7 +142,6 @@ class TestFormatWeights:
         result = format_weights(arr)
         assert result.index.name == 'population'
 
-
 # ---------------------------------------------------------------------------
 # gamma_pdf (math utility in hrf.py)
 # ---------------------------------------------------------------------------
@@ -156,13 +151,13 @@ class TestGammaPdf:
     def test_output_shape(self):
         from braincoder.hrf import gamma_pdf
         t = np.array([[1.0], [2.0], [3.0]], dtype=np.float32)
-        result = to_numpy(gamma_pdf(t, a=6.0, d=1.0))
+        result = ops.convert_to_numpy(gamma_pdf(t, a=6.0, d=1.0))
         assert result.shape == (3, 1)
 
     def test_positive_values(self):
         from braincoder.hrf import gamma_pdf
         t = np.linspace(0.1, 20.0, 100, dtype=np.float32)[:, np.newaxis]
-        result = to_numpy(gamma_pdf(t, a=6.0, d=1.0))
+        result = ops.convert_to_numpy(gamma_pdf(t, a=6.0, d=1.0))
         assert np.all(result >= 0), "Gamma PDF values should be non-negative"
 
     def test_peak_near_mode(self):
@@ -170,7 +165,7 @@ class TestGammaPdf:
         from braincoder.hrf import gamma_pdf
         a, d = 6.0, 1.0
         t = np.linspace(0.1, 20.0, 1000, dtype=np.float32)[:, np.newaxis]
-        result = to_numpy(gamma_pdf(t, a=a, d=d))
+        result = ops.convert_to_numpy(gamma_pdf(t, a=a, d=d))
         peak_t = t.flatten()[np.argmax(result)]
         expected_mode = (a - 1) * d  # = 5.0
         assert abs(peak_t - expected_mode) < 0.5, \

@@ -3,9 +3,8 @@ import numpy as np
 import keras
 from keras import ops
 from ..utils import format_data, format_parameters
-from ..utils.backend import to_numpy
-from ..models import LinearModelWithBaseline
 
+from ..models import LinearModelWithBaseline
 
 class WeightFitter(object):
     """Closed-form solver for voxel weights given fixed parameters.
@@ -39,7 +38,7 @@ class WeightFitter(object):
         else:
             weights_vals = ops.lstsq(A, ops.convert_to_tensor(b, dtype='float32'))
 
-        weights_vals = to_numpy(weights_vals)
+        weights_vals = ops.convert_to_numpy(weights_vals)
 
         if (parameters is None) or type(self.model) == LinearModelWithBaseline:
             weights = pd.DataFrame(weights_vals,

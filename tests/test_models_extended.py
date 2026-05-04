@@ -183,7 +183,7 @@ class TestAxialVonMisesPRF:
         kappa = np.float32(2.0)
         mu    = np.float32(np.pi / 4)
         pdf_vals = np.array([float(axial_von_mises_pdf(xi, mu, kappa)) for xi in x])
-        integral = np.trapz(pdf_vals, x)
+        integral = np.trapezoid(pdf_vals, x)
         np.testing.assert_allclose(integral, 1.0, atol=0.02,
             err_msg='axial_von_mises_pdf should integrate to ~1 over [0, π)')
 

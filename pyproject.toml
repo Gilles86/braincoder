@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "braincoder"
-version = "0.2.0"
+version = "0.5.0"
 description = "A modern neuroimaging modeling package"
 authors = [
     {name = "Gilles de Hollander", email = "gilles.dehollander@gmail.com"}
@@ -36,10 +36,3 @@ exclude = ["notebooks*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = [
-    "--ignore=tests/test_gauss_rf.py",
-    "--ignore=tests/test_gauss_to_stick.py",
-    "--ignore=tests/test_glm.py",
-    "--ignore=tests/test_glm_t_dist.py",
-    "--ignore=tests/test_stickmodel.py",
-]

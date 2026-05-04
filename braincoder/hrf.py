@@ -274,10 +274,3 @@ class SPMHRFDerivativeModel(HRFModel):
               + dispersion_weight * derivative_disp
 
         return hrf
-
-
-class CustomHRFModel(HRFModel):
-
-    def __init__(self, hrf):
-        self.hrf = hrf.astype(np.float32)
-        self.oversampling = 1.

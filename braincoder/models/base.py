@@ -6,7 +6,7 @@ import keras
 from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
-from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample_mvn, sample_mvt, sample_student_t, compute_gradients, to_numpy
+from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample_mvn, sample_mvt, sample_student_t, compute_gradients
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
@@ -138,10 +138,10 @@ class EncodingModel(object):
         predictions = self._predict(paradigm_, parameters_, weights_)[0]
 
         if weights is None:
-            return pd.DataFrame(to_numpy(predictions),
+            return pd.DataFrame(ops.convert_to_numpy(predictions),
                                 index=paradigm.index, columns=parameters.index)
         else:
-            return pd.DataFrame(to_numpy(predictions),
+            return pd.DataFrame(ops.convert_to_numpy(predictions),
                                 index=paradigm.index, columns=weights.columns)
 
     def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.,
@@ -169,7 +169,7 @@ class EncodingModel(object):
             parameters.values[np.newaxis, ...],
             weights_, noise, dof)
 
-        simulated_data = to_numpy(simulated_data)
+        simulated_data = ops.convert_to_numpy(simulated_data)
 
         # Collapse the first two dimensions
         simulated_data = np.reshape(simulated_data, (n_repeats*paradigm.shape[0], simulated_data.shape[2]))
@@ -300,7 +300,7 @@ class EncodingModel(object):
                                       logp,
                                       normalize)
 
-        likelihood = to_numpy(likelihood)
+        likelihood = ops.convert_to_numpy(likelihood)
 
         likelihood = pd.DataFrame(
             likelihood, index=data.index, columns=stimuli.index)
@@ -356,7 +356,7 @@ class EncodingModel(object):
                               logp=True,
                               normalize=False)
 
-        ll = to_numpy(ll)
+        ll = ops.convert_to_numpy(ll)
 
         if stimulus_range.shape[-1] == 1:
             ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
@@ -497,7 +497,7 @@ class EncodingModel(object):
             ll, dy_dx = compute_gradients(ll_fn, [stimuli_var])
             fisher_info = ops.mean(dy_dx[0] ** 2, 0)[..., 0]
 
-        fisher_info = to_numpy(fisher_info)
+        fisher_info = ops.convert_to_numpy(fisher_info)
 
         if stimuli.shape[1] == 1:
             return pd.Series(fisher_info, index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
@@ -540,7 +540,6 @@ class EncodingModel(object):
 
         return paradigm
 
-
 class EncodingRegressionModel(EncodingModel):
     """Encoding model whose parameters are linear combinations of regressors."""
 
@@ -570,7 +569,6 @@ class EncodingRegressionModel(EncodingModel):
         super().__init__(paradigm=base_paradigm, data=data, parameters=parameters,
                          weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
 
-
         baseline_parameter_values = baseline_parameter_values or {}
 
         self.baseline_parameter_values = {
@@ -586,7 +584,6 @@ class EncodingRegressionModel(EncodingModel):
 
         self._transform_parameters_forward = lambda x: x
         self._transform_parameters_backward = lambda x: x
-
 
     def _get_regressor_parameter_labels(self, design_matrices):
         regressor_parameters = []
@@ -635,7 +632,6 @@ class EncodingRegressionModel(EncodingModel):
 
         return design_matrices
 
-
     def set_paradigm(self, paradigm, regressors=None):
 
         if not hasattr(self, 'paradigm'):
@@ -681,7 +677,7 @@ class EncodingRegressionModel(EncodingModel):
         parameters_ = parameters_[np.newaxis, ...]
 
         transformed_parameters = self._get_base_parameters(design_matrices, parameters_)
-        transformed_parameters = to_numpy(transformed_parameters)
+        transformed_parameters = ops.convert_to_numpy(transformed_parameters)
 
         transformed_parameters = np.reshape(transformed_parameters, (-1, transformed_parameters.shape[-1]))
 
@@ -714,7 +710,7 @@ class EncodingRegressionModel(EncodingModel):
             ll_flat = mvt_log_prob(residuals_2d, omega_chol_t, dof)
 
         ll = ops.reshape(ll_flat, (n_batches, n_timepoints))
-        ll = to_numpy(ll)
+        ll = ops.convert_to_numpy(ll)
 
         ll = pd.DataFrame(ll, index=pd.MultiIndex.from_frame(stimulus_range), columns=data.index).T
 
@@ -724,8 +720,6 @@ class EncodingRegressionModel(EncodingModel):
         ll = np.exp(ll)
 
         return ll
-
-
 
 class HRFEncodingModel(object):
     """Mixin that equips an encoding model with HRF convolution support."""
@@ -749,7 +743,6 @@ class HRFEncodingModel(object):
             self.flexible_hrf_parameters = False
 
         self.parameters = self._get_parameters(parameters)
-
 
     def _predict(self, paradigm, parameters, weights):
         """Convolve base predictions with HRF, reapplying amplitude/baseline."""

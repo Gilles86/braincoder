@@ -1,0 +1,16 @@
+{
+  "title": "braincoder: A package for fitting encoding models to neural data and decoding stimulus features",
+  "description": "<p><strong>braincoder</strong> is a Python package for fitting encoding models to neural data (currently fMRI) and inverting them to decode stimulus features from brain activity. Built on TensorFlow and TensorFlow Probability, it is GPU-accelerated and supports trial-wise Bayesian decoding. It computes coding-precision profiles numerically from fitted tuning curves, and provides a unified workflow from stimulus handling and HRF convolution to model fitting and decoding.</p>\n\n<h2>Documentation</h2>\n<p>Tutorials, API reference, and gallery examples: <a href=\"https://braincoder-devs.github.io/\">https://braincoder-devs.github.io/</a></p>\n\n<h2>Source code</h2>\n<p><a href=\"https://github.com/Gilles86/braincoder\">https://github.com/Gilles86/braincoder</a></p>\n\n<h2>Citing braincoder</h2>\n<p>If you use braincoder in your research, please cite this Zenodo record (DOI: <a href=\"https://doi.org/10.5281/zenodo.10778413\">10.5281/zenodo.10778413</a>).</p>\n\n<h2>Related software</h2>\n<ul>\n<li><a href=\"https://doi.org/10.5281/zenodo.20008828\">bauer</a> &mdash; companion package for hierarchical Bayesian estimation of perceptual, numerical, and risky choice models in PyMC.</li>\n</ul>",
+  "creators": [
+    {"name": "de Hollander, Gilles", "orcid": "0000-0003-1988-5091", "affiliation": "University of Zurich"},
+    {"name": "Renkert, Maike", "orcid": "0000-0002-4809-4216", "affiliation": "University of Zurich"},
+    {"name": "Knapen, Tomas", "affiliation": "Vrije Universiteit Amsterdam"},
+    {"name": "Ruff, Christian C.", "orcid": "0000-0002-4712-3206", "affiliation": "University of Zurich"}
+  ],
+  "keywords": ["encoding models", "decoding", "fMRI", "bayesian decoding", "population receptive field", "tensorflow", "neural coding", "pRF"],
+  "related_identifiers": [
+    {"identifier": "https://braincoder-devs.github.io/", "relation": "isDocumentedBy", "resource_type": "publication-other"},
+    {"identifier": "https://github.com/Gilles86/braincoder", "relation": "isSupplementedBy", "resource_type": "software"},
+    {"identifier": "10.5281/zenodo.20008828", "relation": "isRelatedTo", "resource_type": "software"}
+  ]
+}

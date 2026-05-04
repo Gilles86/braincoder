@@ -1,5 +1,6 @@
 """Tests for braincoder.stimuli — bijector classes and Stimulus subclasses."""
 import numpy as np
+from keras import ops
 import pandas as pd
 import pytest
 
@@ -50,24 +51,24 @@ class TestSoftplusBijector:
     def test_forward_positive(self):
         b = _Softplus()
         x = np.array([-5.0, 0.0, 5.0], dtype=np.float32)
-        result = np.asarray(b.forward(x))
+        result = ops.convert_to_numpy(b.forward(x))
         assert np.all(result > 0), "Softplus output must be positive"
 
     def test_forward_near_log2_at_zero(self):
         b = _Softplus()
-        result = float(np.asarray(b.forward(np.array([0.0], dtype=np.float32)))[0])
+        result = float(ops.convert_to_numpy(b.forward(np.array([0.0], dtype=np.float32)))[0])
         assert abs(result - np.log(2.0)) < 1e-4
 
     def test_forward_large_x_approx_x(self):
         b = _Softplus()
         x = np.array([20.0], dtype=np.float32)
-        result = float(np.asarray(b.forward(x))[0])
+        result = float(ops.convert_to_numpy(b.forward(x))[0])
         assert abs(result - 20.0) < 1e-3
 
     def test_inverse_roundtrip(self):
         b = _Softplus()
         y = np.array([0.5, 1.0, 2.0, 5.0], dtype=np.float32)
-        reconstructed = np.asarray(b.inverse(np.asarray(b.forward(y))))
+        reconstructed = ops.convert_to_numpy(b.inverse(ops.convert_to_numpy(b.forward(y))))
         np.testing.assert_allclose(reconstructed, y, atol=1e-4)
 
     def test_name_stored(self):
@@ -84,19 +85,19 @@ class TestPeriodicBijector:
     def test_values_in_range_unchanged(self):
         b = _Periodic(low=0.0, high=2 * np.pi)
         x = np.array([0.5, 1.0, np.pi], dtype=np.float32)
-        result = np.asarray(b.forward(x))
+        result = ops.convert_to_numpy(b.forward(x))
         np.testing.assert_allclose(result, x, atol=1e-6)
 
     def test_wraps_above_high(self):
         b = _Periodic(low=0.0, high=2 * np.pi)
         x = np.array([2 * np.pi + 0.5], dtype=np.float32)
-        result = float(np.asarray(b.forward(x))[0])
+        result = float(ops.convert_to_numpy(b.forward(x))[0])
         assert abs(result - 0.5) < 1e-5
 
     def test_wraps_below_low(self):
         b = _Periodic(low=0.0, high=2 * np.pi)
         x = np.array([-0.5], dtype=np.float32)
-        result = float(np.asarray(b.forward(x))[0])
+        result = float(ops.convert_to_numpy(b.forward(x))[0])
         assert abs(result - (2 * np.pi - 0.5)) < 1e-5
 
     def test_inverse_is_identity(self):

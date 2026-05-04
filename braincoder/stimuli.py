@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import logging
+from keras import ops
 
 try:
     import keras.ops as _keras_ops
@@ -108,9 +109,9 @@ class Stimulus(object):
         if self.bijectors is not None:
 
             if isinstance(self.bijectors, list):
-                stimulus = np.stack([np.asarray(bijector.forward(stimulus[:, ix])) for ix, bijector in enumerate(self.bijectors)], axis=1)
+                stimulus = np.stack([ops.convert_to_numpy(bijector.forward(stimulus[:, ix])) for ix, bijector in enumerate(self.bijectors)], axis=1)
             else:
-                stimulus = np.asarray(self.bijectors.forward(stimulus))
+                stimulus = ops.convert_to_numpy(self.bijectors.forward(stimulus))
 
         return stimulus.astype(np.float32)
 

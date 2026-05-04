@@ -1,5 +1,7 @@
 # Braincoder
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10778413.svg)](https://doi.org/10.5281/zenodo.10778413)
+
 **Braincoder** is a package to fit encoding models to neural data (for now fMRI) and
 to then *invert* those models to decode stimulus information from neural data. It
 wraps stimulus handling, model definition, HRF convolution, and optimization into a
