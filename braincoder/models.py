@@ -2229,11 +2229,16 @@ class AttentionFieldPRF2D(GaussianPRF2D):
                 "AttentionFieldPRF2D requires `ring_positions` of shape "
                 "(n_conditions, 2).")
 
-        if mode not in ('suppression', 'attraction'):
+        if mode not in ('suppression', 'attraction', 'signed'):
             raise ValueError(
-                f"mode must be 'suppression' or 'attraction', got {mode!r}")
+                f"mode must be 'suppression', 'attraction', or 'signed', "
+                f"got {mode!r}")
         self.mode = mode
+        # 'signed' lets the optimizer pick attraction or suppression freely
+        # via the SIGN of g_HP / g_LP (gains are no longer softplus-bounded).
+        # We absorb the overall sign into the gains, so set _sign = +1.
         self._sign = -1.0 if mode == 'suppression' else +1.0
+        self._signed_gains = (mode == 'signed')
 
         self.condition_indicator = np.asarray(condition_indicator, dtype=np.float32)
         self.ring_positions = np.asarray(ring_positions, dtype=np.float32)
@@ -2339,7 +2344,15 @@ class AttentionFieldPRF2D(GaussianPRF2D):
     @tf.function
     def _transform_parameters_forward(self, parameters):
         # Standard PRF: x, y, softplus(sd), baseline, amplitude.
-        # AF: softplus(sigma_AF), softplus(g_HP), softplus(g_LP).
+        # AF: softplus(sigma_AF), then for g_HP / g_LP either softplus
+        # (positive-only, attraction or suppression mode) or identity
+        # (signed mode — gains may be negative).
+        if self._signed_gains:
+            g_hp = parameters[:, 6][:, tf.newaxis]
+            g_lp = parameters[:, 7][:, tf.newaxis]
+        else:
+            g_hp = tf.math.softplus(parameters[:, 6][:, tf.newaxis])
+            g_lp = tf.math.softplus(parameters[:, 7][:, tf.newaxis])
         return tf.concat([
             parameters[:, 0][:, tf.newaxis],                              # x
             parameters[:, 1][:, tf.newaxis],                              # y
@@ -2347,12 +2360,20 @@ class AttentionFieldPRF2D(GaussianPRF2D):
             parameters[:, 3][:, tf.newaxis],                              # baseline
             parameters[:, 4][:, tf.newaxis],                              # amplitude
             tf.math.softplus(parameters[:, 5][:, tf.newaxis]),            # sigma_AF
-            tf.math.softplus(parameters[:, 6][:, tf.newaxis]),            # g_HP
-            tf.math.softplus(parameters[:, 7][:, tf.newaxis]),            # g_LP
+            g_hp,                                                         # g_HP
+            g_lp,                                                         # g_LP
         ], axis=1)
 
     @tf.function
     def _transform_parameters_backward(self, parameters):
+        if self._signed_gains:
+            g_hp_unb = parameters[:, 6][:, tf.newaxis]
+            g_lp_unb = parameters[:, 7][:, tf.newaxis]
+        else:
+            g_hp_unb = tfp.math.softplus_inverse(
+                parameters[:, 6][:, tf.newaxis])
+            g_lp_unb = tfp.math.softplus_inverse(
+                parameters[:, 7][:, tf.newaxis])
         return tf.concat([
             parameters[:, 0][:, tf.newaxis],
             parameters[:, 1][:, tf.newaxis],
@@ -2360,8 +2381,8 @@ class AttentionFieldPRF2D(GaussianPRF2D):
             parameters[:, 3][:, tf.newaxis],
             parameters[:, 4][:, tf.newaxis],
             tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
-            tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis]),
-            tfp.math.softplus_inverse(parameters[:, 7][:, tf.newaxis]),
+            g_hp_unb,
+            g_lp_unb,
         ], axis=1)
 
 
