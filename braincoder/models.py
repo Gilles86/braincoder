@@ -2141,6 +2141,290 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
         return pred_convolved
 
 
+class AttentionFieldPRF2D(GaussianPRF2D):
+    """Attention-Field-aware 2D Gaussian PRF.
+
+    Implements a Reynolds & Heeger 2009 / Sumiya AF+ -style joint model in
+    which each voxel's stimulus-drive PRF (a Gaussian centered at (x, y)
+    with size ``sd``) is multiplied at every grid location by an
+    attention-field modulation that depends on the *current condition*.
+
+    For ``n_conditions`` ring positions ``ring_positions`` (each (rx, ry))
+    and a per-time-point one-hot ``condition_indicator`` (n_timepoints x
+    n_conditions) selecting which ring position is the high-probability
+    (HP) attended/suppressed location, the modulation field on the
+    stimulus grid is
+
+        mod_c(g) = 1 + sign · ( g_HP · A_{H_c}(g)
+                              + g_LP · Σ_{ℓ ≠ H_c} A_ℓ(g) )
+
+    where each ``A_ℓ`` is a Gaussian on the grid centered at ring position
+    ℓ with shared σ_AF (peak-normalized to 1, so ``g_HP/g_LP`` directly
+    parameterize the peak modulation contribution at each ring location).
+
+    The forward pass per timepoint t with condition c(t) is
+
+        prediction_t,v = ∫ paradigm_t(g) · S_v(g) · mod_{c(t)}(g) dg
+
+    With ``mode='attraction'`` the modulation has positive sign (Sumiya
+    AF+ analog: voxels are pulled toward the attended locus).
+    With ``mode='suppression'`` the sign is flipped, modeling the retsupp
+    history-prior result where voxels are pushed *away* from the HP
+    distractor location.
+
+    Parameters
+    ----------
+    grid_coordinates, paradigm, hrf_model, ...
+        Same as :class:`GaussianPRF2DWithHRF` (this class is intended to
+        be combined with HRF via :class:`AttentionFieldPRF2DWithHRF`).
+    condition_indicator : array-like, shape (n_timepoints, n_conditions)
+        One-hot encoding of which ring position is the HP at each TR.
+        Rows that are all zero (e.g. baseline blocks) are treated as
+        having no attention modulation (mod = 1).
+    ring_positions : array-like, shape (n_conditions, 2)
+        Cartesian (x, y) positions of the four distractor ring locations.
+    mode : {'suppression', 'attraction'}
+        Sign of the modulation (default 'suppression', matching retsupp).
+
+    Per-voxel parameters
+    --------------------
+    ``x``, ``y``, ``sd``, ``baseline``, ``amplitude``  — standard PRF.
+
+    Shared (across all voxels) parameters
+    -------------------------------------
+    ``sigma_AF`` : positive
+        Width of every attention-field Gaussian (shared across all four
+        ring positions; the user can set ``free_per_condition_g=False``
+        and use ``ParameterFitter(..., shared_pars=['sigma_AF', 'g_HP',
+        'g_LP'])`` to enforce sharing during fitting).
+    ``g_HP`` : positive
+        Modulation amplitude at the HP location.
+    ``g_LP`` : positive
+        Modulation amplitude at each of the 3 LP (non-HP) ring positions.
+
+    Notes
+    -----
+    All four ring positions are present in every condition, only their
+    *amplitudes* differ between HP (``g_HP``) and LP (``g_LP``). This is
+    the same model form as the existing ``af_model.fit_four_af_competing``
+    in retsupp, but evaluated jointly at the BOLD signal level rather
+    than post-hoc on conditionwise PRF parameters.
+    """
+
+    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude',
+                        'sigma_AF', 'g_HP', 'g_LP']
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 weights=None, omega=None,
+                 positive_image_values_only=True,
+                 verbosity=logging.INFO, **kwargs):
+        if condition_indicator is None:
+            raise ValueError(
+                "AttentionFieldPRF2D requires a `condition_indicator` "
+                "array of shape (n_timepoints, n_conditions).")
+        if ring_positions is None:
+            raise ValueError(
+                "AttentionFieldPRF2D requires `ring_positions` of shape "
+                "(n_conditions, 2).")
+
+        if mode not in ('suppression', 'attraction'):
+            raise ValueError(
+                f"mode must be 'suppression' or 'attraction', got {mode!r}")
+        self.mode = mode
+        self._sign = -1.0 if mode == 'suppression' else +1.0
+
+        self.condition_indicator = np.asarray(condition_indicator, dtype=np.float32)
+        self.ring_positions = np.asarray(ring_positions, dtype=np.float32)
+        self.n_conditions = self.ring_positions.shape[0]
+
+        # Per condition c, ring index ℓ:  is_hp_per_cond_ring[c, ℓ] == 1 iff ℓ == c
+        # (we assume the c-th condition's HP is the c-th ring position; rearrange
+        # rows of `condition_indicator` accordingly when constructing it).
+        self._is_hp = np.eye(self.n_conditions, dtype=np.float32)
+
+        super().__init__(
+            grid_coordinates=grid_coordinates, paradigm=paradigm, data=data,
+            parameters=parameters, weights=weights, omega=omega,
+            positive_image_values_only=positive_image_values_only,
+            verbosity=verbosity, **kwargs)
+
+        # Cache as TF constants for speed.
+        self._tf_condition_indicator = tf.constant(self.condition_indicator,
+                                                   dtype=tf.float32)
+        self._tf_ring_positions = tf.constant(self.ring_positions, dtype=tf.float32)
+        self._tf_is_hp = tf.constant(self._is_hp, dtype=tf.float32)
+        self._tf_sign = tf.constant(self._sign, dtype=tf.float32)
+
+    @tf.function
+    def _attention_modulation(self, parameters):
+        """Compute the per-condition modulation field on the stimulus grid.
+
+        Returns
+        -------
+        mod : tf.Tensor, shape (n_batches, n_voxels, n_conditions, n_grid)
+            Modulation factor at each grid location for each condition.
+            Even though this depends on `g_HP`, `g_LP`, `sigma_AF` only —
+            which are shared across voxels in our intended fitting setup
+            — we keep it per-voxel-per-batch to support fully-flexible
+            fits where these can vary per voxel.
+        """
+        # Grid: (n_grid, 2).
+        gx = self._grid_coordinates[:, 0][tf.newaxis, tf.newaxis, tf.newaxis, :]  # (1,1,1,G)
+        gy = self._grid_coordinates[:, 1][tf.newaxis, tf.newaxis, tf.newaxis, :]
+
+        sigma_AF = parameters[:, :, 5, tf.newaxis, tf.newaxis]   # (B,V,1,1)
+        g_HP = parameters[:, :, 6, tf.newaxis, tf.newaxis]
+        g_LP = parameters[:, :, 7, tf.newaxis, tf.newaxis]
+
+        # Ring positions: (n_conditions, 2)  ->  (1,1,n_C,1)
+        rx = self._tf_ring_positions[:, 0][tf.newaxis, tf.newaxis, :, tf.newaxis]
+        ry = self._tf_ring_positions[:, 1][tf.newaxis, tf.newaxis, :, tf.newaxis]
+
+        # Per-ring Gaussian on the grid (peak-normalized to 1).
+        # Shape: (1, 1, n_conditions, n_grid)  after broadcasting with sigma_AF.
+        # Note: A_ℓ depends on sigma_AF (B,V,1,1) so result is (B,V,n_C,n_grid).
+        diff_sq = (gx - rx) ** 2 + (gy - ry) ** 2
+        A = tf.exp(-diff_sq / (2.0 * sigma_AF ** 2))  # (B,V,n_C_ring,n_grid)
+
+        # For each condition C in n_conditions:
+        #   mod_C(g) = 1 + sign * ( g_HP * A_{H_C}(g) + g_LP * Σ_{ℓ ≠ H_C} A_ℓ(g) )
+        # is_hp[C, ℓ]: 1 if ℓ is HP for condition C, 0 otherwise.
+        # Build a per-condition weight: w[C, ℓ] = g_HP if HP else g_LP.
+        # Then mod_C(g) = 1 + sign * Σ_ℓ w[C, ℓ] · A_ℓ(g).
+        # Shape: (B,V,n_C_cond,n_C_ring)
+        is_hp = self._tf_is_hp[tf.newaxis, tf.newaxis, :, :]
+        w = is_hp * g_HP + (1.0 - is_hp) * g_LP
+
+        # Σ_ℓ w[C, ℓ] · A_ℓ(g): einsum over ring index.
+        # A: (B,V,L,G), w: (B,V,C,L)  ->  (B,V,C,G)
+        modulation_sum = tf.einsum('bvcl,bvlg->bvcg', w, A)
+        mod = 1.0 + self._tf_sign * modulation_sum  # (B,V,n_C,n_G)
+        # Clamp to be non-negative (predictions of suppressed bar should
+        # not flip sign; pure attraction can never go below 0 anyway).
+        mod = tf.maximum(mod, 0.0)
+        return mod
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # paradigm: n_batches x n_timepoints x n_stimulus_features (n_grid)
+        # parameters: n_batches x n_voxels x n_parameters
+
+        # Per-voxel SD-pRF on the grid: (B, V, G).
+        rf = self._get_rf(self.grid_coordinates, parameters)
+
+        # Per-condition modulation field on the grid: (B, V, n_C, G).
+        mod = self._attention_modulation(parameters)
+
+        # Effective per-condition RF: (B, V, n_C, G).
+        # rf: (B, V, G).
+        eff_rf_per_cond = rf[:, :, tf.newaxis, :] * mod
+
+        # Per-condition predictions on paradigm.
+        # paradigm: (B, T, G); eff_rf_per_cond: (B, V, n_C, G).
+        # partial[B, T, V, C] = Σ_g paradigm[B, T, g] · eff_rf_per_cond[B, V, C, g]
+        partial = tf.einsum('btg,bvcg->btvc', paradigm, eff_rf_per_cond)
+
+        # Per-time-point selection of condition: (T, n_C).
+        # result[B, T, V] = Σ_c condition_indicator[T, c] · partial[B, T, V, c]
+        ci = self._tf_condition_indicator       # (T, n_C)
+        result = tf.einsum('tc,btvc->btv', ci, partial)
+
+        baseline = parameters[:, tf.newaxis, :, 3]
+        result = result + baseline
+
+        return result
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        # Standard PRF: x, y, softplus(sd), baseline, amplitude.
+        # AF: softplus(sigma_AF), softplus(g_HP), softplus(g_LP).
+        return tf.concat([
+            parameters[:, 0][:, tf.newaxis],                              # x
+            parameters[:, 1][:, tf.newaxis],                              # y
+            tf.math.softplus(parameters[:, 2][:, tf.newaxis]),            # sd
+            parameters[:, 3][:, tf.newaxis],                              # baseline
+            parameters[:, 4][:, tf.newaxis],                              # amplitude
+            tf.math.softplus(parameters[:, 5][:, tf.newaxis]),            # sigma_AF
+            tf.math.softplus(parameters[:, 6][:, tf.newaxis]),            # g_HP
+            tf.math.softplus(parameters[:, 7][:, tf.newaxis]),            # g_LP
+        ], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        return tf.concat([
+            parameters[:, 0][:, tf.newaxis],
+            parameters[:, 1][:, tf.newaxis],
+            tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
+            parameters[:, 3][:, tf.newaxis],
+            parameters[:, 4][:, tf.newaxis],
+            tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
+            tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis]),
+            tfp.math.softplus_inverse(parameters[:, 7][:, tf.newaxis]),
+        ], axis=1)
+
+
+class AttentionFieldPRF2DWithHRF(HRFEncodingModel, AttentionFieldPRF2D):
+    """HRF-convolved version of :class:`AttentionFieldPRF2D`.
+
+    Use this for fitting to BOLD time-courses. The set of free parameters
+    is::
+
+        ['x', 'y', 'sd', 'baseline', 'amplitude',
+         'sigma_AF', 'g_HP', 'g_LP'] (+ HRF parameters if flexible)
+
+    During joint AF + PRF fitting, pass
+    ``shared_pars=['sigma_AF', 'g_HP', 'g_LP']`` to the
+    :class:`braincoder.optimize.ParameterFitter`. ``x``, ``y``, ``sd``,
+    ``baseline``, ``amplitude`` remain per-voxel.
+    """
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 positive_image_values_only=True,
+                 weights=None, hrf_model=None,
+                 flexible_hrf_parameters=False,
+                 verbosity=logging.INFO, **kwargs):
+
+        AttentionFieldPRF2D.__init__(
+            self, grid_coordinates=grid_coordinates, paradigm=paradigm,
+            data=data, parameters=parameters,
+            condition_indicator=condition_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, verbosity=verbosity,
+            positive_image_values_only=positive_image_values_only, **kwargs)
+
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model,
+                                  flexible_hrf_parameters=flexible_hrf_parameters,
+                                  **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = AttentionFieldPRF2D._transform_parameters_forward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return AttentionFieldPRF2D._transform_parameters_forward(self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = AttentionFieldPRF2D._transform_parameters_backward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return AttentionFieldPRF2D._transform_parameters_backward(self, parameters)
+
+
 class DiscreteModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
