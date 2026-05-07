@@ -2692,6 +2692,286 @@ class DynamicAttentionFieldPRF2DWithHRF(HRFEncodingModel,
                 self, parameters)
 
 
+class DynamicAttentionFieldPRF2D_v2(AttentionFieldPRF2D):
+    """Dynamic Attention-Field-aware 2D Gaussian PRF (v2: shared σ, split gain).
+
+    Refactor of :class:`DynamicAttentionFieldPRF2D` motivated by the
+    σ_AF/σ_dyn degeneracy and the desire to test sustained vs phasic
+    HP-vs-LP modulation independently.
+
+    Differences from v1:
+    - The dynamic-AF Gaussian uses the SAME ``sigma_AF`` as the sustained
+      term (biologically the AF size shouldn't depend on whether the
+      modulation is sustained or phasic), so ``sigma_dyn`` is dropped.
+    - The single ``g_dyn`` is split into two gains:
+      * ``g_HP_dyn`` — applied when a distractor is on at the run's HP
+        location.
+      * ``g_LP_dyn`` — applied when a distractor is on at any of the 3
+        LP (non-HP) ring locations.
+
+    The full forward modulation is
+
+        M(g, t) = 1 + sign · [
+              g_HP     · A_{H_run(t)}(g)
+            + g_LP     · Σ_{ℓ ≠ H_run(t)} A_ℓ(g)
+            + g_HP_dyn · d_{H_run(t)}(t) · A_{H_run(t)}(g)
+            + g_LP_dyn · Σ_{ℓ ≠ H_run(t)} d_ℓ(t) · A_ℓ(g)
+        ]
+
+    where ``A_ℓ`` is a unit-peak Gaussian on the grid centered at ring
+    position ℓ with shared width ``sigma_AF`` (SAME σ as the sustained
+    term — this is the key v2 change), and ``d_ℓ(t) ∈ [0,1]`` is the
+    per-TR fraction-of-distractor-on at ring ℓ (provided as
+    ``dynamic_indicator``).
+
+    Per-voxel parameters
+    --------------------
+    ``x``, ``y``, ``sd``, ``baseline``, ``amplitude``  — standard PRF.
+
+    Shared (across all voxels) parameters
+    -------------------------------------
+    ``sigma_AF`` : positive
+        Width of every attention-field Gaussian — sustained AND dynamic.
+    ``g_HP``, ``g_LP`` : sustained gains (same as v1).
+    ``g_HP_dyn``, ``g_LP_dyn`` : per-TR phasic gains, applied to the
+        per-ring dynamic indicator. Sign convention follows ``mode``
+        (signed = identity / softplus otherwise), as for the sustained
+        gains.
+    """
+
+    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude',
+                        'sigma_AF', 'g_HP', 'g_LP',
+                        'g_HP_dyn', 'g_LP_dyn']
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 dynamic_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 weights=None, omega=None,
+                 positive_image_values_only=True,
+                 verbosity=logging.INFO, **kwargs):
+        if dynamic_indicator is None:
+            raise ValueError(
+                "DynamicAttentionFieldPRF2D_v2 requires a `dynamic_indicator` "
+                "array of shape (n_timepoints, n_ring_positions).")
+
+        super().__init__(
+            grid_coordinates=grid_coordinates, paradigm=paradigm, data=data,
+            parameters=parameters, condition_indicator=condition_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, omega=omega,
+            positive_image_values_only=positive_image_values_only,
+            verbosity=verbosity, **kwargs)
+
+        self.dynamic_indicator = np.asarray(dynamic_indicator,
+                                            dtype=np.float32)
+        if self.dynamic_indicator.shape[1] != self.n_conditions:
+            raise ValueError(
+                f"dynamic_indicator has {self.dynamic_indicator.shape[1]} "
+                f"channels but ring_positions has {self.n_conditions}; "
+                "channels must align with ring_positions.")
+        self._tf_dynamic_indicator = tf.constant(self.dynamic_indicator,
+                                                 dtype=tf.float32)
+
+    @tf.function
+    def _attention_modulation_dynamic_v2(self, parameters):
+        """Per-TR dynamic-AF modulation field on the stimulus grid (v2).
+
+        Returns
+        -------
+        mod_dyn : tf.Tensor, shape (n_timepoints, n_grid)
+            The per-TR sum
+
+                g_HP_dyn · Σ_ℓ ( d_ℓ(t) · is_hp[t, ℓ] ) · A_ℓ(g)
+              + g_LP_dyn · Σ_ℓ ( d_ℓ(t) · (1 − is_hp[t, ℓ]) ) · A_ℓ(g)
+
+            BEFORE the sign and the +1 baseline are applied, where
+            ``is_hp[t, ℓ] = condition_indicator[t, ℓ]`` (since condition
+            c is encoded one-hot and HP_c is ring c by construction).
+
+        Notes
+        -----
+        ``sigma_AF``, ``g_HP_dyn``, ``g_LP_dyn`` are shared across voxels
+        in our intended fitting setup, so we evaluate this with
+        parameters from the first batch / first voxel only — yielding a
+        (T, G) tensor that we can broadcast cheaply into the predict
+        pass. We re-use the SAME ``sigma_AF`` as the sustained term
+        (parameter index 5), NOT a separate ``sigma_dyn``.
+        """
+        # Take shared parameters from the first batch / first voxel.
+        sigma_AF = parameters[0, 0, 5]                     # scalar
+        g_HP_dyn = parameters[0, 0, 8]                     # scalar
+        g_LP_dyn = parameters[0, 0, 9]                     # scalar
+
+        # Grid: (n_grid, 2).
+        gx = self._grid_coordinates[:, 0][tf.newaxis, :]   # (1, G)
+        gy = self._grid_coordinates[:, 1][tf.newaxis, :]
+
+        # Ring positions: (n_C, 2)  ->  (n_C, 1).
+        rx = self._tf_ring_positions[:, 0][:, tf.newaxis]
+        ry = self._tf_ring_positions[:, 1][:, tf.newaxis]
+
+        # Per-ring AF Gaussian (peak-normalized to 1): (n_C, G).
+        # Uses sigma_AF, NOT a separate sigma_dyn.
+        diff_sq = (gx - rx) ** 2 + (gy - ry) ** 2
+        A = tf.exp(-diff_sq / (2.0 * sigma_AF ** 2))       # (n_C, G)
+
+        # Per-TR per-ring "is HP" mask: (T, n_C).
+        # condition_indicator already one-hot encodes the HP ring per TR.
+        is_hp_per_tr = self._tf_condition_indicator        # (T, n_C)
+
+        # d_ℓ(t): (T, n_C). Per-TR per-ring distractor on-fraction.
+        d = self._tf_dynamic_indicator                     # (T, n_C)
+
+        # Split into HP-dyn and LP-dyn weights per (t, ℓ).
+        w_hp = d * is_hp_per_tr                            # (T, n_C)
+        w_lp = d * (1.0 - is_hp_per_tr)                    # (T, n_C)
+
+        # Σ_ℓ w_hp[t, ℓ] · A_ℓ(g) and Σ_ℓ w_lp[t, ℓ] · A_ℓ(g).
+        # Both -> (T, G).
+        field_hp = tf.einsum('tl,lg->tg', w_hp, A)
+        field_lp = tf.einsum('tl,lg->tg', w_lp, A)
+
+        return g_HP_dyn * field_hp + g_LP_dyn * field_lp   # (T, G)
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # paradigm: (B, T, G)
+        # parameters: (B, V, n_parameters)
+
+        # Per-voxel SD-pRF on the grid: (B, V, G).
+        rf = self._get_rf(self.grid_coordinates, parameters)
+
+        # Sustained per-condition modulation field on the grid:
+        # (B, V, n_C, G). Identical to the parent / v1 class.
+        mod_sustained = self._attention_modulation(parameters)
+
+        # Effective per-condition RF (sustained part): (B, V, n_C, G).
+        eff_rf_per_cond = rf[:, :, tf.newaxis, :] * mod_sustained
+
+        # Sustained partial: (B, T, V) via condition_indicator selection.
+        partial = tf.einsum('btg,bvcg->btvc', paradigm, eff_rf_per_cond)
+        ci = self._tf_condition_indicator       # (T, n_C)
+        sustained = tf.einsum('tc,btvc->btv', ci, partial)
+
+        # Dynamic per-TR modulation: (T, G), with HP and LP split.
+        mod_dyn = self._attention_modulation_dynamic_v2(parameters)
+
+        # Dynamic partial: (B, T, V).
+        # paradigm: (B, T, G); mod_dyn: (T, G); rf: (B, V, G).
+        # We want sign · Σ_g paradigm[B, T, g] · mod_dyn[T, g] · rf[B, V, g].
+        # mod_dyn is the *additive* dynamic modulation BEFORE sign and +1
+        # baseline; the +1 baseline is already implicit in the sustained
+        # term (which uses the full M_C(g) including the +1).
+        sign = self._tf_sign
+        eff_paradigm_dyn = paradigm * mod_dyn[tf.newaxis, :, :]   # (B, T, G)
+        dynamic = sign * tf.einsum('btg,bvg->btv', eff_paradigm_dyn, rf)
+
+        result = sustained + dynamic
+
+        # Note: baseline was already added inside the parent's
+        # _basis_predictions logic — but we don't call it. So add it now.
+        baseline = parameters[:, tf.newaxis, :, 3]
+        result = result + baseline
+
+        return result
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        # Re-use parent's transform for the first 8 params (x, y, sd,
+        # baseline, amplitude, sigma_AF, g_HP, g_LP), then add sign-aware
+        # g_HP_dyn and g_LP_dyn. NO sigma_dyn.
+        base = AttentionFieldPRF2D._transform_parameters_forward(
+            self, parameters[:, :8])
+        if self._signed_gains:
+            g_hp_dyn = parameters[:, 8][:, tf.newaxis]
+            g_lp_dyn = parameters[:, 9][:, tf.newaxis]
+        else:
+            g_hp_dyn = tf.math.softplus(parameters[:, 8][:, tf.newaxis])
+            g_lp_dyn = tf.math.softplus(parameters[:, 9][:, tf.newaxis])
+        return tf.concat([base, g_hp_dyn, g_lp_dyn], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        base = AttentionFieldPRF2D._transform_parameters_backward(
+            self, parameters[:, :8])
+        if self._signed_gains:
+            g_hp_dyn_unb = parameters[:, 8][:, tf.newaxis]
+            g_lp_dyn_unb = parameters[:, 9][:, tf.newaxis]
+        else:
+            g_hp_dyn_unb = tfp.math.softplus_inverse(
+                parameters[:, 8][:, tf.newaxis])
+            g_lp_dyn_unb = tfp.math.softplus_inverse(
+                parameters[:, 9][:, tf.newaxis])
+        return tf.concat([base, g_hp_dyn_unb, g_lp_dyn_unb], axis=1)
+
+
+class DynamicAttentionFieldPRF2DWithHRF_v2(HRFEncodingModel,
+                                           DynamicAttentionFieldPRF2D_v2):
+    """HRF-convolved version of :class:`DynamicAttentionFieldPRF2D_v2`.
+
+    The set of free parameters is::
+
+        ['x', 'y', 'sd', 'baseline', 'amplitude',
+         'sigma_AF', 'g_HP', 'g_LP', 'g_HP_dyn', 'g_LP_dyn']
+        (+ HRF parameters if flexible)
+
+    During joint AF + PRF fitting, pass
+
+        shared_pars=['sigma_AF', 'g_HP', 'g_LP', 'g_HP_dyn', 'g_LP_dyn']
+
+    to the :class:`braincoder.optimize.ParameterFitter`.
+    """
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 dynamic_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 positive_image_values_only=True,
+                 weights=None, hrf_model=None,
+                 flexible_hrf_parameters=False,
+                 verbosity=logging.INFO, **kwargs):
+
+        DynamicAttentionFieldPRF2D_v2.__init__(
+            self, grid_coordinates=grid_coordinates, paradigm=paradigm,
+            data=data, parameters=parameters,
+            condition_indicator=condition_indicator,
+            dynamic_indicator=dynamic_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, verbosity=verbosity,
+            positive_image_values_only=positive_image_values_only, **kwargs)
+
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model,
+                                  flexible_hrf_parameters=flexible_hrf_parameters,
+                                  **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = DynamicAttentionFieldPRF2D_v2._transform_parameters_forward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DynamicAttentionFieldPRF2D_v2._transform_parameters_forward(
+                self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = DynamicAttentionFieldPRF2D_v2._transform_parameters_backward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DynamicAttentionFieldPRF2D_v2._transform_parameters_backward(
+                self, parameters)
+
+
 class DiscreteModel(EncodingModel):
 
     def __init__(self, paradigm=None, data=None, parameters=None,
