@@ -2705,6 +2705,494 @@ class DoGAttentionFieldPRF2DWithHRF(HRFEncodingModel, DoGAttentionFieldPRF2D):
                 self, parameters)
 
 
+class DoGDynamicAttentionFieldPRF2D_v2(DoGAttentionFieldPRF2D):
+    """Dynamic Attention-Field-aware DoG-PRF (v2: shared σ, split dyn gain).
+
+    DoG-voxel-kernel counterpart to
+    :class:`DynamicAttentionFieldPRF2D_v2`. The per-voxel stimulus-drive
+    receptive field is a Difference-of-Gaussians (centre + surround), and
+    the AF modulation is the same as v2: a single shared ``sigma_AF`` for
+    both the sustained and dynamic Gaussians, with the per-TR phasic gain
+    split into ``g_HP_dyn`` and ``g_LP_dyn``.
+
+    Per-voxel parameters (7)
+    ------------------------
+    ``x``, ``y``, ``sd``, ``baseline``, ``amplitude``,
+    ``srf_amplitude``, ``srf_size`` — same as
+    :class:`DifferenceOfGaussiansPRF2D`.
+
+    Shared (across all voxels) parameters (5)
+    -----------------------------------------
+    ``sigma_AF``, ``g_HP``, ``g_LP``, ``g_HP_dyn``, ``g_LP_dyn``.
+
+    Total: 12 parameters per voxel (7 per-voxel + 5 shared).
+
+    See :class:`DynamicAttentionFieldPRF2D_v2` for the modulation
+    formula. Indices below shift by +2 versus the Gaussian v2 because
+    ``srf_amplitude`` and ``srf_size`` sit at positions 5, 6 between
+    ``amplitude`` and ``sigma_AF``.
+    """
+
+    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude',
+                        'srf_amplitude', 'srf_size',
+                        'sigma_AF', 'g_HP', 'g_LP',
+                        'g_HP_dyn', 'g_LP_dyn']
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 dynamic_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 weights=None, omega=None,
+                 positive_image_values_only=True,
+                 verbosity=logging.INFO, **kwargs):
+        if dynamic_indicator is None:
+            raise ValueError(
+                "DoGDynamicAttentionFieldPRF2D_v2 requires a "
+                "`dynamic_indicator` array of shape "
+                "(n_timepoints, n_ring_positions).")
+
+        super().__init__(
+            grid_coordinates=grid_coordinates, paradigm=paradigm, data=data,
+            parameters=parameters, condition_indicator=condition_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, omega=omega,
+            positive_image_values_only=positive_image_values_only,
+            verbosity=verbosity, **kwargs)
+
+        self.dynamic_indicator = np.asarray(dynamic_indicator,
+                                            dtype=np.float32)
+        if self.dynamic_indicator.shape[1] != self.n_conditions:
+            raise ValueError(
+                f"dynamic_indicator has {self.dynamic_indicator.shape[1]} "
+                f"channels but ring_positions has {self.n_conditions}; "
+                "channels must align with ring_positions.")
+        self._tf_dynamic_indicator = tf.constant(self.dynamic_indicator,
+                                                 dtype=tf.float32)
+
+    @tf.function
+    def _attention_modulation_dynamic_v2(self, parameters):
+        """Per-TR dynamic-AF modulation field on the stimulus grid (v2, DoG).
+
+        Identical formula to
+        :meth:`DynamicAttentionFieldPRF2D_v2._attention_modulation_dynamic_v2`,
+        but parameter indices shift by +2:
+            sigma_AF -> 7,  g_HP_dyn -> 10,  g_LP_dyn -> 11.
+        """
+        # Take shared parameters from the first batch / first voxel.
+        sigma_AF = parameters[0, 0, 7]                     # scalar
+        g_HP_dyn = parameters[0, 0, 10]                    # scalar
+        g_LP_dyn = parameters[0, 0, 11]                    # scalar
+
+        # Grid: (n_grid, 2).
+        gx = self._grid_coordinates[:, 0][tf.newaxis, :]   # (1, G)
+        gy = self._grid_coordinates[:, 1][tf.newaxis, :]
+
+        # Ring positions: (n_C, 2)  ->  (n_C, 1).
+        rx = self._tf_ring_positions[:, 0][:, tf.newaxis]
+        ry = self._tf_ring_positions[:, 1][:, tf.newaxis]
+
+        # Per-ring AF Gaussian (peak-normalized to 1): (n_C, G).
+        # Uses sigma_AF, NOT a separate sigma_dyn.
+        diff_sq = (gx - rx) ** 2 + (gy - ry) ** 2
+        A = tf.exp(-diff_sq / (2.0 * sigma_AF ** 2))       # (n_C, G)
+
+        # Per-TR per-ring "is HP" mask: (T, n_C).
+        is_hp_per_tr = self._tf_condition_indicator        # (T, n_C)
+
+        # d_ℓ(t): (T, n_C). Per-TR per-ring distractor on-fraction.
+        d = self._tf_dynamic_indicator                     # (T, n_C)
+
+        # Split into HP-dyn and LP-dyn weights per (t, ℓ).
+        w_hp = d * is_hp_per_tr                            # (T, n_C)
+        w_lp = d * (1.0 - is_hp_per_tr)                    # (T, n_C)
+
+        # Σ_ℓ w_hp[t, ℓ] · A_ℓ(g) and Σ_ℓ w_lp[t, ℓ] · A_ℓ(g).
+        field_hp = tf.einsum('tl,lg->tg', w_hp, A)
+        field_lp = tf.einsum('tl,lg->tg', w_lp, A)
+
+        return g_HP_dyn * field_hp + g_LP_dyn * field_lp   # (T, G)
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # paradigm: (B, T, G)
+        # parameters: (B, V, n_parameters=12)
+
+        # Per-voxel DoG receptive field on the grid: (B, V, G).
+        # Inherited from DifferenceOfGaussiansPRF2D — reads parameters
+        # 0..6 (x, y, sd, baseline, amplitude, srf_amplitude, srf_size).
+        rf = self._get_rf(self.grid_coordinates, parameters)
+
+        # Sustained per-condition AF modulation field on the grid:
+        # (B, V, n_C, G). Parent (DoGAttentionFieldPRF2D) reads
+        # sigma_AF/g_HP/g_LP at indices 7, 8, 9.
+        mod_sustained = self._attention_modulation(parameters)
+
+        # Effective per-condition RF (sustained part): (B, V, n_C, G).
+        eff_rf_per_cond = rf[:, :, tf.newaxis, :] * mod_sustained
+
+        # Sustained partial: (B, T, V) via condition_indicator selection.
+        partial = tf.einsum('btg,bvcg->btvc', paradigm, eff_rf_per_cond)
+        ci = self._tf_condition_indicator       # (T, n_C)
+        sustained = tf.einsum('tc,btvc->btv', ci, partial)
+
+        # Dynamic per-TR modulation: (T, G), HP/LP split, shared sigma_AF.
+        mod_dyn = self._attention_modulation_dynamic_v2(parameters)
+
+        # Dynamic partial: (B, T, V).
+        sign = self._tf_sign
+        eff_paradigm_dyn = paradigm * mod_dyn[tf.newaxis, :, :]   # (B, T, G)
+        dynamic = sign * tf.einsum('btg,bvg->btv', eff_paradigm_dyn, rf)
+
+        result = sustained + dynamic
+
+        # Add baseline (parent _basis_predictions added it but we don't
+        # call it).
+        baseline = parameters[:, tf.newaxis, :, 3]
+        result = result + baseline
+
+        return result
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        # First 10: DoG + sustained-AF transforms (delegate to parent).
+        # Then add sign-aware g_HP_dyn / g_LP_dyn (no sigma_dyn in v2).
+        base = DoGAttentionFieldPRF2D._transform_parameters_forward(
+            self, parameters[:, :10])
+        if self._signed_gains:
+            g_hp_dyn = parameters[:, 10][:, tf.newaxis]
+            g_lp_dyn = parameters[:, 11][:, tf.newaxis]
+        else:
+            g_hp_dyn = tf.math.softplus(parameters[:, 10][:, tf.newaxis])
+            g_lp_dyn = tf.math.softplus(parameters[:, 11][:, tf.newaxis])
+        return tf.concat([base, g_hp_dyn, g_lp_dyn], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        base = DoGAttentionFieldPRF2D._transform_parameters_backward(
+            self, parameters[:, :10])
+        if self._signed_gains:
+            g_hp_dyn_unb = parameters[:, 10][:, tf.newaxis]
+            g_lp_dyn_unb = parameters[:, 11][:, tf.newaxis]
+        else:
+            g_hp_dyn_unb = tfp.math.softplus_inverse(
+                parameters[:, 10][:, tf.newaxis])
+            g_lp_dyn_unb = tfp.math.softplus_inverse(
+                parameters[:, 11][:, tf.newaxis])
+        return tf.concat([base, g_hp_dyn_unb, g_lp_dyn_unb], axis=1)
+
+
+class DoGDynamicAttentionFieldPRF2DWithHRF_v2(HRFEncodingModel,
+                                              DoGDynamicAttentionFieldPRF2D_v2):
+    """HRF-convolved version of :class:`DoGDynamicAttentionFieldPRF2D_v2`.
+
+    Free parameters::
+
+        ['x', 'y', 'sd', 'baseline', 'amplitude',
+         'srf_amplitude', 'srf_size',
+         'sigma_AF', 'g_HP', 'g_LP', 'g_HP_dyn', 'g_LP_dyn']
+        (+ HRF parameters if flexible)
+
+    During joint AF + DoG-PRF fitting, pass
+
+        shared_pars=['sigma_AF', 'g_HP', 'g_LP', 'g_HP_dyn', 'g_LP_dyn']
+
+    to the :class:`braincoder.optimize.ParameterFitter`. The 7 per-voxel
+    DoG parameters remain per-voxel.
+    """
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 dynamic_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 positive_image_values_only=True,
+                 weights=None, hrf_model=None,
+                 flexible_hrf_parameters=False,
+                 verbosity=logging.INFO, **kwargs):
+
+        DoGDynamicAttentionFieldPRF2D_v2.__init__(
+            self, grid_coordinates=grid_coordinates, paradigm=paradigm,
+            data=data, parameters=parameters,
+            condition_indicator=condition_indicator,
+            dynamic_indicator=dynamic_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, verbosity=verbosity,
+            positive_image_values_only=positive_image_values_only, **kwargs)
+
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model,
+                                  flexible_hrf_parameters=flexible_hrf_parameters,
+                                  **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = DoGDynamicAttentionFieldPRF2D_v2._transform_parameters_forward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DoGDynamicAttentionFieldPRF2D_v2._transform_parameters_forward(
+                self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = DoGDynamicAttentionFieldPRF2D_v2._transform_parameters_backward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DoGDynamicAttentionFieldPRF2D_v2._transform_parameters_backward(
+                self, parameters)
+
+
+class DoGDynamicAttentionFieldPRF2D_v3(DoGAttentionFieldPRF2D):
+    """Dynamic Attention-Field-aware DoG-PRF (v3: separate σ_dyn + split gain).
+
+    DoG-voxel-kernel counterpart to
+    :class:`DynamicAttentionFieldPRF2D_v3`. The per-voxel stimulus-drive
+    receptive field is a Difference-of-Gaussians, and the AF modulation
+    is the same as v3: an INDEPENDENT ``sigma_dyn`` for the dynamic
+    Gaussian (separate from sustained ``sigma_AF``) plus the HP/LP split
+    on the per-TR phasic gain.
+
+    Per-voxel parameters (7)
+    ------------------------
+    ``x``, ``y``, ``sd``, ``baseline``, ``amplitude``,
+    ``srf_amplitude``, ``srf_size``.
+
+    Shared (across all voxels) parameters (6)
+    -----------------------------------------
+    ``sigma_AF``, ``g_HP``, ``g_LP``, ``sigma_dyn``,
+    ``g_HP_dyn``, ``g_LP_dyn``.
+
+    Total: 13 parameters per voxel (7 per-voxel + 6 shared).
+
+    See :class:`DynamicAttentionFieldPRF2D_v3` for the modulation
+    formula. Indices below shift by +2 versus the Gaussian v3 because
+    ``srf_amplitude`` and ``srf_size`` sit at positions 5, 6 between
+    ``amplitude`` and ``sigma_AF``.
+    """
+
+    parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude',
+                        'srf_amplitude', 'srf_size',
+                        'sigma_AF', 'g_HP', 'g_LP',
+                        'sigma_dyn', 'g_HP_dyn', 'g_LP_dyn']
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 dynamic_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 weights=None, omega=None,
+                 positive_image_values_only=True,
+                 verbosity=logging.INFO, **kwargs):
+        if dynamic_indicator is None:
+            raise ValueError(
+                "DoGDynamicAttentionFieldPRF2D_v3 requires a "
+                "`dynamic_indicator` array of shape "
+                "(n_timepoints, n_ring_positions).")
+
+        super().__init__(
+            grid_coordinates=grid_coordinates, paradigm=paradigm, data=data,
+            parameters=parameters, condition_indicator=condition_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, omega=omega,
+            positive_image_values_only=positive_image_values_only,
+            verbosity=verbosity, **kwargs)
+
+        self.dynamic_indicator = np.asarray(dynamic_indicator,
+                                            dtype=np.float32)
+        if self.dynamic_indicator.shape[1] != self.n_conditions:
+            raise ValueError(
+                f"dynamic_indicator has {self.dynamic_indicator.shape[1]} "
+                f"channels but ring_positions has {self.n_conditions}; "
+                "channels must align with ring_positions.")
+        self._tf_dynamic_indicator = tf.constant(self.dynamic_indicator,
+                                                 dtype=tf.float32)
+
+    @tf.function
+    def _attention_modulation_dynamic_v3(self, parameters):
+        """Per-TR dynamic-AF modulation field on the stimulus grid (v3, DoG).
+
+        Identical formula to
+        :meth:`DynamicAttentionFieldPRF2D_v3._attention_modulation_dynamic_v3`,
+        but parameter indices shift by +2:
+            sigma_dyn -> 10,  g_HP_dyn -> 11,  g_LP_dyn -> 12.
+        """
+        # Take shared parameters from the first batch / first voxel.
+        sigma_dyn = parameters[0, 0, 10]                   # scalar
+        g_HP_dyn = parameters[0, 0, 11]                    # scalar
+        g_LP_dyn = parameters[0, 0, 12]                    # scalar
+
+        # Grid: (n_grid, 2).
+        gx = self._grid_coordinates[:, 0][tf.newaxis, :]   # (1, G)
+        gy = self._grid_coordinates[:, 1][tf.newaxis, :]
+
+        # Ring positions: (n_C, 2)  ->  (n_C, 1).
+        rx = self._tf_ring_positions[:, 0][:, tf.newaxis]
+        ry = self._tf_ring_positions[:, 1][:, tf.newaxis]
+
+        # Per-ring DYNAMIC AF Gaussian (peak-normalized to 1): (n_C, G).
+        # Uses sigma_dyn — separate from the sustained sigma_AF.
+        diff_sq = (gx - rx) ** 2 + (gy - ry) ** 2
+        A_dyn = tf.exp(-diff_sq / (2.0 * sigma_dyn ** 2))  # (n_C, G)
+
+        # Per-TR per-ring "is HP" mask: (T, n_C).
+        is_hp_per_tr = self._tf_condition_indicator        # (T, n_C)
+
+        # d_ℓ(t): (T, n_C). Per-TR per-ring distractor on-fraction.
+        d = self._tf_dynamic_indicator                     # (T, n_C)
+
+        # Split into HP-dyn and LP-dyn weights per (t, ℓ).
+        w_hp = d * is_hp_per_tr                            # (T, n_C)
+        w_lp = d * (1.0 - is_hp_per_tr)                    # (T, n_C)
+
+        # Σ_ℓ w_hp[t, ℓ] · A_ℓ^{dyn}(g) and Σ_ℓ w_lp[t, ℓ] · A_ℓ^{dyn}(g).
+        field_hp = tf.einsum('tl,lg->tg', w_hp, A_dyn)
+        field_lp = tf.einsum('tl,lg->tg', w_lp, A_dyn)
+
+        return g_HP_dyn * field_hp + g_LP_dyn * field_lp   # (T, G)
+
+    @tf.function
+    def _basis_predictions(self, paradigm, parameters):
+        # paradigm: (B, T, G)
+        # parameters: (B, V, n_parameters=13)
+
+        # Per-voxel DoG receptive field: (B, V, G).
+        rf = self._get_rf(self.grid_coordinates, parameters)
+
+        # Sustained per-condition AF modulation: (B, V, n_C, G). Uses
+        # sigma_AF (index 7) via the parent DoGAttentionFieldPRF2D.
+        mod_sustained = self._attention_modulation(parameters)
+
+        # Effective per-condition RF (sustained part): (B, V, n_C, G).
+        eff_rf_per_cond = rf[:, :, tf.newaxis, :] * mod_sustained
+
+        # Sustained partial: (B, T, V) via condition_indicator selection.
+        partial = tf.einsum('btg,bvcg->btvc', paradigm, eff_rf_per_cond)
+        ci = self._tf_condition_indicator       # (T, n_C)
+        sustained = tf.einsum('tc,btvc->btv', ci, partial)
+
+        # Dynamic per-TR modulation: (T, G), HP/LP split, with σ_dyn.
+        mod_dyn = self._attention_modulation_dynamic_v3(parameters)
+
+        # Dynamic partial: (B, T, V).
+        sign = self._tf_sign
+        eff_paradigm_dyn = paradigm * mod_dyn[tf.newaxis, :, :]   # (B, T, G)
+        dynamic = sign * tf.einsum('btg,bvg->btv', eff_paradigm_dyn, rf)
+
+        result = sustained + dynamic
+
+        baseline = parameters[:, tf.newaxis, :, 3]
+        result = result + baseline
+
+        return result
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        # First 10: DoG + sustained-AF transforms (delegate to parent).
+        # Then softplus(sigma_dyn) and sign-aware g_HP_dyn / g_LP_dyn.
+        base = DoGAttentionFieldPRF2D._transform_parameters_forward(
+            self, parameters[:, :10])
+        sigma_dyn = tf.math.softplus(parameters[:, 10][:, tf.newaxis])
+        if self._signed_gains:
+            g_hp_dyn = parameters[:, 11][:, tf.newaxis]
+            g_lp_dyn = parameters[:, 12][:, tf.newaxis]
+        else:
+            g_hp_dyn = tf.math.softplus(parameters[:, 11][:, tf.newaxis])
+            g_lp_dyn = tf.math.softplus(parameters[:, 12][:, tf.newaxis])
+        return tf.concat([base, sigma_dyn, g_hp_dyn, g_lp_dyn], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        base = DoGAttentionFieldPRF2D._transform_parameters_backward(
+            self, parameters[:, :10])
+        sigma_dyn_unb = tfp.math.softplus_inverse(
+            parameters[:, 10][:, tf.newaxis])
+        if self._signed_gains:
+            g_hp_dyn_unb = parameters[:, 11][:, tf.newaxis]
+            g_lp_dyn_unb = parameters[:, 12][:, tf.newaxis]
+        else:
+            g_hp_dyn_unb = tfp.math.softplus_inverse(
+                parameters[:, 11][:, tf.newaxis])
+            g_lp_dyn_unb = tfp.math.softplus_inverse(
+                parameters[:, 12][:, tf.newaxis])
+        return tf.concat(
+            [base, sigma_dyn_unb, g_hp_dyn_unb, g_lp_dyn_unb], axis=1)
+
+
+class DoGDynamicAttentionFieldPRF2DWithHRF_v3(HRFEncodingModel,
+                                              DoGDynamicAttentionFieldPRF2D_v3):
+    """HRF-convolved version of :class:`DoGDynamicAttentionFieldPRF2D_v3`.
+
+    Free parameters::
+
+        ['x', 'y', 'sd', 'baseline', 'amplitude',
+         'srf_amplitude', 'srf_size',
+         'sigma_AF', 'g_HP', 'g_LP',
+         'sigma_dyn', 'g_HP_dyn', 'g_LP_dyn']
+        (+ HRF parameters if flexible)
+
+    During joint AF + DoG-PRF fitting, pass
+
+        shared_pars=['sigma_AF', 'g_HP', 'g_LP',
+                     'sigma_dyn', 'g_HP_dyn', 'g_LP_dyn']
+
+    to the :class:`braincoder.optimize.ParameterFitter`.
+    """
+
+    def __init__(self, grid_coordinates=None, paradigm=None, data=None,
+                 parameters=None, condition_indicator=None,
+                 dynamic_indicator=None,
+                 ring_positions=None, mode='suppression',
+                 positive_image_values_only=True,
+                 weights=None, hrf_model=None,
+                 flexible_hrf_parameters=False,
+                 verbosity=logging.INFO, **kwargs):
+
+        DoGDynamicAttentionFieldPRF2D_v3.__init__(
+            self, grid_coordinates=grid_coordinates, paradigm=paradigm,
+            data=data, parameters=parameters,
+            condition_indicator=condition_indicator,
+            dynamic_indicator=dynamic_indicator,
+            ring_positions=ring_positions, mode=mode,
+            weights=weights, verbosity=verbosity,
+            positive_image_values_only=positive_image_values_only, **kwargs)
+
+        HRFEncodingModel.__init__(self, hrf_model=hrf_model,
+                                  flexible_hrf_parameters=flexible_hrf_parameters,
+                                  **kwargs)
+
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = DoGDynamicAttentionFieldPRF2D_v3._transform_parameters_forward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_forward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DoGDynamicAttentionFieldPRF2D_v3._transform_parameters_forward(
+                self, parameters)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        if self.flexible_hrf_parameters:
+            n_hrf_pars = len(self.hrf_model.parameter_labels)
+            encoding_pars = DoGDynamicAttentionFieldPRF2D_v3._transform_parameters_backward(
+                self, parameters[:, :-n_hrf_pars])
+            hrf_pars = self.hrf_model._transform_parameters_backward(
+                parameters[:, -n_hrf_pars:])
+            return tf.concat([encoding_pars, hrf_pars], axis=1)
+        else:
+            return DoGDynamicAttentionFieldPRF2D_v3._transform_parameters_backward(
+                self, parameters)
+
+
 class DynamicAttentionFieldPRF2D(AttentionFieldPRF2D):
     """Dynamic Attention-Field-aware 2D Gaussian PRF.
 
