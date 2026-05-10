@@ -1939,6 +1939,32 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
 
     transformations = ['identity', 'identity', 'softplus', 'identity',
                        'softplus', 'softplus', 'softplus']
+
+    # NOTE: forward/backward transforms must include srf_amplitude /
+    # srf_size — without these overrides we'd inherit the parent
+    # Gaussian's 5-column transforms, which silently drops the last two
+    # DoG columns. With +HRF that downstream produces a 5+2 = 7-column
+    # tensor that the model treats as 9 columns, scrambling
+    # srf_amplitude / srf_size <-> hrf_delay / hrf_dispersion in
+    # ``_predict`` and giving DoG fits worse R² than plain Gaussian.
+    @tf.function
+    def _transform_parameters_forward(self, parameters):
+        gauss_pars = GaussianPRF2D._transform_parameters_forward(
+            self, parameters[:, :5])
+        srf_amplitude = tf.math.softplus(parameters[:, 5][:, tf.newaxis])
+        srf_size      = tf.math.softplus(parameters[:, 6][:, tf.newaxis])
+        return tf.concat([gauss_pars, srf_amplitude, srf_size], axis=1)
+
+    @tf.function
+    def _transform_parameters_backward(self, parameters):
+        gauss_pars = GaussianPRF2D._transform_parameters_backward(
+            self, parameters[:, :5])
+        srf_amplitude = tfp.math.softplus_inverse(
+            parameters[:, 5][:, tf.newaxis])
+        srf_size = tfp.math.softplus_inverse(
+            parameters[:, 6][:, tf.newaxis])
+        return tf.concat([gauss_pars, srf_amplitude, srf_size], axis=1)
+
     @tf.function
     def _get_rf(self, grid_coordinates, parameters):
 
