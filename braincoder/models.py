@@ -12,6 +12,33 @@ import scipy.stats as ss
 from .stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
 
+def _sd_softplus_forward(raw, sd_min):
+    """Shifted-softplus for σ-like parameters.
+
+    Maps an unconstrained raw value to a positive σ that is bounded
+    below by ``sd_min``::
+
+        σ = sd_min + softplus(raw)
+
+    With the default ``sd_min == 0`` this is identical to the plain
+    ``tf.math.softplus``, so existing fits are unaffected. A positive
+    ``sd_min`` (e.g. ~0.4° for a resolution-50 PRF grid) prevents the
+    "σ collapses to 0" failure mode that produces NaN predictions and
+    phantom R²=1 voxels.
+    """
+    return tf.cast(sd_min, raw.dtype) + tf.math.softplus(raw)
+
+
+def _sd_softplus_inverse(val, sd_min):
+    """Inverse of :func:`_sd_softplus_forward`.
+
+    Solves ``σ = sd_min + softplus(raw)`` for ``raw``::
+
+        raw = softplus_inverse(σ − sd_min)
+    """
+    return tfp.math.softplus_inverse(val - tf.cast(sd_min, val.dtype))
+
+
 class EncodingModel(object):
     """Abstract base class for encoding models.
 
@@ -20,14 +47,31 @@ class EncodingModel(object):
     concrete models only need to implement ``_basis_predictions`` (and
     optionally ``_predict``) to become drop-in replacements across the
     fitting/decoding stack.
+
+    Width-like parameters (``sd``, ``srf_size``, ``sigma_AF``,
+    ``sigma_dyn``, ``sigma_T_dyn``, ...) are reparameterised through a
+    *shifted* softplus controlled by :attr:`sd_min`::
+
+        σ = sd_min + softplus(raw_σ)
+
+    With the default ``sd_min == 0.0`` this is identical to the previous
+    plain ``softplus`` and existing fits are bit-identical. Setting
+    ``sd_min`` to a positive value (e.g. 0.4° for resolution-50 PRF
+    grids) clamps every σ-like parameter to be at least ``sd_min``,
+    eliminating the σ-collapse pathology (NaN predictions and phantom
+    R²=1 voxels) documented in ``notes/m6_dn_diagnosis.md``.
     """
 
     parameter_labels = None
     stimulus_type = Stimulus
 
     def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, verbosity=logging.INFO):
+                 weights=None, omega=None, verbosity=logging.INFO,
+                 sd_min=0.0):
         """Normalize paradigm/parameter inputs and set shared attributes."""
+
+        # Lower bound for σ-like parameters; see class docstring.
+        self.sd_min = float(sd_min)
 
         if paradigm is not None:
 
@@ -1690,7 +1734,11 @@ class GaussianPRF2D(EncodingModel):
     stimulus_type = ImageStimulus
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO, **kwargs):
+                 weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO,
+                 sd_min=0.0, **kwargs):
+
+        # Lower bound for σ-like parameters; see EncodingModel docstring.
+        self.sd_min = float(sd_min)
 
         self.data = data
         self.parameters = format_parameters(parameters)
@@ -1782,7 +1830,8 @@ class GaussianPRF2D(EncodingModel):
     def _transform_parameters_forward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           parameters[:, 1][:, tf.newaxis],
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          _sd_softplus_forward(
+                              parameters[:, 2][:, tf.newaxis], self.sd_min),
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis]], axis=1)
 
@@ -1790,8 +1839,8 @@ class GaussianPRF2D(EncodingModel):
     def _transform_parameters_backward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           parameters[:, 1][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
+                          _sd_softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis], self.sd_min),
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis]], axis=1)
 
@@ -1837,7 +1886,8 @@ class GaussianPRF2DAngle(GaussianPRF2D):
     def _transform_parameters_forward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           tf.math.softplus(parameters[:, 1][:, tf.newaxis]),
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]),
+                          _sd_softplus_forward(
+                              parameters[:, 2][:, tf.newaxis], self.sd_min),
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis]], axis=1)
 
@@ -1846,8 +1896,8 @@ class GaussianPRF2DAngle(GaussianPRF2D):
         return tf.concat([restrict_radians(parameters[:, 0][:, tf.newaxis]),
                           tfp.math.softplus_inverse(
                               parameters[:, 1][:, tf.newaxis]),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
+                          _sd_softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis], self.sd_min),
                           parameters[:, 3][:, tf.newaxis],
                           parameters[:, 4][:, tf.newaxis]], axis=1)
 
@@ -1952,7 +2002,8 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
         gauss_pars = GaussianPRF2D._transform_parameters_forward(
             self, parameters[:, :5])
         srf_amplitude = tf.math.softplus(parameters[:, 5][:, tf.newaxis])
-        srf_size      = tf.math.softplus(parameters[:, 6][:, tf.newaxis])
+        srf_size      = _sd_softplus_forward(
+            parameters[:, 6][:, tf.newaxis], self.sd_min)
         return tf.concat([gauss_pars, srf_amplitude, srf_size], axis=1)
 
     @tf.function
@@ -1961,8 +2012,8 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
             self, parameters[:, :5])
         srf_amplitude = tfp.math.softplus_inverse(
             parameters[:, 5][:, tf.newaxis])
-        srf_size = tfp.math.softplus_inverse(
-            parameters[:, 6][:, tf.newaxis])
+        srf_size = _sd_softplus_inverse(
+            parameters[:, 6][:, tf.newaxis], self.sd_min)
         return tf.concat([gauss_pars, srf_amplitude, srf_size], axis=1)
 
     @tf.function
@@ -2033,10 +2084,11 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
     def _transform_parameters_forward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis], # x
                           parameters[:, 1][:, tf.newaxis], # y
-                          tf.math.softplus(parameters[:, 2][:, tf.newaxis]), # sd
+                          _sd_softplus_forward(
+                              parameters[:, 2][:, tf.newaxis], self.sd_min), # sd
                           parameters[:, 3][:, tf.newaxis], # rf_amplitude
-                          tf.math.softplus(parameters[:, 4][:, tf.newaxis]), # srf_amplitude 
-                          tf.math.softplus(parameters[:, 5][:, tf.newaxis]) + 1, # srf_size
+                          tf.math.softplus(parameters[:, 4][:, tf.newaxis]), # srf_amplitude
+                          tf.math.softplus(parameters[:, 5][:, tf.newaxis]) + 1, # srf_size (≥1 by construction)
                           tf.math.softplus(parameters[:, 6][:,tf.newaxis]), # neural_baseline
                           tf.math.softplus(parameters[:, 7][:,tf.newaxis]), # surround_baseline
                           ], axis=1)
@@ -2045,8 +2097,8 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
     def _transform_parameters_backward(self, parameters):
         return tf.concat([parameters[:, 0][:, tf.newaxis],
                           parameters[:, 1][:, tf.newaxis],
-                          tfp.math.softplus_inverse(
-                              parameters[:, 2][:, tf.newaxis]),
+                          _sd_softplus_inverse(
+                              parameters[:, 2][:, tf.newaxis], self.sd_min),
                           parameters[:, 3][:, tf.newaxis],
                           tfp.math.softplus_inverse(
                               parameters[:, 4][:, tf.newaxis]),
@@ -2382,10 +2434,12 @@ class AttentionFieldPRF2D(GaussianPRF2D):
         return tf.concat([
             parameters[:, 0][:, tf.newaxis],                              # x
             parameters[:, 1][:, tf.newaxis],                              # y
-            tf.math.softplus(parameters[:, 2][:, tf.newaxis]),            # sd
+            _sd_softplus_forward(
+                parameters[:, 2][:, tf.newaxis], self.sd_min),            # sd
             parameters[:, 3][:, tf.newaxis],                              # baseline
             parameters[:, 4][:, tf.newaxis],                              # amplitude
-            tf.math.softplus(parameters[:, 5][:, tf.newaxis]),            # sigma_AF
+            _sd_softplus_forward(
+                parameters[:, 5][:, tf.newaxis], self.sd_min),            # sigma_AF
             g_hp,                                                         # g_HP
             g_lp,                                                         # g_LP
         ], axis=1)
@@ -2403,10 +2457,10 @@ class AttentionFieldPRF2D(GaussianPRF2D):
         return tf.concat([
             parameters[:, 0][:, tf.newaxis],
             parameters[:, 1][:, tf.newaxis],
-            tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
+            _sd_softplus_inverse(parameters[:, 2][:, tf.newaxis], self.sd_min),
             parameters[:, 3][:, tf.newaxis],
             parameters[:, 4][:, tf.newaxis],
-            tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
+            _sd_softplus_inverse(parameters[:, 5][:, tf.newaxis], self.sd_min),
             g_hp_unb,
             g_lp_unb,
         ], axis=1)
@@ -2623,9 +2677,10 @@ class DoGAttentionFieldPRF2D(DifferenceOfGaussiansPRF2D):
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
-        # First 7: DoG transforms (identity, identity, softplus, identity,
-        # identity, softplus, softplus). Then AF: softplus(sigma_AF) and
-        # gain transforms (softplus or identity per signed_gains).
+        # First 7: DoG transforms (identity, identity, sd-softplus, identity,
+        # identity, softplus(srf_amplitude), sd-softplus(srf_size)). Then
+        # AF: sd-softplus(sigma_AF) and gain transforms (softplus or
+        # identity per signed_gains).
         if self._signed_gains:
             g_hp = parameters[:, 8][:, tf.newaxis]
             g_lp = parameters[:, 9][:, tf.newaxis]
@@ -2635,12 +2690,15 @@ class DoGAttentionFieldPRF2D(DifferenceOfGaussiansPRF2D):
         return tf.concat([
             parameters[:, 0][:, tf.newaxis],                              # x
             parameters[:, 1][:, tf.newaxis],                              # y
-            tf.math.softplus(parameters[:, 2][:, tf.newaxis]),            # sd
+            _sd_softplus_forward(
+                parameters[:, 2][:, tf.newaxis], self.sd_min),            # sd
             parameters[:, 3][:, tf.newaxis],                              # baseline
             parameters[:, 4][:, tf.newaxis],                              # amplitude
             tf.math.softplus(parameters[:, 5][:, tf.newaxis]),            # srf_amplitude
-            tf.math.softplus(parameters[:, 6][:, tf.newaxis]),            # srf_size
-            tf.math.softplus(parameters[:, 7][:, tf.newaxis]),            # sigma_AF
+            _sd_softplus_forward(
+                parameters[:, 6][:, tf.newaxis], self.sd_min),            # srf_size
+            _sd_softplus_forward(
+                parameters[:, 7][:, tf.newaxis], self.sd_min),            # sigma_AF
             g_hp,                                                         # g_HP
             g_lp,                                                         # g_LP
         ], axis=1)
@@ -2658,12 +2716,12 @@ class DoGAttentionFieldPRF2D(DifferenceOfGaussiansPRF2D):
         return tf.concat([
             parameters[:, 0][:, tf.newaxis],
             parameters[:, 1][:, tf.newaxis],
-            tfp.math.softplus_inverse(parameters[:, 2][:, tf.newaxis]),
+            _sd_softplus_inverse(parameters[:, 2][:, tf.newaxis], self.sd_min),
             parameters[:, 3][:, tf.newaxis],
             parameters[:, 4][:, tf.newaxis],
             tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
-            tfp.math.softplus_inverse(parameters[:, 6][:, tf.newaxis]),
-            tfp.math.softplus_inverse(parameters[:, 7][:, tf.newaxis]),
+            _sd_softplus_inverse(parameters[:, 6][:, tf.newaxis], self.sd_min),
+            _sd_softplus_inverse(parameters[:, 7][:, tf.newaxis], self.sd_min),
             g_hp_unb,
             g_lp_unb,
         ], axis=1)
@@ -3120,10 +3178,11 @@ class DoGDynamicAttentionFieldPRF2D_v3(DoGAttentionFieldPRF2D):
     @tf.function
     def _transform_parameters_forward(self, parameters):
         # First 10: DoG + sustained-AF transforms (delegate to parent).
-        # Then softplus(sigma_dyn) and sign-aware g_HP_dyn / g_LP_dyn.
+        # Then sd-softplus(sigma_dyn) and sign-aware g_HP_dyn / g_LP_dyn.
         base = DoGAttentionFieldPRF2D._transform_parameters_forward(
             self, parameters[:, :10])
-        sigma_dyn = tf.math.softplus(parameters[:, 10][:, tf.newaxis])
+        sigma_dyn = _sd_softplus_forward(
+            parameters[:, 10][:, tf.newaxis], self.sd_min)
         if self._signed_gains:
             g_hp_dyn = parameters[:, 11][:, tf.newaxis]
             g_lp_dyn = parameters[:, 12][:, tf.newaxis]
@@ -3136,8 +3195,8 @@ class DoGDynamicAttentionFieldPRF2D_v3(DoGAttentionFieldPRF2D):
     def _transform_parameters_backward(self, parameters):
         base = DoGAttentionFieldPRF2D._transform_parameters_backward(
             self, parameters[:, :10])
-        sigma_dyn_unb = tfp.math.softplus_inverse(
-            parameters[:, 10][:, tf.newaxis])
+        sigma_dyn_unb = _sd_softplus_inverse(
+            parameters[:, 10][:, tf.newaxis], self.sd_min)
         if self._signed_gains:
             g_hp_dyn_unb = parameters[:, 11][:, tf.newaxis]
             g_lp_dyn_unb = parameters[:, 12][:, tf.newaxis]
@@ -3377,14 +3436,15 @@ class DynamicAttentionFieldPRF2D(AttentionFieldPRF2D):
     @tf.function
     def _transform_parameters_forward(self, parameters):
         # Re-use parent's transform for the first 8 params, then add
-        # softplus(sigma_dyn) and a sign-aware g_dyn.
+        # sd-softplus(sigma_dyn) and a sign-aware g_dyn.
         base = AttentionFieldPRF2D._transform_parameters_forward(
             self, parameters[:, :8])
         if self._signed_gains:
             g_dyn = parameters[:, 9][:, tf.newaxis]
         else:
             g_dyn = tf.math.softplus(parameters[:, 9][:, tf.newaxis])
-        sigma_dyn = tf.math.softplus(parameters[:, 8][:, tf.newaxis])
+        sigma_dyn = _sd_softplus_forward(
+            parameters[:, 8][:, tf.newaxis], self.sd_min)
         return tf.concat([base, sigma_dyn, g_dyn], axis=1)
 
     @tf.function
@@ -3396,8 +3456,8 @@ class DynamicAttentionFieldPRF2D(AttentionFieldPRF2D):
         else:
             g_dyn_unb = tfp.math.softplus_inverse(
                 parameters[:, 9][:, tf.newaxis])
-        sigma_dyn_unb = tfp.math.softplus_inverse(
-            parameters[:, 8][:, tf.newaxis])
+        sigma_dyn_unb = _sd_softplus_inverse(
+            parameters[:, 8][:, tf.newaxis], self.sd_min)
         return tf.concat([base, sigma_dyn_unb, g_dyn_unb], axis=1)
 
 
@@ -3915,10 +3975,11 @@ class DynamicAttentionFieldPRF2D_v3(AttentionFieldPRF2D):
     def _transform_parameters_forward(self, parameters):
         # Re-use parent's transform for the first 8 params (x, y, sd,
         # baseline, amplitude, sigma_AF, g_HP, g_LP), then add
-        # softplus(sigma_dyn) and sign-aware g_HP_dyn / g_LP_dyn.
+        # sd-softplus(sigma_dyn) and sign-aware g_HP_dyn / g_LP_dyn.
         base = AttentionFieldPRF2D._transform_parameters_forward(
             self, parameters[:, :8])
-        sigma_dyn = tf.math.softplus(parameters[:, 8][:, tf.newaxis])
+        sigma_dyn = _sd_softplus_forward(
+            parameters[:, 8][:, tf.newaxis], self.sd_min)
         if self._signed_gains:
             g_hp_dyn = parameters[:, 9][:, tf.newaxis]
             g_lp_dyn = parameters[:, 10][:, tf.newaxis]
@@ -3931,8 +3992,8 @@ class DynamicAttentionFieldPRF2D_v3(AttentionFieldPRF2D):
     def _transform_parameters_backward(self, parameters):
         base = AttentionFieldPRF2D._transform_parameters_backward(
             self, parameters[:, :8])
-        sigma_dyn_unb = tfp.math.softplus_inverse(
-            parameters[:, 8][:, tf.newaxis])
+        sigma_dyn_unb = _sd_softplus_inverse(
+            parameters[:, 8][:, tf.newaxis], self.sd_min)
         if self._signed_gains:
             g_hp_dyn_unb = parameters[:, 9][:, tf.newaxis]
             g_lp_dyn_unb = parameters[:, 10][:, tf.newaxis]
