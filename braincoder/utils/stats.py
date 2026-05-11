@@ -9,12 +9,23 @@ def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
 
     resid = data - predictions
 
-    # ssq_data = np.clip(((data - data.mean(0))**2).sum(0), 1e-5, None)
-    ssq_data = ((data - data.mean(0))**2).sum(0)
+    # Pandas .sum() defaults to skipna=True, which silently drops NaN
+    # rows from the sum. When model predictions are NaN (e.g. σ → 0 in
+    # softplus collapses the Gaussian / DoG / DN PRF), this returns
+    # ssq_resid = 0 and gives the infamous "phantom R² = 1" voxels.
+    # Force skipna=False so NaN predictions propagate to NaN R², which
+    # downstream code can filter explicitly.
+    def _sumna(x):
+        try:
+            return x.sum(0, skipna=False)
+        except TypeError:  # numpy fallback (no skipna kwarg)
+            return x.sum(0)
+
+    ssq_data = _sumna((data - data.mean(0)) ** 2)
     if allow_biased_residuals:
-        ssq_resid = ((resid - resid.mean(0))**2).sum(0)
+        ssq_resid = _sumna((resid - resid.mean(0)) ** 2)
     else:
-        ssq_resid = (resid**2).sum(0)
+        ssq_resid = _sumna(resid ** 2)
 
     r2 = (1 - (ssq_resid / ssq_data))
 
