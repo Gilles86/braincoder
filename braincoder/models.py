@@ -1737,6 +1737,25 @@ class GaussianMixturePRF2D(EncodingModel):
                               parameters[:, 6][:, tf.newaxis]], axis=1)            # baseline
 
 class GaussianPRF2D(EncodingModel):
+    """2D Gaussian population receptive field on a pixel grid.
+
+    Response is a single isotropic Gaussian centred at ``(x, y)`` with
+    width ``sd``, scaled by ``amplitude`` and offset by ``baseline``.
+    The predicted BOLD per TR is the inner product of this Gaussian
+    with the binary stimulus image on the model's ``grid_coordinates``.
+
+    Per-voxel parameters:
+
+    ``x``, ``y``  : free, in degrees (visual-field coordinates).
+    ``sd``        : Gaussian σ in degrees, > ``sd_min`` (shifted softplus).
+    ``baseline``  : free; identity-transformed.
+    ``amplitude`` : free; identity-transformed (sign carries response polarity).
+
+    ``sd_min`` (ctor kwarg, default 0.0) is the strict lower bound for
+    σ enforced by ``σ = sd_min + softplus(raw)``. Positive ``sd_min``
+    (≥ 1 grid-pixel) eliminates the σ → 0 collapse failure mode that
+    otherwise produces NaN predictions and phantom R²=1 voxels.
+    """
 
     parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude']
     stimulus_type = ImageStimulus
@@ -1989,6 +2008,26 @@ class GaussianPRF2DAngleWithHRF(HRFEncodingModel, GaussianPRF2DAngle):
                      hrf_model=self.hrf_model)
 
 class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
+    """Difference-of-Gaussians PRF.
+
+    Response is a center Gaussian minus a wider surround Gaussian
+    sharing the same (x, y) center.  Per-voxel parameters:
+
+    ``x``, ``y`` : free, in degrees.
+    ``sd``       : center Gaussian σ in degrees, > ``sd_min`` (shifted
+                   softplus).
+    ``baseline``, ``amplitude`` : free; identity-transformed.
+    ``srf_amplitude``           : surround amplitude as a fraction of
+                                  the center amplitude, > 0 (softplus).
+    ``srf_size``                : **multiplicative** surround:center σ
+                                  ratio. Bound > 1 (surround wider
+                                  than center), enforced via
+                                  ``srf_size = 1 + softplus(raw)``.
+
+    Note ``srf_size`` is a ratio, *not* an absolute σ: surround σ =
+    ``sd * srf_size``. Mixing this up with the absolute-σ floor
+    (``sd_min``) gives unphysical surrounds narrower than centers.
+    """
 
     # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
     # srf factor is limited to be above 1
@@ -2083,9 +2122,46 @@ class DifferenceOfGaussiansPRF2DWithHRF(HRFEncodingModel, DifferenceOfGaussiansP
             return DifferenceOfGaussiansPRF2D._transform_parameters_backward(self, parameters)
 
 class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
+    """Divisive-Normalization Gaussian PRF, ratio-parameterised.
+
+    Per TR the response is
+
+        neural_drive = rf_amp · <stim, G_c> + neural_baseline
+        suppression  = rf_amp · srf_amp · <stim, G_s> + surround_baseline
+        response     = neural_drive / suppression
+
+    where ``G_c`` and ``G_s`` are unit-amplitude Gaussians centred at
+    ``(x, y)`` with σ = ``sd`` (center) and σ = ``sd · srf_size``
+    (surround). Both ``srf_amplitude`` and ``srf_size`` are
+    *ratios relative to the center*, which decorrelates them from
+    ``rf_amplitude`` during GD.
+
+    Per-voxel parameters:
+
+    ``x``, ``y``           : free, in degrees.
+    ``sd``                 : center σ, > ``sd_min`` (shifted softplus).
+    ``rf_amplitude``       : > 0 (softplus). Center drive strength.
+    ``srf_amplitude``      : > 0 (softplus). Surround amplitude *as a
+                             fraction of* ``rf_amplitude``.
+    ``srf_size``           : multiplicative surround:center σ ratio,
+                             > 1 (``1 + softplus(raw)``).
+    ``neural_baseline``    : > 0 (softplus). Additive constant in
+                             numerator; keeps it finite where no
+                             stimulus overlaps the center.
+    ``surround_baseline``  : > 0 (softplus). Additive constant in
+                             denominator; prevents division by 0
+                             where no stimulus overlaps the surround.
+
+    All multiplicative / additive scalars are kept strictly positive
+    so that the denominator stays strictly positive (no Inf / NaN).
+    Voxels whose true response is *inverted* should be captured via
+    ``baseline`` in the downstream HRF wrapper, not by negative
+    ``rf_amplitude``.
+    """
+
     # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
     # srf factor is limited to be above 1
-    parameter_labels = ['x', 'y', 'sd', 
+    parameter_labels = ['x', 'y', 'sd',
                         'rf_amplitude', 'srf_amplitude', 'srf_size',
                         'neural_baseline', 'surround_baseline']
 
@@ -2095,7 +2171,7 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
                           parameters[:, 1][:, tf.newaxis], # y
                           _sd_softplus_forward(
                               parameters[:, 2][:, tf.newaxis], self.sd_min), # sd
-                          parameters[:, 3][:, tf.newaxis], # rf_amplitude
+                          tf.math.softplus(parameters[:, 3][:, tf.newaxis]), # rf_amplitude (> 0)
                           tf.math.softplus(parameters[:, 4][:, tf.newaxis]), # srf_amplitude
                           tf.math.softplus(parameters[:, 5][:, tf.newaxis]) + 1, # srf_size (≥1 by construction)
                           tf.math.softplus(parameters[:, 6][:,tf.newaxis]), # neural_baseline
@@ -2108,7 +2184,8 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
                           parameters[:, 1][:, tf.newaxis],
                           _sd_softplus_inverse(
                               parameters[:, 2][:, tf.newaxis], self.sd_min),
-                          parameters[:, 3][:, tf.newaxis],
+                          tfp.math.softplus_inverse(
+                              parameters[:, 3][:, tf.newaxis]),
                           tfp.math.softplus_inverse(
                               parameters[:, 4][:, tf.newaxis]),
                           tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis] - 1),

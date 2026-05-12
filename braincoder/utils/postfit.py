@@ -162,6 +162,22 @@ def validate_prf_parameters(pars, *, sd_min=None, model_label=None,
                 f"transform that used sd_min as the srf_size floor — "
                 f"refit the source DoG model")
 
+    # Strictly-positive scalars in the DN parameterisation.  These
+    # transforms are softplus-only, so an init value <= 0 would trip
+    # softplus_inverse and produce NaN downstream.
+    for pos_col in ("rf_amplitude", "neural_baseline",
+                    "surround_baseline", "srf_amplitude"):
+        if pos_col not in pars.columns:
+            continue
+        v = pars[pos_col].to_numpy()
+        finite_active = active & np.isfinite(v)
+        n_nonpos = int((finite_active & (v <= 0)).sum())
+        if n_nonpos:
+            issues.append(
+                f"  - {n_nonpos} voxels with {pos_col} <= 0 "
+                f"(braincoder's DN transform requires > 0; likely "
+                f"cause: NIfTIs predate the positivity-floor commit)")
+
     if not issues:
         return pars
 
