@@ -15,16 +15,12 @@ from patsy import dmatrix, build_design_matrices
 def _sd_softplus_forward(raw, sd_min):
     """Shifted-softplus for σ-like parameters.
 
-    Maps an unconstrained raw value to a positive σ that is bounded
-    below by ``sd_min``::
+    Maps an unconstrained raw value to a positive σ bounded below
+    by ``sd_min``::
 
         σ = sd_min + softplus(raw)
 
-    With the default ``sd_min == 0`` this is identical to the plain
-    ``tf.math.softplus``, so existing fits are unaffected. A positive
-    ``sd_min`` (e.g. ~0.4° for a resolution-50 PRF grid) prevents the
-    "σ collapses to 0" failure mode that produces NaN predictions and
-    phantom R²=1 voxels.
+    With ``sd_min == 0`` this reduces to plain ``tf.math.softplus``.
     """
     return tf.cast(sd_min, raw.dtype) + tf.math.softplus(raw)
 
@@ -35,8 +31,21 @@ def _sd_softplus_inverse(val, sd_min):
     Solves ``σ = sd_min + softplus(raw)`` for ``raw``::
 
         raw = softplus_inverse(σ − sd_min)
+
+    Defined only for ``σ > sd_min``. Raises
+    ``tf.errors.InvalidArgumentError`` if any element of ``val`` is at
+    or below ``sd_min`` — callers must clip their σ-like init
+    parameters strictly above ``sd_min`` before invoking this function.
     """
-    return tfp.math.softplus_inverse(val - tf.cast(sd_min, val.dtype))
+    sd_min_t = tf.cast(sd_min, val.dtype)
+    shifted = val - sd_min_t
+    tf.debugging.assert_positive(
+        shifted,
+        message=(
+            "_sd_softplus_inverse: a σ-like parameter is <= sd_min. "
+            "The shifted softplus is only defined for σ > sd_min; "
+            "clip init parameters strictly above sd_min."))
+    return tfp.math.softplus_inverse(shifted)
 
 
 class EncodingModel(object):
@@ -54,12 +63,11 @@ class EncodingModel(object):
 
         σ = sd_min + softplus(raw_σ)
 
-    With the default ``sd_min == 0.0`` this is identical to the previous
-    plain ``softplus`` and existing fits are bit-identical. Setting
-    ``sd_min`` to a positive value (e.g. 0.4° for resolution-50 PRF
-    grids) clamps every σ-like parameter to be at least ``sd_min``,
-    eliminating the σ-collapse pathology (NaN predictions and phantom
-    R²=1 voxels) documented in ``notes/m6_dn_diagnosis.md``.
+    With ``sd_min == 0`` (default) this reduces to plain ``softplus``.
+    A positive ``sd_min`` clamps every σ-like parameter to ``σ >
+    sd_min`` strictly; init values at or below the floor cause
+    :func:`_sd_softplus_inverse` to raise rather than silently produce
+    NaN.
     """
 
     parameter_labels = None
