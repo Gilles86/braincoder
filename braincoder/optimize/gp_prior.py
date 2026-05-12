@@ -191,15 +191,20 @@ class GeodesicGPPrior(object):
         return K
 
     def _log_prob_tensor(self, values, log_l, log_v, log_n):
-        K = self._build_covariance(log_l, log_v, log_n)
+        # Build the covariance and run Cholesky / triangular solves in
+        # float64 — RBF kernels on ~hundreds of vertices are inherently
+        # ill-conditioned and float32 Cholesky bottoms out at NaN.
+        # Standard practice in TFP / GPyTorch / GPflow.
+        K = ops.cast(
+            self._build_covariance(log_l, log_v, log_n), 'float64')
         L = ops.cholesky(K)
-        # y = L^{-1} values
-        y = ops.solve_triangular(
-            L, ops.reshape(values, (-1, 1)), lower=True)
+        v64 = ops.cast(ops.reshape(values, (-1, 1)), 'float64')
+        y = ops.solve_triangular(L, v64, lower=True)
         mahal = ops.sum(y * y)
         log_det = 2.0 * ops.sum(ops.log(ops.diag(L)))
-        n_float = ops.cast(self.n_vx, 'float32')
-        return -0.5 * (mahal + log_det + n_float * _LOG_2PI)
+        n_float = ops.cast(self.n_vx, 'float64')
+        lp = -0.5 * (mahal + log_det + n_float * _LOG_2PI)
+        return ops.cast(lp, 'float32')
 
 
 def _to_unconstrained(x):
