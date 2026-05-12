@@ -2127,22 +2127,31 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
     Per TR the response is
 
         neural_drive = rf_amp · <stim, G_c> + neural_baseline
-        suppression  = rf_amp · srf_amp · <stim, G_s> + surround_baseline
+        suppression  = |rf_amp| · srf_amp · <stim, G_s> + surround_baseline
         response     = neural_drive / suppression
 
     where ``G_c`` and ``G_s`` are unit-amplitude Gaussians centred at
     ``(x, y)`` with σ = ``sd`` (center) and σ = ``sd · srf_size``
-    (surround). Both ``srf_amplitude`` and ``srf_size`` are
-    *ratios relative to the center*, which decorrelates them from
+    (surround). Both ``srf_amplitude`` and ``srf_size`` are *ratios
+    relative to the center*, which decorrelates them from
     ``rf_amplitude`` during GD.
+
+    The denominator uses ``|rf_amp|`` (not signed) so the suppression
+    term is always positive — the denominator stays strictly positive
+    for any sign of ``rf_amp`` and never produces division-by-zero
+    / NaN-R². The numerator keeps the signed ``rf_amp``, so the model
+    can fit **negative PRFs** (Knapen et al. 2014, DMN voxels) with
+    the response just flipping polarity.
 
     Per-voxel parameters:
 
     ``x``, ``y``           : free, in degrees.
     ``sd``                 : center σ, > ``sd_min`` (shifted softplus).
-    ``rf_amplitude``       : > 0 (softplus). Center drive strength.
+    ``rf_amplitude``       : signed (identity). Sign carries response
+                             polarity; magnitude scales both drive and
+                             normalization recruitment.
     ``srf_amplitude``      : > 0 (softplus). Surround amplitude *as a
-                             fraction of* ``rf_amplitude``.
+                             fraction of* ``|rf_amplitude|``.
     ``srf_size``           : multiplicative surround:center σ ratio,
                              > 1 (``1 + softplus(raw)``).
     ``neural_baseline``    : > 0 (softplus). Additive constant in
@@ -2151,12 +2160,6 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
     ``surround_baseline``  : > 0 (softplus). Additive constant in
                              denominator; prevents division by 0
                              where no stimulus overlaps the surround.
-
-    All multiplicative / additive scalars are kept strictly positive
-    so that the denominator stays strictly positive (no Inf / NaN).
-    Voxels whose true response is *inverted* should be captured via
-    ``baseline`` in the downstream HRF wrapper, not by negative
-    ``rf_amplitude``.
     """
 
     # Amplitude is as a fraction of the positive amplitude and is limited to be within [0, 1]
@@ -2171,7 +2174,7 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
                           parameters[:, 1][:, tf.newaxis], # y
                           _sd_softplus_forward(
                               parameters[:, 2][:, tf.newaxis], self.sd_min), # sd
-                          tf.math.softplus(parameters[:, 3][:, tf.newaxis]), # rf_amplitude (> 0)
+                          parameters[:, 3][:, tf.newaxis], # rf_amplitude (signed; sign flows through numerator, |.| through denominator)
                           tf.math.softplus(parameters[:, 4][:, tf.newaxis]), # srf_amplitude
                           tf.math.softplus(parameters[:, 5][:, tf.newaxis]) + 1, # srf_size (≥1 by construction)
                           tf.math.softplus(parameters[:, 6][:,tf.newaxis]), # neural_baseline
@@ -2184,8 +2187,7 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
                           parameters[:, 1][:, tf.newaxis],
                           _sd_softplus_inverse(
                               parameters[:, 2][:, tf.newaxis], self.sd_min),
-                          tfp.math.softplus_inverse(
-                              parameters[:, 3][:, tf.newaxis]),
+                          parameters[:, 3][:, tf.newaxis],
                           tfp.math.softplus_inverse(
                               parameters[:, 4][:, tf.newaxis]),
                           tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis] - 1),
@@ -2223,8 +2225,16 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
         neural_baseline = parameters[:, :, 6][:, tf.newaxis, :] 
         surround_baseline = parameters[:, :, 7][:, tf.newaxis, :] 
 
-        neural_activation = rf_amplitude * tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :] + neural_baseline
-        normalization = (srf_amplitude * rf_amplitude) * tf.tensordot(paradigm, srf, (2, 2))[:, :, 0, :] + surround_baseline
+        # Numerator uses signed rf_amplitude so negative PRFs (e.g. DMN
+        # voxels per Knapen 2014) can be fit with inverted polarity.
+        # Denominator uses |rf_amplitude| so the suppression term is
+        # always positive and the denominator stays strictly positive
+        # (with surround_baseline > 0); this prevents the sign-flip
+        # → 0 → +Inf → NaN-R² pathology.
+        conv_c = tf.tensordot(paradigm, rf, (2, 2))[:, :, 0, :]
+        conv_s = tf.tensordot(paradigm, srf, (2, 2))[:, :, 0, :]
+        neural_activation = rf_amplitude * conv_c + neural_baseline
+        normalization = (srf_amplitude * tf.abs(rf_amplitude)) * conv_s + surround_baseline
 
         normalized_activation = (neural_activation / normalization)
 

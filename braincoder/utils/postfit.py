@@ -164,9 +164,12 @@ def validate_prf_parameters(pars, *, sd_min=None, model_label=None,
 
     # Strictly-positive scalars in the DN parameterisation.  These
     # transforms are softplus-only, so an init value <= 0 would trip
-    # softplus_inverse and produce NaN downstream.
-    for pos_col in ("rf_amplitude", "neural_baseline",
-                    "surround_baseline", "srf_amplitude"):
+    # softplus_inverse and produce NaN downstream.  rf_amplitude is
+    # deliberately *not* in this list — it is signed (the denominator
+    # uses |rf_amplitude| to stay positive), so negative PRFs are
+    # allowed.
+    for pos_col in ("neural_baseline", "surround_baseline",
+                    "srf_amplitude"):
         if pos_col not in pars.columns:
             continue
         v = pars[pos_col].to_numpy()
