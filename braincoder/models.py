@@ -2010,8 +2010,9 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
         gauss_pars = GaussianPRF2D._transform_parameters_forward(
             self, parameters[:, :5])
         srf_amplitude = tf.math.softplus(parameters[:, 5][:, tf.newaxis])
-        srf_size      = _sd_softplus_forward(
-            parameters[:, 6][:, tf.newaxis], self.sd_min)
+        # srf_size is the multiplicative surround:center σ ratio, not
+        # an absolute σ; bound it > 1 (surround wider than center).
+        srf_size = tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1.0
         return tf.concat([gauss_pars, srf_amplitude, srf_size], axis=1)
 
     @tf.function
@@ -2020,8 +2021,8 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
             self, parameters[:, :5])
         srf_amplitude = tfp.math.softplus_inverse(
             parameters[:, 5][:, tf.newaxis])
-        srf_size = _sd_softplus_inverse(
-            parameters[:, 6][:, tf.newaxis], self.sd_min)
+        srf_size = tfp.math.softplus_inverse(
+            parameters[:, 6][:, tf.newaxis] - 1.0)
         return tf.concat([gauss_pars, srf_amplitude, srf_size], axis=1)
 
     @tf.function
@@ -2703,8 +2704,8 @@ class DoGAttentionFieldPRF2D(DifferenceOfGaussiansPRF2D):
             parameters[:, 3][:, tf.newaxis],                              # baseline
             parameters[:, 4][:, tf.newaxis],                              # amplitude
             tf.math.softplus(parameters[:, 5][:, tf.newaxis]),            # srf_amplitude
-            _sd_softplus_forward(
-                parameters[:, 6][:, tf.newaxis], self.sd_min),            # srf_size
+            # srf_size is a multiplicative ratio, bound > 1.
+            tf.math.softplus(parameters[:, 6][:, tf.newaxis]) + 1.0,      # srf_size
             _sd_softplus_forward(
                 parameters[:, 7][:, tf.newaxis], self.sd_min),            # sigma_AF
             g_hp,                                                         # g_HP
@@ -2728,7 +2729,8 @@ class DoGAttentionFieldPRF2D(DifferenceOfGaussiansPRF2D):
             parameters[:, 3][:, tf.newaxis],
             parameters[:, 4][:, tf.newaxis],
             tfp.math.softplus_inverse(parameters[:, 5][:, tf.newaxis]),
-            _sd_softplus_inverse(parameters[:, 6][:, tf.newaxis], self.sd_min),
+            tfp.math.softplus_inverse(
+                parameters[:, 6][:, tf.newaxis] - 1.0),
             _sd_softplus_inverse(parameters[:, 7][:, tf.newaxis], self.sd_min),
             g_hp_unb,
             g_lp_unb,

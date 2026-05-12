@@ -101,10 +101,12 @@ def validate_prf_parameters(pars, *, sd_min=None, model_label=None,
     surfaces with caller context rather than as a deep braincoder
     assertion mid-GD. Checks:
 
-      - ``σ <= 0`` for any σ-like column (``sd``, ``srf_size``):
-        mathematically impossible.
-      - ``σ <= sd_min`` if ``sd_min`` is given: would trip
-        ``_sd_softplus_inverse`` downstream.
+      - ``sd <= 0``: mathematically impossible for a Gaussian PRF.
+      - ``sd <= sd_min`` if ``sd_min`` is given: would trip braincoder's
+        strict ``_sd_softplus_inverse``.
+      - ``srf_size <= 1``: surround:center σ ratio must be > 1
+        (surround wider than center); braincoder's DoG / DN transforms
+        all enforce this bound.
 
     ``mark_invalid_fits`` sentinels (NaN params + r²=0) are not
     flagged — those rows are explicitly invalid and downstream code
@@ -129,25 +131,36 @@ def validate_prf_parameters(pars, *, sd_min=None, model_label=None,
     else:
         active = np.ones(len(pars), dtype=bool)
 
-    for sigma_col in ("sd", "srf_size"):
-        if sigma_col not in pars.columns:
-            continue
-        s = pars[sigma_col].to_numpy()
+    if "sd" in pars.columns:
+        s = pars["sd"].to_numpy()
         finite_active = active & np.isfinite(s)
         n_nonpos = int((finite_active & (s <= 0)).sum())
         if n_nonpos:
             issues.append(
-                f"  - {n_nonpos} voxels with {sigma_col} <= 0 "
+                f"  - {n_nonpos} voxels with sd <= 0 "
                 f"(mathematically impossible for a Gaussian PRF)")
         if sd_min is not None and sd_min > 0:
             n_below = int((finite_active & (s > 0) & (s <= sd_min)).sum())
             if n_below:
                 issues.append(
-                    f"  - {n_below} voxels with {sigma_col} <= sd_min "
+                    f"  - {n_below} voxels with sd <= sd_min "
                     f"(= {sd_min}). braincoder's _sd_softplus_inverse "
                     f"will raise on these. Likely cause: NIfTIs predate "
                     f"the sd_min hook — refit the source model with "
                     f"sd_min > 0 first")
+
+    if "srf_size" in pars.columns:
+        r = pars["srf_size"].to_numpy()
+        finite_active = active & np.isfinite(r)
+        n_below = int((finite_active & (r <= 1.0)).sum())
+        if n_below:
+            issues.append(
+                f"  - {n_below} voxels with srf_size <= 1 "
+                f"(surround should be wider than center). braincoder's "
+                f"DoG / DN srf_size transform requires srf_size > 1; "
+                f"likely cause: NIfTIs fit with the legacy DoG "
+                f"transform that used sd_min as the srf_size floor — "
+                f"refit the source DoG model")
 
     if not issues:
         return pars
