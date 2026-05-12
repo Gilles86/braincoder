@@ -46,7 +46,7 @@ class GeodesicGPPrior(object):
                  lengthscale_init=10.0,
                  variance_init=1.0,
                  nugget_init=0.1,
-                 jitter=1e-6):
+                 jitter=1e-4):
         d = np.asarray(distance_matrix, dtype=np.float32)
         if d.ndim != 2 or d.shape[0] != d.shape[1]:
             raise ValueError(
@@ -184,7 +184,10 @@ class GeodesicGPPrior(object):
         n = ops.softplus(log_n)
         K = v * ops.exp(-self._distance_sq / (2.0 * l * l))
         eye = ops.eye(self.n_vx, dtype='float32')
-        K = K + (n + self.jitter) * eye
+        # Adaptive jitter scales with the variance term so it stays
+        # numerically relevant when v >> 1 (e.g. priors on a parameter
+        # with a large native scale, like numerosity 'mu' in [10, 40]).
+        K = K + (n + v * self.jitter + 1e-9) * eye
         return K
 
     def _log_prob_tensor(self, values, log_l, log_v, log_n):
