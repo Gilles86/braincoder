@@ -46,11 +46,28 @@ class GeodesicGPPrior(object):
                  lengthscale_init=10.0,
                  variance_init=1.0,
                  nugget_init=0.1,
-                 jitter=1e-4):
+                 jitter=1e-4,
+                 psd_correction='mds'):
+        """``psd_correction``: how to handle non-Euclidean input distances.
+
+        * ``'mds'`` (default) — classical multi-dimensional scaling embeds
+          the distance matrix into Euclidean space. RBF on the resulting
+          Euclidean distances is provably PSD (Schoenberg 1938), so the
+          Cholesky never NaNs even when the input is a graph distance
+          (mesh-edge Dijkstra, geodesic, heat-method, …). Recommended.
+        * ``'none'`` — use the raw distances as-is. Fine for genuinely
+          Euclidean inputs; will fail Cholesky on graph distances.
+        """
         d = np.asarray(distance_matrix, dtype=np.float32)
         if d.ndim != 2 or d.shape[0] != d.shape[1]:
             raise ValueError(
                 f"distance_matrix must be square 2-D, got shape {d.shape}")
+
+        if psd_correction == 'mds':
+            d = _mds_embed_distances(d)
+        elif psd_correction != 'none':
+            raise ValueError(
+                f"psd_correction must be 'mds' or 'none', got {psd_correction!r}")
 
         self.n_vx = d.shape[0]
         self._distance_sq = ops.convert_to_tensor(d ** 2, dtype='float32')
@@ -212,3 +229,38 @@ def _to_unconstrained(x):
     x_arr = np.asarray(x, dtype=np.float32).reshape(())
     return ops.convert_to_numpy(
         softplus_inverse(ops.convert_to_tensor(x_arr, dtype='float32')))
+
+
+def _mds_embed_distances(d):
+    """Replace a (possibly non-Euclidean) distance matrix with its closest
+    Euclidean approximation via classical multi-dimensional scaling.
+
+    Classical MDS works on the double-centered squared-distance matrix
+    ``B = -0.5 * J D² J``. Its positive eigenvalues' coordinates give a
+    Euclidean embedding; negative eigenvalues correspond to the
+    non-Euclidean part of the input metric, which we drop. The output
+    matrix is the matrix of Euclidean distances among the embedded
+    coordinates.
+
+    For graph distances (mesh-edge Dijkstra, heat-method geodesics,
+    etc.) this is the standard trick to make ``exp(-d²/2l²)`` a valid
+    PSD kernel without further numerical tricks at run time.
+    """
+    d = np.asarray(d, dtype=np.float64)
+    n = d.shape[0]
+    D2 = d ** 2
+    # Double-centering: J D² J where J = I - 11ᵀ/n
+    J = np.eye(n) - 1.0 / n
+    B = -0.5 * (J @ D2 @ J)
+    # Symmetrize before eigendecomposition (numerical drift)
+    B = 0.5 * (B + B.T)
+    w, V = np.linalg.eigh(B)
+    # Keep positive eigenvalues only — the negative ones are exactly the
+    # non-Euclidean component we want to discard.
+    pos = w > 1e-10 * np.abs(w).max()
+    coords = V[:, pos] * np.sqrt(w[pos])               # (n, k)
+    # Pairwise Euclidean distances on the embedded coords.
+    diff = coords[:, None, :] - coords[None, :, :]
+    d_euc = np.sqrt((diff ** 2).sum(axis=-1)).astype(np.float32)
+    np.fill_diagonal(d_euc, 0.0)
+    return d_euc
