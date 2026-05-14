@@ -1,23 +1,41 @@
 """Statistics utilities for PRF / encoding-model R² maps.
 
 Two related-but-distinct 2-component R²-mixture classifiers live in this
-module — pick the right one for your use case:
+module. **Default to** :func:`fit_r2_mixture` **(logit-Gaussian)** unless
+you have a specific reason to prefer F+Beta.
 
 - :func:`fit_r2_mixture` / :func:`r2_fdr_threshold` / :func:`plot_r2_mixture`
   fit a 2-component Gaussian mixture on ``logit(R²)``. Both components are
-  free (means + variances + weights). Best **density estimate** of an R²
-  histogram, but the "signal" component is data-driven and can grow to cover
-  ~50% of voxels with a tail-FDR threshold of ``inf`` on typical fMRI maps.
-  Use for visualization or when no model-anchored noise is appropriate.
+  free (means + variances + weights). The logit transform stretches
+  R²∈[0,1] to ℝ, so a wide signal tail and a sharp noise peak are both
+  representable without contortions. Empirically (retsupp 7T PRF, 30 subj,
+  2026-05) this gives sensible bimodal fits at every retinotopic ROI *and*
+  whole-brain, with BIC strongly preferring K=2 (ΔBIC ≳ 1500 vs K=3 on
+  N≈300k voxels). Use for visualization, whole-brain thresholding, and
+  per-ROI FDR.
 
 - :func:`fit_r2_f_beta_mixture` / :func:`r2_fdr_threshold_f_beta` /
   :func:`plot_r2_f_beta_mixture` fit a model-anchored mixture on R² directly:
   **noise** = F(d1, d2) ≡ Beta(d1/2, d2/2) with d1 *fixed at the number of
   free per-voxel PRF parameters k*; d2 fit by EM. **signal** = Beta(α_s, β_s)
   with both shapes free. The fixed d1 pins the upper-tail shape of the null
-  using model complexity, so signal/noise separation is sharper and real
-  per-voxel tail-FDR thresholds become available even in low-SNR ROIs. Use
-  for paper-grade FDR reporting.
+  using model complexity, so signal/noise separation can be sharper in
+  low-SNR ROIs where the logit-Gaussian "signal" component blends into
+  the noise. Use only if you need a model-anchored null (e.g. publication-
+  grade per-voxel FDR in a noisy ROI).
+
+When to use each:
+- Whole-brain or GM-wide thresholding for visualization → ``fit_r2_mixture``.
+- Per-ROI FDR thresholding for downstream model fits → ``fit_r2_mixture``
+  (matches naive 2-Beta within Jaccard ≥0.83 on retinotopic ROIs).
+- Per-voxel FDR reporting in a ROI where the logit-Gaussian "signal" is
+  poorly separated → ``fit_r2_f_beta_mixture``.
+
+Avoid: an all-free **2-Beta** mixture on R² (i.e. both Betas with α, β free).
+The signal Beta degenerates to ≈ uniform when the noise right-tail is heavy,
+flagging up to a third of the brain as "signal" at R²≈0.004 (observed on
+retsupp whole-brain, 2026-05). Either anchor the noise (F+Beta above) or
+work in logit-Gaussian space.
 
 Likelihood note: the logit-Gaussian LL is on ``logit(R²)`` scale; the F-Beta
 LL is on ``R²`` scale. To compare them on the same scale, add the Jacobian
