@@ -18,6 +18,11 @@ softplus_inverse = tfp.math.softplus_inverse
 
 
 class WeightFitter(object):
+    """Closed-form solver for voxel weights given fixed parameters.
+
+    Uses TensorFlow's ``lstsq`` to compute weights that best map basis predictions
+    to measured data, optionally with L2 regularization via ``alpha``.
+    """
 
     def __init__(self, model, parameters, data, paradigm):
         self.model = model
@@ -26,6 +31,7 @@ class WeightFitter(object):
         self.paradigm = self.model.get_paradigm(paradigm)
 
     def fit(self, alpha=0.0):
+        """Solve for weights using least squares with optional L2 regularization."""
         parameters = self.model._get_parameters(self.parameters)
         parameters_ = parameters.values[np.newaxis, ...] if parameters is not None else None
 
@@ -43,6 +49,12 @@ class WeightFitter(object):
         return weights
 
 class ParameterFitter(object):
+    """Iterative optimizer that estimates model parameters for each voxel.
+
+    Wraps TensorFlow optimizers (Adam by default), handles parameter transforms,
+    shared/fixed constraints, logging, and exposes ``fit`` plus helper methods
+    for diagnostics such as predictions, residuals, and R².
+    """
 
     def __init__(self, model, data, paradigm, memory_limit=666666666, log_dir=False):
         self.model = model
@@ -76,6 +88,7 @@ class ParameterFitter(object):
             progressbar=True,
             legacy_adam=False,
             **kwargs):
+        """Run iterative optimization to estimate model parameters for each voxel."""
 
         n_voxels, n_pars = self.data.shape[1], len(self.model.parameter_labels)
 
@@ -1551,4 +1564,3 @@ def make_aperture_stimuli(grid_coordinates, x, width, height, falloff_speed=1000
         falloff_speed)
 
     return bar_x*bar_y*intensity
-

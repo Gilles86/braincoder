@@ -2,7 +2,20 @@ Welcome to Braincoder's documentation!
 ======================================
 
 **Braincoder** is a package to fit encoding models to neural data (for now fMRI) and
-to then *invert* those models to decode stimulus information from neural data.
+to then *invert* those models to decode stimulus information from neural data.  It
+wraps stimulus handling, model definition, HRF convolution, and optimization into a
+single TensorFlow-based toolkit.
+
+Highlights
+==========
+
+- **Composable models.** Pick from ready-made encoding models (linear, HRF-aware)
+  or subclass :class:`braincoder.models.EncodingModel` to implement your own.
+- **End-to-end workflow.** Utilities for simulation, fitting, and decoding stay
+  in pandas/tensor-friendly formats, so you can move between prototyping and large
+  analyses quickly.
+- **Batteries included.** Canonical HRFs, weight/parameter optimizers, tutorials,
+  and reproducible gallery examples are part of the default install.
 
 Important links
 ===============
@@ -39,7 +52,6 @@ Here we create a new environment called `braincoder` with the required packages:
     mamba create --name braincoder tensorflow-probability tensorflow -c conda-forge
     mamba activate braincoder
     pip install git+https://github.com/Gilles86/braincoder.git
-
 How to Cite
 ===========
 
@@ -65,4 +77,4 @@ By citing this software, you help support open-source development and proper cre
 Usage
 =====
 
-Please have a look at the `tutorials <https://braincoder-devs.github.io/tutorial/index.html>`_ to get started.
+Please have a look at the `tutorials <https://braincoder-devs.github.io/tutorial/index.html>`_ to get started, review the `concepts & architecture guide <https://braincoder-devs.github.io/concepts.html>`_, or browse the `API reference <https://braincoder-devs.github.io/api_reference.html>`_.
