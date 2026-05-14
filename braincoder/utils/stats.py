@@ -93,6 +93,70 @@ def r2_fdr_threshold(r2_or_fit, alpha=0.05, n_grid=4000):
     return float(_inv_logit(z_grid[hits[0]]))
 
 
+def plot_r2_mixture(fit, r2=None, alpha=None, threshold=None, ax=None,
+                     title=None):
+    """Diagnostic plot for :func:`fit_r2_mixture`.
+
+    Histogram of ``logit(R²)`` with the two Gaussian component PDFs and
+    (optionally) the FDR threshold overlaid. X-ticks are labelled on
+    the raw R² scale for readability. Pass ``alpha`` to compute the
+    threshold from the mixture, or pass ``threshold`` directly.
+    """
+    import matplotlib.pyplot as plt
+    from scipy.stats import norm
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 4))
+    else:
+        fig = ax.figure
+
+    z_lo = fit['noise_mu'] - 4 * fit['noise_sigma']
+    z_hi = fit['signal_mu'] + 4 * fit['signal_sigma']
+
+    if r2 is not None:
+        r2 = np.asarray(r2, dtype=float).ravel()
+        r2 = r2[np.isfinite(r2) & (r2 > 0) & (r2 < 0.99)]
+        z_data = _logit(np.clip(r2, 1e-6, 1 - 1e-6))
+        z_lo = min(z_lo, float(np.percentile(z_data, 0.1)))
+        z_hi = max(z_hi, float(np.percentile(z_data, 99.9)))
+        ax.hist(z_data, bins=80, density=True, color='0.85',
+                edgecolor='0.5', alpha=0.9,
+                label=f'data (n={len(r2)})')
+
+    z_grid = np.linspace(z_lo, z_hi, 500)
+    p_n = (fit['noise_weight']
+           * norm.pdf(z_grid, fit['noise_mu'], fit['noise_sigma']))
+    p_s = (fit['signal_weight']
+           * norm.pdf(z_grid, fit['signal_mu'], fit['signal_sigma']))
+    ax.plot(z_grid, p_n, color='#1f77b4', lw=2,
+            label=f"Noise (w={fit['noise_weight']:.2f})")
+    ax.plot(z_grid, p_s, color='#d62728', lw=2,
+            label=f"Signal (w={fit['signal_weight']:.2f})")
+    ax.plot(z_grid, p_n + p_s, color='k', lw=1, ls='--', alpha=0.6)
+
+    if threshold is None and alpha is not None:
+        threshold = r2_fdr_threshold(fit, alpha=alpha)
+    if threshold is not None and np.isfinite(threshold):
+        z_thr = _logit(np.clip(threshold, 1e-6, 1 - 1e-6))
+        label = f'Threshold R²={threshold:.3f}'
+        if alpha is not None:
+            label += f' (α={alpha})'
+        ax.axvline(z_thr, color='k', ls=':', lw=1.3, label=label)
+
+    r2_ticks_all = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5]
+    z_ticks = [_logit(t) for t in r2_ticks_all]
+    keep = [(z, t) for z, t in zip(z_ticks, r2_ticks_all) if z_lo <= z <= z_hi]
+    if keep:
+        ax.set_xticks([z for z, _ in keep])
+        ax.set_xticklabels([f'{t:g}' for _, t in keep])
+    ax.set_xlabel('R²  (logit-scaled axis)')
+    ax.set_ylabel('Density')
+    ax.set_yscale('log')
+    ax.legend(loc='upper right', fontsize=8)
+    if title is not None:
+        ax.set_title(title)
+    return fig
+
+
 def get_map(p):
     stimuli = p.columns.to_frame(index=False).T
     return stimuli.groupby(level=0).apply(lambda d: (p * d.values).sum(1) / p.sum(1)).T
