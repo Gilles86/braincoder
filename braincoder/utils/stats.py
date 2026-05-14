@@ -104,6 +104,62 @@ def fit_r2_mixture(r2, n_init=8, max_iter=500, seed=0):
     }
 
 
+def posterior_p_signal(r2, fit):
+    """Per-voxel posterior P(signal | R²) under a 2-component logit-Gaussian fit.
+
+    Args:
+        r2: array-like of per-voxel R² values (any shape; flattened internally).
+        fit: a dict returned by :func:`fit_r2_mixture`.
+
+    Returns:
+        ``np.ndarray`` of ``float32`` with the same flat shape as ``r2``.
+        Voxels outside the valid R² support (NaN, ≤0, ≥0.99) are returned
+        as ``NaN``.
+    """
+    from scipy.stats import norm
+    r2_arr = np.asarray(r2, dtype=float).ravel()
+    keep = np.isfinite(r2_arr) & (r2_arr > 0) & (r2_arr < 0.99)
+    z = _logit(np.clip(r2_arr[keep], 1e-6, 1 - 1e-6))
+    p_n = fit['noise_weight']  * norm.pdf(z, fit['noise_mu'],  fit['noise_sigma'])
+    p_s = fit['signal_weight'] * norm.pdf(z, fit['signal_mu'], fit['signal_sigma'])
+    out = np.full(r2_arr.size, np.nan, dtype=np.float32)
+    out[keep] = (p_s / (p_n + p_s + 1e-30)).astype(np.float32)
+    return out
+
+
+def fit_and_classify(r2, alpha=0.05, **fit_kw):
+    """Fit a logit-Gaussian mixture and return fit + per-voxel posterior +
+    tail-FDR threshold in one call.
+
+    Convenience wrapper for the typical "fit, threshold, classify" flow:
+    one call replaces three. Skips the fit (and returns ``fit=None``,
+    ``p_signal`` all-NaN) when the input has fewer than 50 valid R² values.
+
+    Args:
+        r2: array-like of per-voxel R² values.
+        alpha: tail-FDR α for the threshold (default 0.05).
+        **fit_kw: passed through to :func:`fit_r2_mixture`.
+
+    Returns:
+        ``dict`` with keys ``{'fit', 'p_signal', 'r2_threshold', 'reason'}``.
+        ``p_signal`` has one entry per input voxel (NaN outside support).
+        ``r2_threshold`` is ``np.inf`` if no valid threshold exists.
+    """
+    r2_arr = np.asarray(r2, dtype=float).ravel()
+    n = r2_arr.size
+    try:
+        fit = fit_r2_mixture(r2_arr, **fit_kw)
+    except ValueError as e:
+        return {'fit': None,
+                'p_signal': np.full(n, np.nan, dtype=np.float32),
+                'r2_threshold': float('inf'),
+                'reason': str(e)}
+    return {'fit': fit,
+            'p_signal': posterior_p_signal(r2_arr, fit),
+            'r2_threshold': r2_fdr_threshold(fit, alpha=alpha),
+            'reason': 'ok'}
+
+
 def r2_fdr_threshold(r2_or_fit, alpha=0.05, n_grid=4000):
     """R² threshold at which the 2-component mixture's tail-FDR is ≤ α.
 
