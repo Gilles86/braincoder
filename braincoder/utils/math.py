@@ -6,6 +6,16 @@ from keras import ops
 from .backend import softplus_inverse
 
 
+# np.trapezoid was added in NumPy 2.0 (replacing np.trapz, which was
+# removed in 2.0). Pick whichever is available so the package works on
+# both old cluster installs (1.x → only trapz) and current ones
+# (2.x → only trapezoid).
+if hasattr(np, 'trapezoid'):
+    _trapezoid = np.trapezoid
+else:
+    _trapezoid = np.trapz
+
+
 def norm(x, mu, sigma):
     kernel = ops.exp(-.5 * (x - mu)**2. / sigma**2)
     return kernel
@@ -95,10 +105,10 @@ def get_expected_value(stimulus_pdf, normalize=True):
     x = stimulus_pdf.columns.astype(np.float32)
 
     if normalize:
-        stimulus_pdf /= np.trapezoid(stimulus_pdf, x=x, axis=1)[:, np.newaxis]
+        stimulus_pdf /= _trapezoid(stimulus_pdf, x=x, axis=1)[:, np.newaxis]
 
 
-    E = np.trapezoid(stimulus_pdf * x, x=x, axis=1)
+    E = _trapezoid(stimulus_pdf * x, x=x, axis=1)
 
     return pd.Series(E, name='E', index=stimulus_pdf.index)
 
@@ -108,7 +118,7 @@ def get_sd_posterior(stimulus_pdf, E=None, normalize=True):
     x = stimulus_pdf.columns.astype(np.float32).values
 
     if normalize:
-        stimulus_pdf /= np.trapezoid(stimulus_pdf, x=x, axis=1)[:, np.newaxis]
+        stimulus_pdf /= _trapezoid(stimulus_pdf, x=x, axis=1)[:, np.newaxis]
 
     if E is None:
         E = get_expected_value(stimulus_pdf, normalize=normalize).values
@@ -116,6 +126,6 @@ def get_sd_posterior(stimulus_pdf, E=None, normalize=True):
         if hasattr(E, 'values'):
             E = E.values
 
-    sd = np.sqrt(np.trapezoid(stimulus_pdf * (x[np.newaxis, :] - E[:, np.newaxis]) ** 2, x=x, axis=1))
+    sd = np.sqrt(_trapezoid(stimulus_pdf * (x[np.newaxis, :] - E[:, np.newaxis]) ** 2, x=x, axis=1))
 
     return pd.Series(sd, name='sd', index=stimulus_pdf.index)

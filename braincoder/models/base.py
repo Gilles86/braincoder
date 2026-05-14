@@ -5,7 +5,7 @@ from tqdm import tqdm
 import keras
 from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
-from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm
+from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm, _trapezoid
 from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample_mvn, sample_mvt, sample_student_t, compute_gradients
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
@@ -373,7 +373,7 @@ class EncodingModel(object):
         ll = np.exp(ll.apply(lambda d: d-d.max(), 1))
 
         if normalize and not isinstance(ll.columns, pd.MultiIndex):
-            ll /= np.trapezoid(ll, ll.columns)[:, np.newaxis]
+            ll /= _trapezoid(ll, ll.columns)[:, np.newaxis]
 
         return ll
 
