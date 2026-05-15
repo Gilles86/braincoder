@@ -1020,7 +1020,10 @@ class StimulusFitter(object):
         else:
             likelihood = self.build_likelihood(use_mask=True, mask_ix=mask_ix)
 
-        pbar = tqdm(range(max_n_iterations))
+        if progressbar:
+            pbar = tqdm(range(max_n_iterations))
+        else:
+            pbar = range(max_n_iterations)
         self.costs = np.ones(max_n_iterations) * 1e12
 
         if legacy_adam:
@@ -1028,47 +1031,130 @@ class StimulusFitter(object):
         else:
             opt = tf.optimizers.Adam(learning_rate=learning_rate)
 
-        for step in pbar:
+        # Build a graph-compiled training step. Wrapping the bijector forward,
+        # likelihood, gradient and apply_gradients into one tf.function amortises
+        # eager-dispatch / tracing overhead across iterations. We avoid syncing
+        # GPU->CPU on every iter; the outer Python loop only reads cost.numpy()
+        # at the lag boundary used by the early-stop check.
+        single_bijector = self.single_bijector
+        bijectors = self.stimulus.bijectors
+        masked = mask is not None
+        l1 = None if l1_norm is None else tf.constant(l1_norm, dtype=tf.float32)
+        l2 = None if l2_norm is None else tf.constant(l2_norm, dtype=tf.float32)
+
+        # For the single-bijector / no-mask path (the common ImageStimulus case
+        # used for decoding) we avoid the `likelihood(*tensor)` variadic API
+        # because unpacking a Tensor inside a tf.function isn't allowed. Build a
+        # graph-friendly direct-call likelihood that takes the already-stacked
+        # parameter tensor (n_datapoints, n_pars). The original variadic API is
+        # kept for the multi-bijector and masked paths so semantics don't change
+        # there.
+        data_tf = tf.constant(self.data.values[tf.newaxis, ...], dtype=tf.float32)
+        parameters_tf = tf.constant(
+            self.model.parameters.values[tf.newaxis, ...], dtype=tf.float32)
+        weights_tf = (None if self.model.weights is None
+                      else tf.constant(self.model.weights.values[tf.newaxis, ...],
+                                       dtype=tf.float32))
+        omega_chol_tf = tf.constant(
+            np.linalg.cholesky(self.model.omega), dtype=tf.float32)
+        stimulus_obj = self.stimulus
+        model_obj = self.model
+
+        @tf.function
+        def _likelihood_direct(stacked_pars):
+            """stacked_pars: (n_datapoints, n_pars) — already in stimulus space."""
+            stim = stimulus_obj._generate_stimulus(stacked_pars)[tf.newaxis, ...]
+            ll = model_obj._likelihood(
+                stim, data_tf, parameters_tf, weights_tf, omega_chol_tf,
+                dof=model_obj.dof, logp=True)
+            return tf.reduce_sum(ll, 1)
+
+        @tf.function
+        def _step():
             with tf.GradientTape() as tape:
-                if self.single_bijector:
-                    # n_pars x datapoints
-                    untransformed_pars = tf.transpose(self.stimulus.bijectors.forward(model_vars[0]))
+                if single_bijector:
+                    # stacked_pars: (n_datapoints, n_pars) — keep stacked.
+                    stacked_pars = bijectors.forward(model_vars[0])
+                    if masked:
+                        # Masked path still goes through the original API
+                        # (uses tensor_scatter_nd_add inside).
+                        ll = likelihood(stacked_pars)[0]
+                    else:
+                        ll = _likelihood_direct(stacked_pars)[0]
+                    if l1 is not None:
+                        cost = -ll + l1 * tf.reduce_sum(tf.abs(stacked_pars))
+                    else:
+                        cost = -ll
+                    if l2 is not None:
+                        cost = cost + l2 * tf.reduce_sum(stacked_pars ** 2)
                 else:
-                    untransformed_pars = [bijector.forward(
-                        par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
-
-                if mask is None:
-                    ll = likelihood(*untransformed_pars)[0]
-                else:
-                    ll = likelihood(untransformed_pars)[0]
-
-                cost = -ll
-                if l1_norm is not None:
-                    cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in untransformed_pars])
-                if l2_norm is not None:
-                    cost += l2_norm * tf.reduce_sum([tf.reduce_sum(par**2) for par in untransformed_pars])
+                    untransformed_pars = [bj.forward(p) for bj, p
+                                          in zip(bijectors, model_vars)]
+                    if masked:
+                        ll = likelihood(untransformed_pars)[0]
+                    else:
+                        ll = likelihood(*untransformed_pars)[0]
+                    cost = -ll
+                    if l1 is not None:
+                        cost = cost + l1 * tf.add_n(
+                            [tf.reduce_sum(tf.abs(p)) for p in untransformed_pars])
+                    if l2 is not None:
+                        cost = cost + l2 * tf.add_n(
+                            [tf.reduce_sum(p ** 2) for p in untransformed_pars])
 
             gradients = tape.gradient(cost, trainable_vars)
             opt.apply_gradients(zip(gradients, trainable_vars))
+            if single_bijector:
+                # Match original semantics: return the transposed bijector-forward
+                # tensor (n_pars, n_datapoints) for downstream stacking.
+                return cost, ll, tf.transpose(stacked_pars)
+            return cost, ll, untransformed_pars
 
-            if progressbar:
-                pbar.set_description(f'LL: {ll:6.4f}')
+        last_untransformed = None
+        for step in pbar:
+            cost_t, ll_t, last_untransformed = _step()
 
-            self.costs[step] = cost.numpy()
+            # Only force a GPU->CPU sync at sparse intervals: at the lag boundary
+            # for early-stop checks, and on the final iter. Between sync points,
+            # leave self.costs at its sentinel 1e12 (it's not read).
+            need_sync = (
+                (step >= min_n_iterations and ((step - min_n_iterations) % lag == 0))
+                or (step == max_n_iterations - 1)
+            )
 
-            previous_cost = self.costs[np.max((step - lag, 0))]
-            if step > min_n_iterations:
-                if np.sign(previous_cost) == np.sign(cost):
-                    if np.sign(cost) == 1:
-                        if (cost / previous_cost) > 1 - rtol:
-                            break
-                    else:
-                        if (cost / previous_cost) < 1 - rtol:
-                            break
+            if need_sync:
+                cost_val = float(cost_t.numpy())
+                self.costs[step] = cost_val
+
+                if progressbar:
+                    pbar.set_description(f'LL: {float(ll_t.numpy()):6.4f}')
+
+                if step > min_n_iterations:
+                    prev_step = max(step - lag, 0)
+                    previous_cost = self.costs[prev_step]
+                    if np.sign(previous_cost) == np.sign(cost_val):
+                        if np.sign(cost_val) == 1:
+                            if (cost_val / previous_cost) > 1 - rtol:
+                                break
+                        else:
+                            if (cost_val / previous_cost) < 1 - rtol:
+                                break
+            elif progressbar and (step % 25 == 0):
+                # Cheap-ish description refresh; forces a sync but only 1 in 25
+                # iterations, so the amortised cost stays low.
+                pbar.set_description(f'LL: {float(ll_t.numpy()):6.4f}')
+
+        # last_untransformed holds the bijector-forward params from inside the
+        # final step (i.e. pre-update for that step, matching original semantics).
+        untransformed_pars = last_untransformed
 
         if mask is None:
-            fitted_pars_ = np.stack(
-                [par.numpy() for par in untransformed_pars], axis=1)
+            if self.single_bijector:
+                # untransformed_pars: (n_pars, n_datapoints) tensor (see _step).
+                fitted_pars_ = untransformed_pars.numpy().T
+            else:
+                fitted_pars_ = np.stack(
+                    [par.numpy() for par in untransformed_pars], axis=1)
         else:
             fitted_pars_ = self.stimulus.generate_empty_stimulus(len(self.data))
             fitted_pars_[mask] = untransformed_pars.numpy()
