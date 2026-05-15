@@ -968,7 +968,7 @@ class ResidualFitter(object):
             raise NotImplementedError()
 
         opt = tf.optimizers.Adam(learning_rate=learning_rate)
-        
+
         pbar = range(max_n_iterations)
 
         if progressbar:
@@ -976,52 +976,153 @@ class ResidualFitter(object):
 
         self.costs = np.zeros(max_n_iterations)
 
-        def copy_variables(traiable_variables):
-            return [tf.identity(e) for e in trainable_variables]
-
-        best_cost = np.inf
-        # best_omega = np.diag(init_tau)
+        # Seed `best_omega` from the initial parameters so the tf.Variable
+        # shadow below has a sensible shape/value. The seed itself is never
+        # returned: the first iteration of _step will assign over it.
         best_omega = get_omega(trainable_variables)
-        best_variables = copy_variables(trainable_variables)
 
-        for step in pbar:
-            with tf.GradientTape() as tape:
-                try:
+        # ---- @tf.function speedup -------------------------------------------
+        # The original loop does GPU->CPU sync on EVERY iter (cost.numpy(),
+        # omega.numpy(), and 4× .numpy() calls inside get_pbar_description).
+        # Per-iter wall-clock is dominated by these syncs, not the matmul.
+        # We mirror the StimulusFitter / ParameterFitter patch:
+        #   1. wrap tape + cost + gradients + apply_gradients in @tf.function
+        #   2. track best_cost / best_omega / best_variables as tf.Variables
+        #      updated in-place via tf.cond (no host round-trip)
+        #   3. outer Python loop only syncs at lag-spaced points for early-stop
+        #      and at ~2 Hz wall-clock for the pbar description
+        #   4. keep the try/except recovery path: the @tf.function call site is
+        #      what's wrapped, so any tf.errors.* (e.g. Cholesky-on-non-PD)
+        #      surfaces as a Python exception we catch the same way the
+        #      original loop did.
+        #
+        # Caveats vs original:
+        # - Recovery path: on exception we rebuild `opt` with 0.9× lr just like
+        #   the original. We cannot rebuild a @tf.function-wrapped step that
+        #   closes over `opt` from outside, so we keep `opt` in a 1-element
+        #   list and indirect through it; recompile only the small _maybe_step
+        #   wrapper if/when `opt` is replaced. (Reuses the same tau_/rho_/...
+        #   tf.Variables — they retain their values.)
+        # - On exception, original sets self.costs[step] = np.inf and skips
+        #   the apply step. We do the same: best_* vars are unchanged, costs
+        #   array entry is inf, outer loop continues.
+        # - self.costs is now SPARSE: only filled at sync points (others stay
+        #   at 0). The early-stop ratio check is done off the synced grid;
+        #   semantics are equivalent to the original at sync grid points and
+        #   the worst-case extra work is ~lag iters.
+        is_t = (method == 't')
+
+        # tf.Variable shadows tracking the best fit so far. Updated in-place
+        # from inside the @tf.function via tf.cond.
+        best_cost_var = tf.Variable(
+            np.float32(np.inf), dtype=tf.float32, trainable=False,
+            name='best_cost')
+        best_omega_var = tf.Variable(
+            best_omega, dtype=tf.float32, trainable=False, name='best_omega')
+        # Per-variable shadows: same shape/dtype as each trainable var.
+        best_var_shadows = [
+            tf.Variable(tf.identity(v), dtype=v.dtype, trainable=False,
+                        name=f'best_{v.name.replace(":", "_")}')
+            for v in trainable_variables
+        ]
+
+        # Hold opt in a 1-elem list so the recovery path can swap it out
+        # without re-tracing _step (we indirect through opt_holder).
+        opt_holder = [opt]
+
+        def _build_step():
+            @tf.function
+            def _step():
+                with tf.GradientTape() as tape:
                     omega = get_omega(trainable_variables)
                     cost = -fit_stat(omega)
+                gradients = tape.gradient(cost, trainable_variables)
+                opt_holder[0].apply_gradients(zip(gradients, trainable_variables))
 
-                    gradients = tape.gradient(cost,
-                                              trainable_variables)
+                # Update best_* if cost improved. tf.cond avoids any host sync.
+                improved = cost < best_cost_var
+                def _update():
+                    best_cost_var.assign(cost)
+                    best_omega_var.assign(omega)
+                    for shadow, var in zip(best_var_shadows, trainable_variables):
+                        shadow.assign(var)
+                    return tf.constant(0)
+                def _noop():
+                    return tf.constant(0)
+                tf.cond(improved, _update, _noop)
+                return cost, omega
+            return _step
 
-                    opt.apply_gradients(zip(gradients, trainable_variables))
-                    self.costs[step] = cost.numpy()
+        _step = _build_step()
 
-                    if self.costs[step] < best_cost:
-                        best_omega = omega.numpy()
-                        best_cost = self.costs[step]
-                        best_variables = copy_variables(trainable_variables)
+        import time as _time
+        last_pbar_refresh = _time.time()
 
+        for step in pbar:
+            try:
+                cost_t, _omega_t = _step()
+            except Exception:
+                # Same recovery semantics as the original loop: drop lr, rebuild
+                # opt, mark this iter as inf, continue. We do NOT reset
+                # trainable_variables — the original `copy_variables` was a
+                # no-op (it cloned current vars, not the best). best_* shadows
+                # are unchanged so the post-loop result is still the best
+                # seen-so-far.
+                learning_rate = 0.9 * learning_rate
+                opt_holder[0] = tf.optimizers.Adam(learning_rate=learning_rate)
+                # Rebuild _step so it re-traces against the new opt (the slot
+                # variables on the old opt are gone).
+                _step = _build_step()
+                self.costs[step] = np.inf
+                if progressbar:
+                    pbar.set_description('recovering (NaN gradient?)')
+                continue
 
-                except Exception as e:
-                    learning_rate = 0.9 * learning_rate
-                    opt = tf.optimizers.Adam(learning_rate=learning_rate)
-                    trainable_variables = copy_variables(best_variables)
-                    self.costs[step] = np.inf
-                    cost = tf.constant(np.inf)
+            need_sync = (
+                (step >= min_n_iterations
+                 and ((step - min_n_iterations) % lag == 0))
+                or step == max_n_iterations - 1
+            )
+
+            if need_sync:
+                cost_val = float(cost_t.numpy())
+                self.costs[step] = cost_val
 
                 if progressbar:
                     pbar.set_description(get_pbar_description(
-                        cost, best_cost, best_variables))
-                previous_cost = self.costs[np.max((step-lag, 0))]
+                        cost_t, float(best_cost_var.numpy()), best_var_shadows))
+                    last_pbar_refresh = _time.time()
 
-                if (step > min_n_iterations) & (np.sign(previous_cost) == np.sign(cost)):
-                    if np.sign(cost) == -1:
-                        if (cost / previous_cost) < 1 + rtol:
-                            break
-                    else:
-                        if (cost / previous_cost) > 1 - rtol:
-                            break
-        omega = best_omega
+                # Early stop: compare against the previous sync point. By
+                # construction the previous sync was exactly `lag` iters back
+                # (or it was the initial min_n_iterations sync, in which case
+                # we don't compare yet).
+                if step > min_n_iterations:
+                    prev_step = step - lag
+                    previous_cost = self.costs[prev_step] if prev_step >= 0 else 0.0
+                    if previous_cost != 0.0 and np.isfinite(previous_cost) \
+                            and np.isfinite(cost_val) \
+                            and np.sign(previous_cost) == np.sign(cost_val):
+                        if np.sign(cost_val) == -1:
+                            if (cost_val / previous_cost) < 1 + rtol:
+                                break
+                        else:
+                            if (cost_val / previous_cost) > 1 - rtol:
+                                break
+            elif progressbar and (_time.time() - last_pbar_refresh > 2.0):
+                # Wall-clock-gated pbar refresh: force a sync at ~0.5 Hz, which
+                # is negligible compared to the per-iter cost.
+                pbar.set_description(get_pbar_description(
+                    cost_t, float(best_cost_var.numpy()), best_var_shadows))
+                last_pbar_refresh = _time.time()
+
+        # Pull best_* off-device once at the end.
+        omega = best_omega_var.numpy()
+        # `best_variables` historically was a list of plain tensors (from
+        # tf.identity). Replicate that so transform_variables(best_variables)
+        # (a closure over Python list-of-tensors / list-of-Variables) still
+        # works downstream.
+        best_variables = [tf.identity(v) for v in best_var_shadows]
 
         fitted_parameters = [e.numpy() for e in transform_variables(best_variables)]
         self.fitted_omega_parameters = dict(zip(['tau', 'rho', 'sigma2'], fitted_parameters[:3]))
@@ -1030,7 +1131,7 @@ class ResidualFitter(object):
             self.fitted_omega_parameters['alpha'] = fitted_parameters[3]
             self.fitted_omega_parameters['beta'] = fitted_parameters[4]
 
-        if method == 't':
+        if is_t:
             dof = softplus(best_variables[-1]).numpy()
             self.fitted_omega_parameters['dof'] = dof
             return omega, dof
