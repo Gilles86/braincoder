@@ -1110,7 +1110,9 @@ class StimulusFitter(object):
                 return cost, ll, tf.transpose(stacked_pars)
             return cost, ll, untransformed_pars
 
+        import time as _time
         last_untransformed = None
+        last_pbar_refresh = _time.time()
         for step in pbar:
             cost_t, ll_t, last_untransformed = _step()
 
@@ -1128,6 +1130,7 @@ class StimulusFitter(object):
 
                 if progressbar:
                     pbar.set_description(f'LL: {float(ll_t.numpy()):6.4f}')
+                    last_pbar_refresh = _time.time()
 
                 if step > min_n_iterations:
                     prev_step = max(step - lag, 0)
@@ -1139,10 +1142,12 @@ class StimulusFitter(object):
                         else:
                             if (cost_val / previous_cost) < 1 - rtol:
                                 break
-            elif progressbar and (step % 25 == 0):
-                # Cheap-ish description refresh; forces a sync but only 1 in 25
-                # iterations, so the amortised cost stays low.
+            elif progressbar and (_time.time() - last_pbar_refresh > 2.0):
+                # Wall-clock-gated description refresh: ~once every 2 s,
+                # regardless of iter rate. Forces a GPU->CPU sync, but at
+                # this cadence the cost is negligible (0.5 syncs/s).
                 pbar.set_description(f'LL: {float(ll_t.numpy()):6.4f}')
+                last_pbar_refresh = _time.time()
 
         # last_untransformed holds the bijector-forward params from inside the
         # final step (i.e. pre-update for that step, matching original semantics).
