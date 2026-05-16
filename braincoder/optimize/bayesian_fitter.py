@@ -338,10 +338,15 @@ class BayesianParameterFitter(object):
 
             return nll_total + nlp_total
 
-        adam_kwargs = dict(learning_rate=learning_rate)
-        if clipnorm is not None:
-            adam_kwargs['clipnorm'] = float(clipnorm)
-        opt = keras.optimizers.Adam(**adam_kwargs)
+        # Note: we implement gradient clipping manually rather than via
+        # keras.optimizers.Adam(clipnorm=...) because the latter's
+        # behavior under the PyTorch backend interacts poorly with a
+        # transient NaN gradient (it scales by 1/NaN, poisoning Adam's
+        # moment buffers and producing NaN parameters that propagate
+        # for the rest of the loop). The manual path below scales by a
+        # NaN-safe factor and skips the update entirely if the loss or
+        # any gradient is non-finite.
+        opt = keras.optimizers.Adam(learning_rate=learning_rate)
         history = []
         best = float('inf')
         best_params = ops.convert_to_numpy(params_var)
@@ -354,11 +359,27 @@ class BayesianParameterFitter(object):
 
         for step in pbar:
             loss, grads = compute_gradients(loss_fn, trainable_variables)
-            opt.apply_gradients(zip(grads, trainable_variables))
             loss_val = float(ops.convert_to_numpy(loss))
+
+            # Manual global-norm clip, NaN-safe. If the loss or any
+            # gradient is non-finite, skip the update so a single bad
+            # step cannot poison Adam's moment buffers.
+            grads_np = [ops.convert_to_numpy(g) for g in grads]
+            finite = (np.isfinite(loss_val)
+                      and all(np.all(np.isfinite(g)) for g in grads_np))
+            if finite:
+                if clipnorm is not None:
+                    global_norm = float(np.sqrt(
+                        sum(float((g ** 2).sum()) for g in grads_np)))
+                    if global_norm > clipnorm and global_norm > 0.0:
+                        scale = clipnorm / global_norm
+                        grads = [ops.convert_to_tensor(g * scale,
+                                                       dtype='float32')
+                                 for g in grads_np]
+                opt.apply_gradients(zip(grads, trainable_variables))
             history.append(loss_val)
 
-            if loss_val < best - tol:
+            if finite and loss_val < best - tol:
                 best = loss_val
                 best_params = ops.convert_to_numpy(params_var)
                 best_sigma2 = ops.convert_to_numpy(sigma2_var)

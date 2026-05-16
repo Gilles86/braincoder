@@ -18,6 +18,7 @@ dependencies = [
     "pandas",
     "pandas_flavor",
     "scipy",
+    "scikit-learn",
     "tqdm",
     "patsy",
 ]
