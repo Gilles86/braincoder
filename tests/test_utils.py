@@ -170,3 +170,68 @@ class TestGammaPdf:
         expected_mode = (a - 1) * d  # = 5.0
         assert abs(peak_t - expected_mode) < 0.5, \
             f"Peak at {peak_t:.2f}, expected ~{expected_mode:.1f}"
+
+
+# ---------------------------------------------------------------------------
+# R² mixture posterior / p_signal threshold
+# ---------------------------------------------------------------------------
+
+class TestR2Posterior:
+    """The p_signal>0.5 path is now the default voxel-selection rule
+    in fit_gp_prior.py. Locks in: (i) p_signal aligns with mixture
+    component (high R² → signal); (ii) threshold sits between the
+    two component means; (iii) p_signal is monotone in R²."""
+
+    def _make_fit(self, rng, n=2000, w_signal=0.3,
+                  noise_mu=-3.0, signal_mu=0.5,
+                  noise_sigma=0.6, signal_sigma=0.5):
+        """Sample logit-Gaussian mixture, fit it, return (r2, fit)."""
+        from braincoder.utils.stats import _inv_logit, fit_r2_mixture
+        n_signal = rng.binomial(n, w_signal)
+        z = np.concatenate([
+            rng.normal(noise_mu,  noise_sigma, n - n_signal),
+            rng.normal(signal_mu, signal_sigma, n_signal),
+        ])
+        r2 = _inv_logit(z)
+        return r2, fit_r2_mixture(r2)
+
+    def test_p_signal_is_monotone_in_r2(self):
+        from braincoder.utils.stats import r2_posterior_signal
+        rng = np.random.default_rng(0)
+        r2, fit = self._make_fit(rng)
+        grid = np.linspace(0.01, 0.95, 100)
+        p = r2_posterior_signal(grid, fit)
+        assert np.all(np.diff(p) >= -1e-9), \
+            "p_signal must be monotone non-decreasing in R²"
+
+    def test_p_signal_outside_unit_interval_is_zero(self):
+        from braincoder.utils.stats import r2_posterior_signal
+        rng = np.random.default_rng(1)
+        _, fit = self._make_fit(rng)
+        r2 = np.array([-0.1, 0.0, 1.0, 1.5, np.nan, np.inf])
+        p = r2_posterior_signal(r2, fit)
+        assert np.all(p == 0.0)
+
+    def test_threshold_lies_between_component_means(self):
+        from braincoder.utils.stats import (
+            _inv_logit, r2_p_signal_threshold)
+        rng = np.random.default_rng(2)
+        _, fit = self._make_fit(rng)
+        t = r2_p_signal_threshold(fit, p=0.5)
+        # Threshold should be above the noise mean R² and below the
+        # signal mean R² for a non-degenerate mixture.
+        assert _inv_logit(fit['noise_mu']) < t < _inv_logit(fit['signal_mu'])
+
+    def test_threshold_consistent_with_posterior(self):
+        """Voxels with r² > t* should have p_signal ≥ 0.5, and vice versa."""
+        from braincoder.utils.stats import (
+            r2_posterior_signal, r2_p_signal_threshold)
+        rng = np.random.default_rng(3)
+        r2, fit = self._make_fit(rng)
+        t = r2_p_signal_threshold(fit, p=0.5)
+        p = r2_posterior_signal(r2, fit)
+        # Tiny grid-quantization tolerance.
+        above = r2 > t + 1e-3
+        below = r2 < t - 1e-3
+        assert (p[above] >= 0.5 - 1e-2).all()
+        assert (p[below] <  0.5 + 1e-2).all()

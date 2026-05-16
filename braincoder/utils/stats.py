@@ -93,6 +93,68 @@ def r2_fdr_threshold(r2_or_fit, alpha=0.05, n_grid=4000):
     return float(_inv_logit(z_grid[hits[0]]))
 
 
+def r2_posterior_signal(r2, fit):
+    """Posterior P(signal | r²) from a 2-component mixture fit.
+
+    Per-voxel responsibility of the *signal* (higher-mean) component:
+
+        P(signal | z) = w_s · N(z | μ_s, σ_s²) /
+                        [w_n · N(z | μ_n, σ_n²) + w_s · N(z | μ_s, σ_s²)]
+
+    where ``z = logit(R²)``. Values outside the open interval
+    ``(0, 1)`` map to 0 (cannot be signal under the logit-Gaussian
+    mixture).
+
+    Args:
+        r2: array-like of per-voxel R² values.
+        fit: dict returned by :func:`fit_r2_mixture`.
+
+    Returns:
+        ``np.ndarray`` of P(signal | r²) values aligned with ``r2``.
+    """
+    from scipy.stats import norm
+    r2 = np.asarray(r2, dtype=float).ravel()
+    out = np.zeros_like(r2)
+    valid = np.isfinite(r2) & (r2 > 0) & (r2 < 1)
+    if not valid.any():
+        return out
+    r2_safe = np.clip(r2[valid], 1e-6, 1 - 1e-6)
+    z = _logit(r2_safe)
+    p_n = fit['noise_weight'] * norm.pdf(z, fit['noise_mu'],
+                                          fit['noise_sigma'])
+    p_s = fit['signal_weight'] * norm.pdf(z, fit['signal_mu'],
+                                           fit['signal_sigma'])
+    denom = p_n + p_s
+    out[valid] = np.where(denom > 0, p_s / np.maximum(denom, 1e-300), 0.0)
+    return out
+
+
+def r2_p_signal_threshold(r2_or_fit, p=0.5, n_grid=4000):
+    """R² value at which P(signal | r²) first crosses ``p``.
+
+    Searches a logit grid from below the noise mean to above the
+    signal mean for the smallest r² with P(signal | r²) ≥ p. Returns
+    ``np.inf`` if the posterior never reaches ``p`` on that grid
+    (near-degenerate mixture).
+
+    Accepts either an R² array (fits a fresh mixture via
+    :func:`fit_r2_mixture`) or a previously-fitted dict.
+    """
+    if not isinstance(r2_or_fit, dict):
+        fit = fit_r2_mixture(r2_or_fit)
+    else:
+        fit = r2_or_fit
+    z_grid = np.linspace(fit['noise_mu'] - 5 * fit['noise_sigma'],
+                          fit['signal_mu'] + 8 * fit['signal_sigma'],
+                          n_grid)
+    r2_grid = _inv_logit(z_grid)
+    p_signal = r2_posterior_signal(r2_grid, fit)
+    hits = np.where(p_signal >= p)[0]
+    if len(hits) == 0:
+        return float('inf')
+    return float(r2_grid[hits[0]])
+
+
 def plot_r2_mixture(fit, r2=None, alpha=None, threshold=None, ax=None,
                      title=None):
     """Diagnostic plot for :func:`fit_r2_mixture`.
