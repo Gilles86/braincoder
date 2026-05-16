@@ -60,6 +60,33 @@ def test_log_prob_matches_numpy_mvn():
         f"log_prob mismatch: got {got}, expected {expected}"
 
 
+def test_freeze_cholesky_matches_live_log_prob():
+    """Cached-Cholesky path must give the same log_prob as the live path.
+
+    The cached path is used during fit_map to keep TF's CholeskyGrad
+    out of the gradient graph. Sanity-check that it produces identical
+    values, otherwise MAP fits would silently use a different prior.
+    """
+    rng = np.random.default_rng(7)
+    n = 30
+    d = line_distance_matrix(n, span=15.0)
+    prior = GeodesicGPPrior(d, lengthscale_init=2.0, variance_init=1.5,
+                            nugget_init=0.1)
+
+    values = rng.standard_normal(n).astype(np.float32)
+    live = float(prior.log_prob(values))
+
+    prior.freeze_cholesky()
+    cached = float(prior.log_prob(values))
+    assert np.isclose(live, cached, rtol=1e-5, atol=1e-5), \
+        f"cached log_prob {cached} differs from live {live}"
+
+    prior.unfreeze_cholesky()
+    assert prior._cached_L is None
+    again = float(prior.log_prob(values))
+    assert np.isclose(again, live, rtol=1e-5, atol=1e-5)
+
+
 def test_smooth_values_have_higher_log_prob_than_noise():
     rng = np.random.default_rng(1)
     n = 40

@@ -84,6 +84,13 @@ class GeodesicGPPrior(object):
             _to_unconstrained(nugget_init), dtype='float32',
             name='gp_log_nugget')
 
+        # Frozen Cholesky factor used during MAP (set by freeze()).
+        # Skipping the Cholesky op in the gradient graph avoids
+        # TF's CholeskyGrad blowing up under mild ill-conditioning,
+        # which is what triggers `Tensor had NaN values` in fit_map.
+        self._cached_L = None
+        self._cached_log_det = None
+
     # ------------------------------------------------------------------ API
 
     @property
@@ -114,13 +121,44 @@ class GeodesicGPPrior(object):
                                       self._log_variance,
                                       self._log_nugget)
 
+    def freeze_cholesky(self):
+        """Precompute & cache the Cholesky factor at current hyperparams.
+
+        After calling this, ``log_prob(values)`` uses the cached factor
+        and ``stop_gradient``s it so the gradient w.r.t. ``values``
+        flows through ``solve_triangular(L, v)`` only — not back
+        through ``cholesky(K)``. This sidesteps TF's ``CholeskyGrad``
+        producing NaN under mild ill-conditioning during MAP, which
+        otherwise crashes ``fit_map`` after dozens of Adam steps.
+
+        Call this once before starting the MAP loop with hyperparams
+        held fixed. ``unfreeze_cholesky()`` clears the cache.
+        """
+        K = ops.cast(self._build_covariance(self._log_lengthscale,
+                                             self._log_variance,
+                                             self._log_nugget), 'float64')
+        L = ops.cholesky(K)
+        self._cached_L = ops.stop_gradient(L)
+        self._cached_log_det = ops.stop_gradient(
+            2.0 * ops.sum(ops.log(ops.diag(L))))
+        return self._cached_L
+
+    def unfreeze_cholesky(self):
+        """Clear cached Cholesky factor so log_prob recomputes K."""
+        self._cached_L = None
+        self._cached_log_det = None
+
     def log_prob(self, values):
         """Log-probability of a length-n_vx vector under the current K.
 
         ``values`` may be a numpy array or any Keras-backed tensor.
+        If ``freeze_cholesky()`` has been called, uses the cached
+        factor instead of recomputing.
         """
         v = ops.convert_to_tensor(values, dtype='float32')
         v = ops.reshape(v, (-1,))
+        if self._cached_L is not None:
+            return self._log_prob_tensor_cached(v)
         return self._log_prob_tensor(v,
                                      self._log_lengthscale,
                                      self._log_variance,
@@ -221,6 +259,17 @@ class GeodesicGPPrior(object):
         log_det = 2.0 * ops.sum(ops.log(ops.diag(L)))
         n_float = ops.cast(self.n_vx, 'float64')
         lp = -0.5 * (mahal + log_det + n_float * _LOG_2PI)
+        return ops.cast(lp, 'float32')
+
+    def _log_prob_tensor_cached(self, values):
+        # Uses self._cached_L (already stop_gradient'd).
+        # Gradient w.r.t. `values` flows only through solve_triangular,
+        # which is stable; Cholesky is not in the backward graph.
+        v64 = ops.cast(ops.reshape(values, (-1, 1)), 'float64')
+        y = ops.solve_triangular(self._cached_L, v64, lower=True)
+        mahal = ops.sum(y * y)
+        n_float = ops.cast(self.n_vx, 'float64')
+        lp = -0.5 * (mahal + self._cached_log_det + n_float * _LOG_2PI)
         return ops.cast(lp, 'float32')
 
 

@@ -137,8 +137,16 @@ class BayesianParameterFitter(object):
                 fixed_pars=None,
                 tol=1e-4,
                 patience=30,
+                clipnorm=1.0,
                 progressbar=True):
-        """Stage 3 — joint MAP fit with Gaussian likelihood + GP log-prior."""
+        """Stage 3 — joint MAP fit with Gaussian likelihood + GP log-prior.
+
+        ``clipnorm`` (default 1.0) clips the global gradient norm at
+        each Adam step. Belt-and-braces against the occasional
+        run-away update that would otherwise feed enormous values
+        into the Mahalanobis term and NaN out subsequent iterations.
+        Set to ``None`` to disable.
+        """
         if self.classical_estimates is None:
             raise RuntimeError("Run fit_classical() before fit_map()")
 
@@ -193,6 +201,13 @@ class BayesianParameterFitter(object):
         prior_indices = {name: self.model.parameter_labels.index(name)
                          for name in self.priors.keys()}
 
+        # Freeze the Cholesky factor of each prior so the gradient
+        # graph does not traverse cholesky(K) backward. TF's
+        # CholeskyGrad NaN's on mild ill-conditioning, which used to
+        # crash fit_map after a varying number of Adam steps.
+        for prior in self.priors.values():
+            prior.freeze_cholesky()
+
         paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
 
         def build_params_native():
@@ -220,7 +235,10 @@ class BayesianParameterFitter(object):
 
             return nll_total + nlp_total
 
-        opt = keras.optimizers.Adam(learning_rate=learning_rate)
+        adam_kwargs = dict(learning_rate=learning_rate)
+        if clipnorm is not None:
+            adam_kwargs['clipnorm'] = float(clipnorm)
+        opt = keras.optimizers.Adam(**adam_kwargs)
         history = []
         best = float('inf')
         best_params = ops.convert_to_numpy(params_var)
@@ -266,4 +284,11 @@ class BayesianParameterFitter(object):
         self.map_sigma = pd.Series(np.sqrt(sigma2_native),
                                    index=self.data.columns, name='sigma')
         self.map_history = np.asarray(history)
+
+        # Release the cached Cholesky so subsequent calls to
+        # fit_hyperparameters (or log_prob after hyperparams change)
+        # see the live K, not the stale frozen factor.
+        for prior in self.priors.values():
+            prior.unfreeze_cholesky()
+
         return self.map_estimates
