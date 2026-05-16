@@ -83,6 +83,7 @@ class BayesianParameterFitter(object):
             classical_kwargs=None,
             hyperparam_kwargs=None,
             map_kwargs=None,
+            shared_lengthscale=False,
             progressbar=True):
         """Run all three stages and return the MAP parameter estimates."""
         classical_kwargs = dict(classical_kwargs or {})
@@ -90,7 +91,9 @@ class BayesianParameterFitter(object):
         map_kwargs = dict(map_kwargs or {})
 
         self.fit_classical(progressbar=progressbar, **classical_kwargs)
-        self.fit_hyperparameters(progressbar=progressbar, **hyperparam_kwargs)
+        self.fit_hyperparameters(progressbar=progressbar,
+                                  shared_lengthscale=shared_lengthscale,
+                                  **hyperparam_kwargs)
         return self.fit_map(max_n_iterations=max_n_iterations,
                             learning_rate=learning_rate,
                             progressbar=progressbar,
@@ -110,20 +113,120 @@ class BayesianParameterFitter(object):
 
     # ----------------------------------------------------------- stage 2
 
-    def fit_hyperparameters(self, progressbar=True, **kwargs):
+    def fit_hyperparameters(self, progressbar=True,
+                            shared_lengthscale=False, **kwargs):
         """Stage 2 — fit each prior's hyperparameters by MLE on stage-1 values.
 
         No-op when ``priors`` is empty (ML mode).
+
+        If ``shared_lengthscale=True`` and there are ≥2 priors, ties all
+        priors' ``_log_lengthscale`` Variables to a single shared one
+        and runs **joint** MLE over (shared l, per-prior v, per-prior
+        n). The motivation: the "topographic scale" of cortex is a
+        property of the surface, not of which pRF parameter you're
+        looking at — so adjacent voxels should be similar in *all*
+        parameters at the same ~mm scale. Sharing also regularizes
+        when the data is too thin to identify four lengthscales
+        independently.
         """
         if self.classical_estimates is None:
             raise RuntimeError(
                 "Run fit_classical() before fit_hyperparameters()")
 
         self.hyperparameter_history = {}
+        if shared_lengthscale and len(self.priors) >= 2:
+            return self._fit_hyperparameters_shared(progressbar=progressbar,
+                                                     **kwargs)
+
         for name, prior in self.priors.items():
             values = self.classical_estimates[name].values.astype(np.float32)
             self.hyperparameter_history[name] = prior.fit_hyperparameters(
                 values, progressbar=progressbar, **kwargs)
+
+        return {name: prior.hyperparameters
+                for name, prior in self.priors.items()}
+
+    def _fit_hyperparameters_shared(self, max_n_iterations=500,
+                                     learning_rate=0.05, tol=1e-4,
+                                     patience=20, progressbar=True):
+        """Joint MLE with one shared log_lengthscale + per-prior log_variance,
+        log_nugget. Mutates each prior so that its ``_log_lengthscale``
+        is the same Variable instance.
+        """
+        from tqdm.auto import tqdm
+        from keras import ops
+        import keras
+        from ..utils.backend import compute_gradients
+
+        priors_list = list(self.priors.values())
+        shared_var = priors_list[0]._log_lengthscale
+        for p in priors_list[1:]:
+            p._log_lengthscale = shared_var
+
+        trainable_vars = [shared_var]
+        for p in priors_list:
+            trainable_vars.extend([p._log_variance, p._log_nugget])
+
+        values_tensors = {}
+        for name, prior in self.priors.items():
+            v = self.classical_estimates[name].values.astype(np.float32)
+            values_tensors[name] = ops.convert_to_tensor(v, dtype='float32')
+
+        opt = keras.optimizers.Adam(learning_rate=learning_rate)
+
+        def joint_loss():
+            total = 0.0
+            for name, prior in self.priors.items():
+                v_arr = values_tensors[name]
+                total = total - prior._log_prob_tensor(
+                    v_arr,
+                    prior._log_lengthscale,
+                    prior._log_variance,
+                    prior._log_nugget,
+                )
+            return total
+
+        history = []
+        best = float('inf')
+        best_state = [ops.convert_to_numpy(v) for v in trainable_vars]
+        stall = 0
+
+        pbar = range(max_n_iterations)
+        if progressbar:
+            pbar = tqdm(pbar, desc='GP hyperparams (shared l)')
+
+        for step in pbar:
+            loss, grads = compute_gradients(joint_loss, trainable_vars)
+            opt.apply_gradients(zip(grads, trainable_vars))
+            loss_val = float(ops.convert_to_numpy(loss))
+            history.append(loss_val)
+            if loss_val < best - tol:
+                best = loss_val
+                best_state = [ops.convert_to_numpy(v) for v in trainable_vars]
+                stall = 0
+            else:
+                stall += 1
+            if progressbar:
+                pbar.set_description(
+                    f'GP joint nLL {loss_val:.3f} | '
+                    f'l={priors_list[0].lengthscale:.2f}')
+            if stall >= patience:
+                break
+
+        for var, val in zip(trainable_vars, best_state):
+            var.assign(val)
+
+        shared_l = float(ops.convert_to_numpy(ops.softplus(shared_var)))
+        self.hyperparameter_history['_shared'] = dict(
+            history=np.asarray(history),
+            best_neg_log_lik=best,
+            shared_lengthscale=shared_l,
+        )
+        for name, prior in self.priors.items():
+            self.hyperparameter_history[name] = dict(
+                hyperparameters=prior.hyperparameters,
+                shared_lengthscale=True,
+            )
 
         return {name: prior.hyperparameters
                 for name, prior in self.priors.items()}

@@ -260,3 +260,50 @@ def test_map_beats_classical_at_high_noise(noise_sd):
         f"MAP RMSE {map_rmse:.3f} not better than classical {cls_rmse:.3f}"
     # Per-vertex sigma should be in the ballpark of the noise sd.
     assert 0.5 * noise_sd < fitter.map_sigma.mean() < 2.0 * noise_sd
+
+
+def test_shared_lengthscale_ties_priors():
+    """shared_lengthscale=True: all priors share one lengthscale Variable.
+
+    After fit_hyperparameters, every prior reports the same lengthscale.
+    The mechanism is in-place Variable substitution, so each prior's
+    `lengthscale` property reads the shared value. Per-prior variance
+    and nugget remain independent.
+    """
+    rng = np.random.default_rng(11)
+    n_vx = 30
+    x = np.linspace(0, 10, n_vx)
+    d = np.abs(x[:, None] - x[None, :])
+    true_mu = np.linspace(-3, 3, n_vx).astype(np.float32)
+    true_sd = np.full(n_vx, 1.0, dtype=np.float32)
+
+    paradigm = pd.DataFrame({'x': np.linspace(-5, 5, 60, dtype=np.float32)})
+    true_pars = pd.DataFrame({
+        'mu': true_mu,
+        'sd': true_sd,
+        'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
+        'baseline': np.zeros(n_vx, dtype=np.float32),
+    })
+    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    clean = model.predict(paradigm=paradigm, parameters=true_pars)
+    noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.4
+    data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
+
+    priors = {
+        'mu': GeodesicGPPrior(d, lengthscale_init=2.0,
+                              variance_init=2.0, nugget_init=0.1),
+        'sd': GeodesicGPPrior(d, lengthscale_init=3.0,    # different init
+                              variance_init=0.5, nugget_init=0.1),
+    }
+    fitter = BayesianParameterFitter(model, data, paradigm, priors=priors)
+    fitter.classical_estimates = true_pars.copy()
+    fitter.fit_hyperparameters(shared_lengthscale=True, progressbar=False,
+                                max_n_iterations=200)
+
+    # Tied: both priors return the same lengthscale.
+    assert priors['mu'].lengthscale == priors['sd'].lengthscale
+    # Variance can still differ (it's not tied).
+    assert priors['mu']._log_variance is not priors['sd']._log_variance
+    # History recorded the shared value.
+    assert '_shared' in fitter.hyperparameter_history
+    assert 'shared_lengthscale' in fitter.hyperparameter_history['_shared']
