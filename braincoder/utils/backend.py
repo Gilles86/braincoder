@@ -15,43 +15,75 @@ from keras import ops
 # Robust Cholesky
 # ---------------------------------------------------------------------------
 
-def safe_cholesky(M, jitter=1e-4):
-    """Compute the Cholesky factor of ``M`` with adaptive diagonal jitter.
+def safe_cholesky(M, jitter=1e-4, max_attempts=6):
+    """Cholesky factor of ``M`` with adaptive diagonal jitter + retries.
 
     Fitted covariance matrices coming out of the residual fitter (and
     similar optimisation loops) can slip below the PSD boundary by a
-    tiny amount due to numerical drift in the Adam updates (e.g. α
-    going slightly negative, β shrinking to ~0, or ρ saturating).
-    A plain ``ops.cholesky`` then returns NaN and crashes the caller.
+    small amount due to numerical drift in the Adam updates (e.g. α
+    going slightly negative, β shrinking to ~0, or ρ saturating). A
+    plain ``ops.cholesky`` then returns NaN and crashes the caller.
 
-    This helper symmetrises ``M`` and adds
-    ``(jitter * mean(diag(M)) + 1e-9) * I`` before factorising, which
-    nudges the matrix back inside the PSD cone while keeping the
-    perturbation proportional to the matrix's own scale. The same
-    trick is used inside the GP prior's covariance builder.
+    Strategy:
+      1. Symmetrise ``M`` (kills tiny asymmetry from accumulated rounding).
+      2. Add ``(jitter * mean(diag(M)) + 1e-9) * I`` and try to factorise.
+      3. On failure, multiply jitter by 10× and retry, up to
+         ``max_attempts`` times. The jitter scales with the matrix's own
+         diagonal so the same code path works for residual covariances
+         on the order of ~1 and on the order of ~1e4.
+
+    Most calls succeed on the first attempt with the default jitter
+    (~1e-4 relative). Subjects whose ResidualFitter pushed Ω deeper
+    below PSD need 1e-3 or 1e-2; the retries handle that without
+    inflating the default perturbation on healthy subjects.
 
     Parameters
     ----------
-    M : tensor, shape (n, n)
-        Square matrix that should be PSD but may be slightly off due
-        to numerical drift.
+    M : tensor or array, shape (n, n)
+        Square matrix that should be PSD but may be slightly off.
     jitter : float, optional
-        Scale of the diagonal jitter, multiplied by ``mean(diag(M))``
-        before being added. Default ``1e-4``.
+        Initial relative jitter (multiplier on ``mean(diag(M))``).
+        Default ``1e-4``.
+    max_attempts : int, optional
+        How many jitter levels to try before giving up. Each retry uses
+        10× the previous jitter. Default 6 — covers
+        ``1e-4 → 10`` relative to mean(diag), which always succeeds
+        unless the input contains NaN/Inf.
 
     Returns
     -------
     L : tensor, shape (n, n)
         Lower-triangular Cholesky factor of the jittered matrix.
+
+    Raises
+    ------
+    RuntimeError
+        If all attempts fail. The input is then not rescuable by
+        diagonal jitter alone (NaN/Inf or many strongly negative
+        eigenvalues) and the caller should drop the fold / subject
+        rather than silently propagate NaN.
     """
-    M = ops.convert_to_tensor(M)
-    # Symmetrise: kills any tiny asymmetry from accumulated rounding.
-    M_sym = 0.5 * (M + ops.transpose(M))
+    M_t = ops.convert_to_tensor(M)
+    M_sym = 0.5 * (M_t + ops.transpose(M_t))
     n = ops.shape(M_sym)[0]
     diag_mean = ops.mean(ops.diag(M_sym))
     eye = ops.eye(n, dtype=M_sym.dtype)
-    scale = ops.cast(jitter, M_sym.dtype) * diag_mean + ops.cast(1e-9, M_sym.dtype)
-    return ops.cholesky(M_sym + scale * eye)
+    epsilon = ops.cast(1e-9, M_sym.dtype)
+
+    current = float(jitter)
+    last_exc = None
+    for _ in range(max_attempts):
+        scale = ops.cast(current, M_sym.dtype) * diag_mean + epsilon
+        try:
+            return ops.cholesky(M_sym + scale * eye)
+        except Exception as exc:
+            last_exc = exc
+            current *= 10.0
+    raise RuntimeError(
+        f"safe_cholesky: failed after {max_attempts} jitter levels "
+        f"(final jitter ~{current / 10:.1e}). Input is not rescuable "
+        f"by diagonal jitter — check for NaN/Inf or strongly negative "
+        f"eigenvalues. Last error: {last_exc}")
 
 
 # ---------------------------------------------------------------------------
