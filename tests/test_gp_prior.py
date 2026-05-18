@@ -262,6 +262,57 @@ def test_map_beats_classical_at_high_noise(noise_sd):
     assert 0.5 * noise_sd < fitter.map_sigma.mean() < 2.0 * noise_sd
 
 
+def test_joint_hyperparams_updates_kernel_params():
+    """joint_hyperparams=True puts ψ in the trainable set.
+
+    Smoke test: the lengthscale moves from its initial value during
+    fit_map (because Adam now has gradient access to it). Compare
+    against the frozen-ψ path where the lengthscale must not move.
+    """
+    rng = np.random.default_rng(13)
+    n_vx = 25
+    x = np.linspace(0, 10, n_vx)
+    d = np.abs(x[:, None] - x[None, :])
+    true_mu = np.linspace(-3, 3, n_vx).astype(np.float32)
+
+    paradigm = pd.DataFrame({'x': np.linspace(-5, 5, 60, dtype=np.float32)})
+    true_pars = pd.DataFrame({
+        'mu': true_mu,
+        'sd': np.full(n_vx, 1.0, dtype=np.float32),
+        'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
+        'baseline': np.zeros(n_vx, dtype=np.float32),
+    })
+    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    clean = model.predict(paradigm=paradigm, parameters=true_pars)
+    noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.5
+    data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
+
+    def make_fitter():
+        prior = GeodesicGPPrior(d, lengthscale_init=2.0,
+                                variance_init=2.0, nugget_init=0.1)
+        fitter = BayesianParameterFitter(model, data, paradigm,
+                                          priors={'mu': prior})
+        fitter.classical_estimates = true_pars.copy()
+        return fitter, prior
+
+    # Frozen-ψ baseline: lengthscale must not move during fit_map.
+    fitter_frozen, prior_frozen = make_fitter()
+    l_before_frozen = prior_frozen.lengthscale
+    fitter_frozen.fit_map(max_n_iterations=80, progressbar=False)
+    l_after_frozen = prior_frozen.lengthscale
+    assert l_after_frozen == pytest.approx(l_before_frozen), \
+        "frozen path: lengthscale must not move"
+
+    # Joint path: lengthscale should move (Adam has gradient access).
+    fitter_joint, prior_joint = make_fitter()
+    l_before_joint = prior_joint.lengthscale
+    fitter_joint.fit_map(max_n_iterations=80, progressbar=False,
+                          joint_hyperparams=True)
+    l_after_joint = prior_joint.lengthscale
+    assert l_after_joint != pytest.approx(l_before_joint), \
+        f"joint path: lengthscale should move, but stayed at {l_after_joint}"
+
+
 def test_shared_lengthscale_ties_priors():
     """shared_lengthscale=True: all priors share one lengthscale Variable.
 

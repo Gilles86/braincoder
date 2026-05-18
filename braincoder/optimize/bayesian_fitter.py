@@ -84,20 +84,49 @@ class BayesianParameterFitter(object):
             hyperparam_kwargs=None,
             map_kwargs=None,
             shared_lengthscale=False,
+            joint_hyperparams=False,
             progressbar=True):
-        """Run all three stages and return the MAP parameter estimates."""
+        """Run all three stages and return the MAP parameter estimates.
+
+        ``joint_hyperparams=True`` collapses the recipe to two stages:
+        classical SSQ fit, then a single joint MAP optimization that
+        co-fits voxel parameters *and* GP hyperparameters under the
+        type-II MAP objective ``log p(y|θ) + log p(θ|ψ)``. The
+        ``-½ log|K(ψ)|`` term in the prior log-prob automatically
+        penalizes over-smoothing of ψ, so stage 2's bias toward long
+        lengthscales is sidestepped entirely.
+        """
         classical_kwargs = dict(classical_kwargs or {})
         hyperparam_kwargs = dict(hyperparam_kwargs or {})
         map_kwargs = dict(map_kwargs or {})
 
         self.fit_classical(progressbar=progressbar, **classical_kwargs)
-        self.fit_hyperparameters(progressbar=progressbar,
-                                  shared_lengthscale=shared_lengthscale,
-                                  **hyperparam_kwargs)
+        if joint_hyperparams:
+            # Skip stage 2; just tie variables if shared_lengthscale.
+            if shared_lengthscale:
+                self.tie_lengthscales()
+        else:
+            self.fit_hyperparameters(progressbar=progressbar,
+                                      shared_lengthscale=shared_lengthscale,
+                                      **hyperparam_kwargs)
         return self.fit_map(max_n_iterations=max_n_iterations,
                             learning_rate=learning_rate,
+                            joint_hyperparams=joint_hyperparams,
                             progressbar=progressbar,
                             **map_kwargs)
+
+    def tie_lengthscales(self):
+        """Tie every prior's ``_log_lengthscale`` Variable to one shared
+        instance, so subsequent fitting (stage 2 or stage 3) sees a
+        single shared lengthscale across all parameters. No-op when
+        there are < 2 priors. Variance and nugget stay per-prior.
+        """
+        priors_list = list(self.priors.values())
+        if len(priors_list) < 2:
+            return
+        shared_var = priors_list[0]._log_lengthscale
+        for p in priors_list[1:]:
+            p._log_lengthscale = shared_var
 
     # ----------------------------------------------------------- stage 1
 
@@ -158,10 +187,9 @@ class BayesianParameterFitter(object):
         import keras
         from ..utils.backend import compute_gradients
 
+        self.tie_lengthscales()
         priors_list = list(self.priors.values())
         shared_var = priors_list[0]._log_lengthscale
-        for p in priors_list[1:]:
-            p._log_lengthscale = shared_var
 
         trainable_vars = [shared_var]
         for p in priors_list:
@@ -241,14 +269,23 @@ class BayesianParameterFitter(object):
                 tol=1e-4,
                 patience=30,
                 clipnorm=1.0,
+                joint_hyperparams=False,
                 progressbar=True):
-        """Stage 3 — joint MAP fit with Gaussian likelihood + GP log-prior.
+        """Stage 3 — MAP fit with Gaussian likelihood + GP log-prior.
 
         ``clipnorm`` (default 1.0) clips the global gradient norm at
         each Adam step. Belt-and-braces against the occasional
         run-away update that would otherwise feed enormous values
         into the Mahalanobis term and NaN out subsequent iterations.
         Set to ``None`` to disable.
+
+        ``joint_hyperparams`` (default False): if True, each prior's
+        ``(_log_lengthscale, _log_variance, _log_nugget)`` Variables
+        are added to the trainable set and co-optimized with the model
+        parameters under the type-II MAP objective. K is recomputed
+        every step (no ``freeze_cholesky``), so the prior's
+        ``-½ log|K(ψ)|`` term provides automatic regularization on ψ
+        — long lengthscales make ``|K|`` large, penalizing themselves.
         """
         if self.classical_estimates is None:
             raise RuntimeError("Run fit_classical() before fit_map()")
@@ -304,12 +341,24 @@ class BayesianParameterFitter(object):
         prior_indices = {name: self.model.parameter_labels.index(name)
                          for name in self.priors.keys()}
 
-        # Freeze the Cholesky factor of each prior so the gradient
-        # graph does not traverse cholesky(K) backward. TF's
-        # CholeskyGrad NaN's on mild ill-conditioning, which used to
-        # crash fit_map after a varying number of Adam steps.
-        for prior in self.priors.values():
-            prior.freeze_cholesky()
+        if joint_hyperparams:
+            # Type-II MAP: co-optimize ψ = (l, v, n) per prior with θ.
+            # K is rebuilt every step (no caching). Deduplicate the
+            # lengthscale Variable so a shared-lengthscale setup adds
+            # it once, not once per prior.
+            seen = set()
+            for prior in self.priors.values():
+                if id(prior._log_lengthscale) not in seen:
+                    trainable_variables.append(prior._log_lengthscale)
+                    seen.add(id(prior._log_lengthscale))
+                trainable_variables.extend([prior._log_variance,
+                                             prior._log_nugget])
+        else:
+            # Hyperparameters frozen. Cache L = chol(K) outside the
+            # gradient graph so CholeskyGrad never runs — it NaN'd on
+            # mild ill-conditioning and used to crash fit_map.
+            for prior in self.priors.values():
+                prior.freeze_cholesky()
 
         paradigm_ = self.model.stimulus._clean_paradigm(self.paradigm)
 
@@ -349,8 +398,9 @@ class BayesianParameterFitter(object):
         opt = keras.optimizers.Adam(learning_rate=learning_rate)
         history = []
         best = float('inf')
-        best_params = ops.convert_to_numpy(params_var)
-        best_sigma2 = ops.convert_to_numpy(sigma2_var)
+        # Snapshot every trainable (params + sigma2 + optionally
+        # hyperparams) so the joint path can restore the best ψ too.
+        best_state = [ops.convert_to_numpy(v) for v in trainable_variables]
         stall = 0
 
         pbar = range(max_n_iterations)
@@ -381,8 +431,8 @@ class BayesianParameterFitter(object):
 
             if finite and loss_val < best - tol:
                 best = loss_val
-                best_params = ops.convert_to_numpy(params_var)
-                best_sigma2 = ops.convert_to_numpy(sigma2_var)
+                best_state = [ops.convert_to_numpy(v)
+                              for v in trainable_variables]
                 stall = 0
             else:
                 stall += 1
@@ -394,8 +444,8 @@ class BayesianParameterFitter(object):
                 break
 
         # Restore best-found values and produce native-space estimates.
-        params_var.assign(best_params)
-        sigma2_var.assign(best_sigma2)
+        for var, val in zip(trainable_variables, best_state):
+            var.assign(val)
         native_best = ops.convert_to_numpy(build_params_native())
         sigma2_native = ops.convert_to_numpy(ops.softplus(sigma2_var))
 
@@ -409,9 +459,8 @@ class BayesianParameterFitter(object):
                                    index=self.data.columns, name='sigma')
         self.map_history = np.asarray(history)
 
-        # Release the cached Cholesky so subsequent calls to
-        # fit_hyperparameters (or log_prob after hyperparams change)
-        # see the live K, not the stale frozen factor.
+        # Release any cached Cholesky so subsequent calls see live K.
+        # No-op if we never froze (joint_hyperparams=True path).
         for prior in self.priors.values():
             prior.unfreeze_cholesky()
 
