@@ -12,6 +12,49 @@ from keras import ops
 
 
 # ---------------------------------------------------------------------------
+# Robust Cholesky
+# ---------------------------------------------------------------------------
+
+def safe_cholesky(M, jitter=1e-4):
+    """Compute the Cholesky factor of ``M`` with adaptive diagonal jitter.
+
+    Fitted covariance matrices coming out of the residual fitter (and
+    similar optimisation loops) can slip below the PSD boundary by a
+    tiny amount due to numerical drift in the Adam updates (e.g. α
+    going slightly negative, β shrinking to ~0, or ρ saturating).
+    A plain ``ops.cholesky`` then returns NaN and crashes the caller.
+
+    This helper symmetrises ``M`` and adds
+    ``(jitter * mean(diag(M)) + 1e-9) * I`` before factorising, which
+    nudges the matrix back inside the PSD cone while keeping the
+    perturbation proportional to the matrix's own scale. The same
+    trick is used inside the GP prior's covariance builder.
+
+    Parameters
+    ----------
+    M : tensor, shape (n, n)
+        Square matrix that should be PSD but may be slightly off due
+        to numerical drift.
+    jitter : float, optional
+        Scale of the diagonal jitter, multiplied by ``mean(diag(M))``
+        before being added. Default ``1e-4``.
+
+    Returns
+    -------
+    L : tensor, shape (n, n)
+        Lower-triangular Cholesky factor of the jittered matrix.
+    """
+    M = ops.convert_to_tensor(M)
+    # Symmetrise: kills any tiny asymmetry from accumulated rounding.
+    M_sym = 0.5 * (M + ops.transpose(M))
+    n = ops.shape(M_sym)[0]
+    diag_mean = ops.mean(ops.diag(M_sym))
+    eye = ops.eye(n, dtype=M_sym.dtype)
+    scale = ops.cast(jitter, M_sym.dtype) * diag_mean + ops.cast(1e-9, M_sym.dtype)
+    return ops.cholesky(M_sym + scale * eye)
+
+
+# ---------------------------------------------------------------------------
 # Inverse transforms
 # ---------------------------------------------------------------------------
 

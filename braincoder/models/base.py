@@ -6,7 +6,7 @@ import keras
 from keras import ops
 from ..utils import norm, format_data, format_paradigm, format_parameters, format_weights, logit, restrict_radians, lognormalpdf_n, von_mises_pdf, lognormal_pdf_mode_fwhm, norm2d
 from ..utils.math import aggressive_softplus, aggressive_softplus_inverse, norm, _trapezoid
-from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample_mvn, sample_mvt, sample_student_t, compute_gradients
+from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample_mvn, sample_mvt, sample_student_t, compute_gradients, safe_cholesky
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
@@ -201,14 +201,14 @@ class EncodingModel(object):
                                                     stddev=noise)
             else:
                 noise = noise.astype(np.float32)
-                L = ops.cholesky(ops.convert_to_tensor(noise))
+                L = safe_cholesky(ops.convert_to_tensor(noise))
                 noise_samples = sample_mvn(L, (n_batches, n_timepoints))
         else:
             if np.isscalar(noise):
                 noise_samples = sample_student_t(dof, noise, (n_batches, n_timepoints, n_voxels))
             else:
                 noise = noise.astype(np.float32)
-                L = ops.cholesky(ops.convert_to_tensor(noise))
+                L = safe_cholesky(ops.convert_to_tensor(noise))
                 noise_samples = sample_mvt(L, dof, (n_batches, n_timepoints))
 
         return self._predict(paradigm, parameters, weights) + noise_samples
@@ -329,12 +329,11 @@ class EncodingModel(object):
             omega = self.omega
 
         # Compute Cholesky factor here so callers never need to do it themselves.
-        # Add a small diagonal jitter for numerical stability when the noise
-        # model produces a near-singular covariance matrix.
+        # ``safe_cholesky`` symmetrises and adds adaptive diagonal jitter so a
+        # noise covariance that slipped slightly below PSD (e.g. residual
+        # fitter drove α/β/ρ to numerical edges) still factorises cleanly.
         omega_t = ops.convert_to_tensor(omega, dtype='float32')
-        n = ops.shape(omega_t)[0]
-        omega_t = omega_t + 1e-6 * ops.eye(n, dtype='float32')
-        omega_chol = ops.cholesky(omega_t)
+        omega_chol = safe_cholesky(omega_t)
 
         weights, weights_ = self._get_weights(weights)
 
@@ -464,9 +463,7 @@ class EncodingModel(object):
             stimuli = stimuli[:, np.newaxis]
 
         omega_t = ops.convert_to_tensor(omega, dtype='float32')
-        n = ops.shape(omega_t)[0]
-        omega_t = omega_t + 1e-6 * ops.eye(n, dtype='float32')
-        L = ops.cholesky(omega_t)
+        L = safe_cholesky(omega_t)
 
         if analytical:
             stimuli_ = ops.convert_to_tensor(stimuli[np.newaxis, ...])

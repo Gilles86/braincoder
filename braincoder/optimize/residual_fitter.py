@@ -3,7 +3,7 @@ import keras
 from keras import ops
 from tqdm.auto import tqdm
 from ..utils import format_data, format_paradigm, logit
-from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, compute_gradients
+from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, compute_gradients, safe_cholesky
 
 class ResidualFitter(object):
 
@@ -186,7 +186,9 @@ class ResidualFitter(object):
 
         if method == 'gauss':
             def likelihood(omega):
-                omega_chol = ops.cholesky(omega)
+                # Adaptive jitter via safe_cholesky: Adam can push α/β/ρ to
+                # numerical edges where the assembled Ω dips below PSD.
+                omega_chol = safe_cholesky(omega)
                 return ops.sum(mvn_log_prob(residuals_tensor, omega_chol))
 
             fit_stat = likelihood
@@ -198,7 +200,7 @@ class ResidualFitter(object):
             trainable_variables += [dof_]
 
             def likelihood(omega):
-                omega_chol = ops.cholesky(omega)
+                omega_chol = safe_cholesky(omega)
                 dof = ops.softplus(trainable_variables[-1])
                 return ops.sum(mvt_log_prob(residuals_tensor, omega_chol, dof))
 

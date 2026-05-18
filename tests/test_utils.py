@@ -235,3 +235,106 @@ class TestR2Posterior:
         below = r2 < t - 1e-3
         assert (p[above] >= 0.5 - 1e-2).all()
         assert (p[below] <  0.5 + 1e-2).all()
+
+
+# ---------------------------------------------------------------------------
+# safe_cholesky — robust factorisation of near-PSD covariance matrices
+# ---------------------------------------------------------------------------
+
+class TestSafeCholesky:
+    """Guard against the Cholesky-on-non-PSD failure that crashes
+    ``get_stimulus_pdf`` when the residual fitter drives Ω to the edge
+    of the PSD cone (α negative, β tiny, ρ saturated → smallest eigenvalue
+    just below zero from numerical drift)."""
+
+    @staticmethod
+    def _make_near_psd(n=8, neg_eig=-1e-6, seed=0):
+        """Build a symmetric matrix whose smallest eigenvalue is ``neg_eig``.
+
+        Plain ``np.linalg.cholesky`` should fail on this; ``safe_cholesky``
+        should succeed.
+        """
+        rng = np.random.default_rng(seed)
+        # Random orthogonal basis.
+        A = rng.standard_normal((n, n))
+        Q, _ = np.linalg.qr(A)
+        # Diagonal of moderate positive eigenvalues plus one slightly
+        # negative one to simulate numerical drift.
+        eigs = rng.uniform(0.1, 2.0, size=n).astype(np.float64)
+        eigs[0] = neg_eig
+        M = (Q * eigs) @ Q.T
+        # Re-symmetrise to kill rounding noise in the construction.
+        return 0.5 * (M + M.T)
+
+    def test_plain_cholesky_fails_on_near_psd(self):
+        """Sanity: the bare ``ops.cholesky`` does fail on this input.
+
+        Depending on backend, Cholesky either raises ``ValueError``
+        (TF wraps "Cholesky decomposition failed") or silently returns
+        NaN (JAX / pure numpy). Both count as "fails" — we just need
+        the fixture to actually be ill-conditioned enough to trigger
+        one of the two."""
+        from keras import ops as _ops
+        M = self._make_near_psd().astype(np.float32)
+        try:
+            L = _ops.cholesky(_ops.convert_to_tensor(M))
+        except (ValueError, RuntimeError, Exception) as exc:
+            # Backends that raise (TF) — this is the bug being patched.
+            assert 'holesky' in str(exc) or 'decomp' in str(exc).lower(), (
+                f"Unexpected exception type from plain cholesky: {exc!r}")
+            return
+        # Backends that propagate NaN (JAX / scipy) — also a failure.
+        L_np = np.asarray(_ops.convert_to_numpy(L))
+        assert np.isnan(L_np).any(), (
+            "Test fixture is not near-PSD enough to make plain "
+            "Cholesky fail; tighten ``neg_eig``.")
+
+    def test_safe_cholesky_succeeds_on_near_psd(self):
+        """``safe_cholesky`` should produce a finite lower-triangular factor."""
+        from braincoder.utils.backend import safe_cholesky
+        M = self._make_near_psd().astype(np.float32)
+        L = safe_cholesky(M)
+        L_np = np.asarray(ops.convert_to_numpy(L))
+        assert np.isfinite(L_np).all()
+        # Lower-triangular: strict upper triangle should be ~0.
+        upper = np.triu(L_np, k=1)
+        assert np.allclose(upper, 0.0, atol=1e-5)
+        # And the diagonal must be strictly positive.
+        assert (np.diag(L_np) > 0).all()
+
+    def test_safe_cholesky_reconstructs_psd_input(self):
+        """For a well-conditioned PSD matrix, ``L Lᵀ ≈ M`` up to jitter."""
+        from braincoder.utils.backend import safe_cholesky
+        rng = np.random.default_rng(7)
+        A = rng.standard_normal((6, 6)).astype(np.float32)
+        M = (A @ A.T + np.eye(6, dtype=np.float32))  # comfortably PSD
+        L = safe_cholesky(M, jitter=1e-6)
+        L_np = np.asarray(ops.convert_to_numpy(L))
+        M_rec = L_np @ L_np.T
+        # Jitter is ~ 1e-6 * mean(diag(M)); reconstruction is correspondingly close.
+        np.testing.assert_allclose(M_rec, M, atol=5e-4)
+
+    def test_safe_cholesky_on_residual_fitter_omega(self):
+        """End-to-end: build a real residual-fitter-style Ω whose Adam-driven
+        parameters have wandered off the PSD edge, and verify safe_cholesky
+        recovers."""
+        from braincoder.utils.backend import safe_cholesky
+        rng = np.random.default_rng(2)
+        n = 12
+        tau = rng.uniform(0.5, 1.5, size=(1, n)).astype(np.float32)
+        # WWᵀ = some PSD basis-overlap matrix.
+        W = rng.standard_normal((4, n)).astype(np.float32)
+        WWT = W.T @ W
+        # α just below zero, β small — exactly the pathology that bit on the cluster.
+        alpha, beta, rho, sigma2 = -1e-4, 1e-3, 0.95, 1e-3
+        D = np.abs(rng.standard_normal((n, n))).astype(np.float32)
+        D = 0.5 * (D + D.T); np.fill_diagonal(D, 0.0)
+        tt = tau.T @ tau
+        omega = (rho * (alpha * np.exp(-beta * D) * tt + (1 - alpha) * tt)
+                 + (1 - rho) * np.diag(np.squeeze(tau ** 2))
+                 + sigma2 * WWT)
+        omega = 0.5 * (omega + omega.T)
+        # Plain cholesky on this should NaN (or be unstable).
+        L = safe_cholesky(omega.astype(np.float32))
+        L_np = np.asarray(ops.convert_to_numpy(L))
+        assert np.isfinite(L_np).all()
