@@ -30,11 +30,20 @@ class ResidualFitter(object):
             method='gauss',
             residuals=None,
             normalize_WWT=True,
+            use_wwt=True,
             learning_rate=0.02, rtol=1e-6, lag=100,
             init_alpha=0.99,
             init_beta=0.0,
             spherical=False,
             progressbar=True):
+        """``use_wwt`` (default True): include the ``σ² · WᵀW`` term in
+        Ω. When False, Ω is built without the tuning-similarity
+        contribution — useful for testing whether ``WᵀW`` is doing
+        real spatial-noise modeling or just creating
+        signal-correlation structure that interacts with regularized
+        encoding fits. ``σ²`` stays in the trainable set but has zero
+        effect on Ω (gradient → 0; Adam leaves it inert).
+        """
 
         n_voxels = self.data.shape[1]
 
@@ -81,21 +90,28 @@ class ResidualFitter(object):
             sigma2_ = keras.Variable(softplus_inverse(init_sigma2),
                                      name='sigma2_trans', dtype='float32')
 
-            if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
-                print('USING A PSEUDO-WWT!')
-                WWT = self.model.get_pseudoWWT()
+            if use_wwt:
+                if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
+                    print('USING A PSEUDO-WWT!')
+                    WWT = self.model.get_pseudoWWT()
+                else:
+                    WWT = self.model.get_WWT()
+
+                import pandas as pd
+                if isinstance(WWT, (pd.DataFrame, pd.Series)):
+                    WWT = WWT.values
+
+                WWT = ops.convert_to_tensor(WWT, dtype='float32')
+                WWT = ops.clip(WWT, -1e10, 1e10)
+                print(f'WWT max: {float(ops.convert_to_numpy(ops.max(WWT)))}')
+                if normalize_WWT:
+                    WWT = WWT / ops.mean(WWT)
             else:
-                WWT = self.model.get_WWT()
-
-            import pandas as pd
-            if isinstance(WWT, (pd.DataFrame, pd.Series)):
-                WWT = WWT.values
-
-            WWT = ops.convert_to_tensor(WWT, dtype='float32')
-            WWT = ops.clip(WWT, -1e10, 1e10)
-            print(f'WWT max: {float(ops.convert_to_numpy(ops.max(WWT)))}')
-            if normalize_WWT:
-                WWT = WWT / ops.mean(WWT)
+                # Strip the σ²·WᵀW term from Ω. sigma2_ stays trainable
+                # but multiplies a zero matrix, so it contributes
+                # nothing and Adam leaves it inert.
+                print('USE_WWT=False: omitting σ²·WᵀW term from Ω')
+                WWT = ops.zeros((n_voxels, n_voxels), dtype='float32')
 
             trainable_variables = [tau_, rho_, sigma2_]
         else:
