@@ -90,11 +90,33 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
     for _ in range(max_attempts):
         scale = ops.cast(current, M_sym.dtype) * diag_mean + epsilon
         try:
-            L = ops.cholesky(M_sym + scale * eye)
-            break
+            L_try = ops.cholesky(M_sym + scale * eye)
         except Exception as exc:
             last_exc = exc
             current *= 10.0
+            continue
+        # JAX silently returns a NaN-filled matrix when the input is not
+        # PSD (the Keras wrapper raises in eager mode but only on concrete
+        # arrays; under tracing or with older Keras, NaN propagates).
+        # Treat a NaN result the same as a raised exception: bump jitter
+        # and retry. The bool() cast forces concrete evaluation; this
+        # function is therefore not safe to call inside `jax.jit` —
+        # callers that need a jittable version should pre-symmetrise and
+        # jitter the matrix themselves.
+        try:
+            has_nan = bool(ops.convert_to_numpy(ops.any(ops.isnan(L_try))))
+        except Exception:
+            # If we can't materialise the check (e.g. inside a trace),
+            # trust the cholesky result; the exception path above will
+            # still catch the eager-mode failures.
+            has_nan = False
+        if has_nan:
+            last_exc = RuntimeError(
+                f"cholesky returned NaN (input not PSD at jitter={current:.1e})")
+            current *= 10.0
+            continue
+        L = L_try
+        break
     if L is None:
         raise RuntimeError(
             f"safe_cholesky: failed after {max_attempts} jitter levels "
