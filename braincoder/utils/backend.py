@@ -185,27 +185,26 @@ def mvn_log_prob(x, L):
 # ---------------------------------------------------------------------------
 
 def _lgamma(x):
-    """Log-gamma via Lanczos approximation (backend-agnostic scalar)."""
-    # For scalar / small tensors this is fine; for large batches prefer
-    # a backend-native lgamma if available.
-    import math
-    # Lanczos g=7 coefficients
-    g = 7
-    c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
-         771.32342877765313, -176.61502916214059, 12.507343278686905,
-         -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7]
-    # Use scipy as backend-agnostic implementation, called on numpy scalars
-    try:
-        from scipy.special import gammaln
-        return ops.convert_to_tensor(
-            np.float32(gammaln(float(ops.convert_to_numpy(ops.convert_to_tensor(x))))),
-            dtype='float32')
-    except Exception:
-        # Fallback: Sterling approximation
-        x_val = float(ops.convert_to_numpy(ops.convert_to_tensor(x)))
-        return ops.convert_to_tensor(
-            np.float32(0.5 * np.log(2 * np.pi / x_val) + x_val * np.log(x_val + 1.0 / (12.0 * x_val))),
-            dtype='float32')
+    """Log-gamma (differentiable, backend-native).
+
+    Delegates to the public ``lgamma`` (defined below) so that the
+    autograd graph is preserved on every backend. The previous
+    implementation pulled scalars out via ``float(ops.convert_to_numpy(...))``
+    and called ``scipy.special.gammaln`` — that path:
+
+      * Crashes on JAX under tracing (``ConcretizationTypeError`` whenever
+        ``mvt_log_prob`` is called with ``method='t'`` and the dof is a
+        ``value_and_grad`` tracer).
+      * Silently breaks autograd on TF/torch, because scipy's gammaln has
+        no autograd connection: ``∂nll/∂dof`` is missing the gammaln
+        contribution and dof-fitting drifts to a biased optimum.
+
+    Routing through ``lgamma`` (which uses ``tf.math.lgamma`` /
+    ``jax.scipy.special.gammaln`` / ``torch.lgamma`` depending on the
+    backend) fixes both. Kept as ``_lgamma`` for backwards compatibility
+    of existing call sites.
+    """
+    return lgamma(ops.cast(x, 'float32'))
 
 
 def mvt_log_prob(x, L, dof):

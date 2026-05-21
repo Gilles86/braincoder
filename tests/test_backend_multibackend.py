@@ -93,3 +93,68 @@ class TestBug1SafeCholeskyJaxNaN:
         L_np = np.asarray(ops.convert_to_numpy(L))
         assert np.all(np.isfinite(L_np))
 
+
+# ---------------------------------------------------------------------------
+# Bug 2: _lgamma must be differentiable on every backend.
+# ---------------------------------------------------------------------------
+
+class TestBug2LgammaDifferentiable:
+    """The previous ``_lgamma`` used ``scipy.special.gammaln`` on numpy
+    scalars and had no autograd connection. Any code that takes a
+    gradient through ``mvt_log_prob`` w.r.t. ``dof`` therefore had a
+    biased gradient (TF/torch) or crashed entirely
+    (``ConcretizationTypeError`` on JAX). These tests pin down the fix:
+    ``_lgamma`` now delegates to backend-native lgamma."""
+
+    def test_lgamma_value_matches_scipy(self):
+        """Function value should still agree with scipy.special.gammaln."""
+        from scipy.special import gammaln
+        from braincoder.utils.backend import _lgamma
+        for x in (0.5, 1.5, 3.5, 10.0):
+            got = float(ops.convert_to_numpy(_lgamma(ops.convert_to_tensor(x))))
+            assert np.isclose(got, gammaln(x), atol=1e-4), (
+                f"_lgamma({x}) = {got}, expected {gammaln(x)}")
+
+    def test_lgamma_gradient_matches_digamma(self):
+        """``d lgamma(x) / dx = digamma(x)`` -- the gradient must be
+        present and correct, not zero/None. This is the key autograd
+        regression test."""
+        from scipy.special import digamma
+        from braincoder.utils.backend import _lgamma, compute_gradients
+        x_val = 3.5
+        v = keras.Variable(np.asarray([x_val], dtype=np.float32))
+
+        def loss_fn():
+            return ops.sum(_lgamma(v.value))
+
+        loss, grads = compute_gradients(loss_fn, [v])
+        grad = float(ops.convert_to_numpy(grads[0])[0])
+        assert np.isclose(grad, digamma(x_val), atol=1e-3), (
+            f"d/dx lgamma({x_val}) = {grad}, expected digamma = "
+            f"{digamma(x_val)} (backend={keras.backend.backend()!r})")
+
+    def test_mvt_log_prob_dof_gradient_is_nonzero(self):
+        """``mvt_log_prob`` depends on ``dof`` through ``_lgamma`` -- if
+        the lgamma gradient is missing, the dof gradient picks up only
+        the algebraic terms and the lgamma contribution is lost.
+        This test fails under the broken ``_lgamma``."""
+        from braincoder.utils.backend import mvt_log_prob, compute_gradients
+        rng = np.random.default_rng(0)
+        n_t, k = 50, 3
+        x = rng.standard_normal((n_t, k)).astype(np.float32)
+        L = np.eye(k, dtype=np.float32)
+        x_t = ops.convert_to_tensor(x)
+        L_t = ops.convert_to_tensor(L)
+
+        dof_var = keras.Variable(np.asarray([5.0], dtype=np.float32))
+
+        def loss_fn():
+            return -ops.sum(mvt_log_prob(x_t, L_t, dof_var.value[0]))
+
+        _, grads = compute_gradients(loss_fn, [dof_var])
+        g = float(ops.convert_to_numpy(grads[0])[0])
+        assert np.isfinite(g), f"dof gradient is non-finite: {g}"
+        assert abs(g) > 1e-3, (
+            f"dof gradient ~ 0 ({g}) -- looks like the lgamma terms have "
+            f"no autograd connection (backend={keras.backend.backend()!r})")
+
