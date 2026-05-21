@@ -62,7 +62,21 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
         diagonal jitter alone (NaN/Inf or many strongly negative
         eigenvalues) and the caller should drop the fold / subject
         rather than silently propagate NaN.
+
+    Notes
+    -----
+    The output preserves the caller's numpy dtype (float32 in →
+    float32 out, float64 in → float64 out). On backends that don't
+    natively support float64 (JAX without ``jax_enable_x64``), the
+    factorisation is computed in float32 internally and cast back at
+    the end — so the dtype contract holds even though the precision
+    of intermediate arithmetic is bounded by the backend.
     """
+    # Remember caller's dtype so the contract "dtype in == dtype out"
+    # holds even on backends that silently downcast (e.g. JAX default
+    # mode coerces float64 → float32 inside ``ops.convert_to_tensor``).
+    in_dtype = getattr(M, 'dtype', None)
+
     M_t = ops.convert_to_tensor(M)
     M_sym = 0.5 * (M_t + ops.transpose(M_t))
     n = ops.shape(M_sym)[0]
@@ -72,18 +86,35 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
 
     current = float(jitter)
     last_exc = None
+    L = None
     for _ in range(max_attempts):
         scale = ops.cast(current, M_sym.dtype) * diag_mean + epsilon
         try:
-            return ops.cholesky(M_sym + scale * eye)
+            L = ops.cholesky(M_sym + scale * eye)
+            break
         except Exception as exc:
             last_exc = exc
             current *= 10.0
-    raise RuntimeError(
-        f"safe_cholesky: failed after {max_attempts} jitter levels "
-        f"(final jitter ~{current / 10:.1e}). Input is not rescuable "
-        f"by diagonal jitter — check for NaN/Inf or strongly negative "
-        f"eigenvalues. Last error: {last_exc}")
+    if L is None:
+        raise RuntimeError(
+            f"safe_cholesky: failed after {max_attempts} jitter levels "
+            f"(final jitter ~{current / 10:.1e}). Input is not rescuable "
+            f"by diagonal jitter — check for NaN/Inf or strongly negative "
+            f"eigenvalues. Last error: {last_exc}")
+
+    # Restore caller's dtype if it was a concrete numpy dtype (e.g.
+    # float64 in, but JAX default mode computed in float32). We only
+    # do this when the caller explicitly passed a numpy array; tensor
+    # inputs keep the backend's native dtype.
+    #
+    # Under JAX default mode, ``ops.cast`` to float64 silently keeps
+    # float32, so we round-trip through numpy to actually upcast. For
+    # tensor backends (torch / tf) this is a no-op since the dtype
+    # already matches.
+    if in_dtype is not None and isinstance(in_dtype, np.dtype):
+        if str(L.dtype) != str(np.dtype(in_dtype)):
+            L = np.asarray(ops.convert_to_numpy(L)).astype(in_dtype)
+    return L
 
 
 # ---------------------------------------------------------------------------
@@ -373,11 +404,19 @@ def compute_gradients(loss_fn, variables):
         return ops.convert_to_tensor(loss_val), [ops.convert_to_tensor(g) for g in grads]
     elif backend == 'torch':
         import torch
+        # Use the functional `torch.autograd.grad` rather than
+        # `.backward()` + read `.grad`. The latter accumulates into the
+        # variables' `.grad` attribute across optimizer iterations and
+        # returns live graph references — both leak the autograd graph
+        # one iteration at a time, OOM'ing an 80 GiB A100 by ~iter 7
+        # of the PRF gradient-descent loop. autograd.grad is the
+        # idiomatic one-shot API: no `.grad` mutation, returns
+        # standalone tensors that can be detached cleanly.
         for v in variables:
             v.value.requires_grad_(True)
         loss = loss_fn()
-        loss.backward()
-        grads = [v.value.grad for v in variables]
-        return loss, grads
+        inputs = [v.value for v in variables]
+        grads = torch.autograd.grad(loss, inputs)
+        return loss.detach(), [g.detach() for g in grads]
     else:
         raise NotImplementedError(f"compute_gradients not implemented for backend: {backend!r}")
