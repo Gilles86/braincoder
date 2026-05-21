@@ -439,21 +439,35 @@ def compute_gradients(loss_fn, variables):
         return loss, grads
     elif backend == 'jax':
         import jax
-        import jax.numpy as jnp
-        var_arrays = [jnp.array(ops.convert_to_numpy(v)) for v in variables]
+        # Snapshot each Variable's current value as a concrete JAX array
+        # so the trace operates on pure inputs, not on the live Variable.
+        var_arrays = [ops.convert_to_tensor(v.value) for v in variables]
+
+        # CRITICAL: do NOT `var.assign(<tracer>)` inside the closure.
+        # `assign` writes the tracer into the Variable's backing array,
+        # and the reference escapes the trace boundary — at the end of
+        # ``jax.value_and_grad`` the Variable holds a ``LinearizeTracer``
+        # instead of a concrete ``ArrayImpl``. Subsequent reads then
+        # leak the entire forward graph one iteration at a time
+        # (analogous to the torch ``v.grad``-accumulation bug fixed in
+        # e5671a1). The user-visible symptom is monotonic host-memory
+        # growth across optimizer iterations and an eventual OOM on long
+        # runs.
+        #
+        # Fix: rebind the Variables *inside* a ``StatelessScope``, which
+        # is Keras 3's official mechanism for purifying Variable reads
+        # during a JAX trace. The scope binds (variable → traced array)
+        # only for the body of the closure; outside, the Variables keep
+        # their concrete values untouched. No tracer ever escapes.
+        from keras.src.backend.common.stateless_scope import StatelessScope
 
         def _loss(*arrays):
-            for var, arr in zip(variables, arrays):
-                var.assign(arr)
-            return loss_fn()
+            mapping = list(zip(variables, arrays))
+            with StatelessScope(state_mapping=mapping):
+                return loss_fn()
 
         argnums = tuple(range(len(variables)))
         loss_val, grads = jax.value_and_grad(_loss, argnums=argnums)(*var_arrays)
-
-        # Restore concrete values — JAX tracing may leave stale tracers in variables
-        for var, arr in zip(variables, var_arrays):
-            var.assign(ops.convert_to_tensor(arr))
-
         return ops.convert_to_tensor(loss_val), [ops.convert_to_tensor(g) for g in grads]
     elif backend == 'torch':
         import torch

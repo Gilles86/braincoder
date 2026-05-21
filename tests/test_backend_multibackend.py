@@ -234,3 +234,143 @@ class TestBug3StudentTSampling:
             assert abs(vi - expected) < 0.4, (
                 f"MVT dim {i}: var = {vi}, expected ~{expected}")
 
+
+# ---------------------------------------------------------------------------
+# Bug 4: compute_gradients JAX path must not leak tracers / accumulate graphs.
+# ---------------------------------------------------------------------------
+
+class TestBug4ComputeGradientsJaxMemory:
+    """The original JAX path called ``var.assign(<tracer>)`` inside the
+    ``value_and_grad`` closure. The tracer escaped the trace boundary,
+    leaving ``v.value`` as a ``LinearizeTracer`` between iterations
+    and accumulating the autograd graph one iteration at a time.
+
+    Direct symptom: ``type(v.value).__name__`` after a single grad call
+    contains "Tracer". Indirect symptom: memory grows monotonically
+    across iterations. The first is cheap and definitive; the second
+    is expensive but catches the deeper OOM scenario."""
+
+    def test_no_tracer_leaks_into_variable(self):
+        """After ``compute_gradients`` returns, the Variable's value
+        must be a concrete array, not a JAX tracer."""
+        from braincoder.utils.backend import compute_gradients
+        v = keras.Variable(np.asarray([3.0, 4.0], dtype=np.float32))
+
+        def loss_fn():
+            return ops.sum(v.value ** 2)
+
+        loss, grads = compute_gradients(loss_fn, [v])
+        type_name = type(v.value).__name__
+        assert 'Tracer' not in type_name, (
+            f"Variable.value is a leaked tracer ({type_name}) after "
+            f"compute_gradients. backend={keras.backend.backend()!r}")
+        # Gradient values are correct.
+        g = np.asarray(ops.convert_to_numpy(grads[0]))
+        np.testing.assert_allclose(g, [6.0, 8.0], rtol=1e-5)
+
+    def test_repeated_grad_calls_stay_concrete(self):
+        """Across 50 iterations, the Variable must keep concrete values
+        and the gradient values must remain finite. This is the
+        OOM-stand-in test from the audit: under the bug the autograd
+        graph accumulates and JAX eventually fails, but well before
+        that the Variable's value type stops being concrete."""
+        from braincoder.utils.backend import compute_gradients
+        v = keras.Variable(np.asarray([3.0, 4.0], dtype=np.float32))
+        opt = keras.optimizers.Adam(learning_rate=0.01)
+
+        def loss_fn():
+            return ops.sum(v.value ** 2)
+
+        for i in range(50):
+            loss, grads = compute_gradients(loss_fn, [v])
+            opt.apply_gradients(zip(grads, [v]))
+            if i % 10 == 0:
+                type_name = type(v.value).__name__
+                assert 'Tracer' not in type_name, (
+                    f"At iter {i}, Variable became a tracer "
+                    f"({type_name}). backend={keras.backend.backend()!r}")
+                assert np.all(np.isfinite(
+                    np.asarray(ops.convert_to_numpy(v.value)))), (
+                    f"Variable became non-finite at iter {i}")
+
+    def test_parameter_fitter_jax_50_iter_integration(self):
+        """End-to-end: fit a tiny GaussianPRF for 50 iterations.
+
+        Under the JAX tracer-leak bug, the leaked tracer eventually
+        causes ``jax.errors.UnexpectedTracerError`` (or an OOM on larger
+        problems). The simplest check that catches this on CI without
+        a GPU is "does the fit finish without crashing"."""
+        from braincoder.models import GaussianPRF
+        from braincoder.optimize import ParameterFitter
+        import pandas as pd
+
+        rng = np.random.default_rng(0)
+        n_vox = 5
+        paradigm = np.linspace(-5, 5, 40, dtype=np.float32)[:, np.newaxis]
+        true_pars = pd.DataFrame({
+            'mu':        np.linspace(-3, 3, n_vox, dtype=np.float32),
+            'sd':        np.ones(n_vox, dtype=np.float32),
+            'amplitude': np.ones(n_vox, dtype=np.float32),
+            'baseline':  np.zeros(n_vox, dtype=np.float32),
+        })
+        model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+        data = model.simulate(noise=0.1)
+
+        fitter = ParameterFitter(model, data, paradigm)
+        init_pars = pd.DataFrame({
+            'mu':        np.zeros(n_vox, dtype=np.float32),
+            'sd':        np.ones(n_vox, dtype=np.float32) * 2,
+            'amplitude': np.ones(n_vox, dtype=np.float32),
+            'baseline':  np.zeros(n_vox, dtype=np.float32),
+        })
+        estimated = fitter.fit(init_pars=init_pars,
+                               max_n_iterations=50,
+                               min_n_iterations=50,
+                               progressbar=False)
+        assert np.all(np.isfinite(estimated.values)), (
+            f"ParameterFitter produced non-finite output on "
+            f"backend={keras.backend.backend()!r}")
+
+
+# ---------------------------------------------------------------------------
+# Bonus: end-to-end ResidualFitter dof fit (cross-cuts Bugs 1 + 2 + 4).
+# ---------------------------------------------------------------------------
+
+class TestResidualFitterStudentT:
+    """Full ResidualFitter run with ``method='t'``. Touches:
+
+      * safe_cholesky (Omega may dip slightly below PSD during fitting)
+      * mvt_log_prob -> _lgamma (must be differentiable in dof)
+      * compute_gradients (no tracer leak across iterations)
+
+    A pass here means all three live wiring sites work end-to-end."""
+
+    def test_residual_fitter_t_method_finishes(self):
+        """Tiny synthetic dataset; just verify ``method='t'`` finishes
+        and returns a finite dof. Under the broken ``_lgamma``, the
+        JAX run crashes with ``ConcretizationTypeError`` and the TF/torch
+        runs return a biased dof or fail to update at all."""
+        from braincoder.models import GaussianPRF
+        from braincoder.optimize import ResidualFitter
+        import pandas as pd
+
+        rng = np.random.default_rng(0)
+        n_vox = 4
+        paradigm = np.linspace(-3, 3, 60, dtype=np.float32)[:, np.newaxis]
+        params = pd.DataFrame({
+            'mu':        np.linspace(-2, 2, n_vox, dtype=np.float32),
+            'sd':        np.ones(n_vox, dtype=np.float32),
+            'amplitude': np.ones(n_vox, dtype=np.float32),
+            'baseline':  np.zeros(n_vox, dtype=np.float32),
+        })
+        model = GaussianPRF(paradigm=paradigm, parameters=params)
+        data = model.simulate(noise=0.3)
+        fitter = ResidualFitter(model, data, paradigm=paradigm,
+                                parameters=params)
+        omega, dof = fitter.fit(method='t', max_n_iterations=30,
+                                min_n_iterations=10,
+                                use_wwt=False,
+                                progressbar=False)
+        assert np.all(np.isfinite(omega)), "Omega contains NaN/Inf"
+        assert dof is not None and np.isfinite(dof) and dof > 0, (
+            f"dof is invalid: {dof}")
