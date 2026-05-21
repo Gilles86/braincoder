@@ -263,29 +263,61 @@ def sample_mvn(L, shape, seed=None):
     return ops.reshape(samples, (*shape, n_voxels))
 
 
+def _split_seed(seed, n):
+    """Return ``n`` distinct seeds derived from a single integer ``seed``.
+
+    Background: ``keras.random.normal(..., seed=int)`` on the JAX backend
+    converts the integer into a ``jax.random.PRNGKey``, and that key is
+    *deterministic in the integer*. Two calls with the same ``seed=int``
+    therefore produce the **identical** sequence on JAX, while on
+    TF/torch a global counter advances between calls and the streams
+    differ. Calling ``sample_mvn(seed=42)`` followed by
+    ``keras.random.normal(seed=42)`` in the Student-T construction
+    therefore makes the numerator ``z`` and the χ²-scaler ``v``
+    perfectly correlated on JAX, so the resulting "Student-T sample"
+    collapses to ``sign(z) * sqrt(dof)`` — heavy-tailed structure gone.
+
+    Fix: derive sub-seeds (``seed+1, seed+2, …``) so each downstream
+    ``keras.random`` call has its own key. This is the simplest
+    backend-agnostic split that preserves backwards compatibility for
+    the ``seed=None`` case (fresh randomness from the backend's global
+    counter).
+    """
+    if seed is None:
+        return [None] * n
+    return [int(seed) + i for i in range(n)]
+
+
 def sample_mvt(L, dof, shape, seed=None):
     """Draw samples from multivariate Student-T(dof, 0, L Lᵀ).
 
     Uses the representation: x = z / sqrt(v/dof) where z ~ MVN(0, LLᵀ)
-    and v ~ chi2(dof).
+    and v ~ chi2(dof). The two random draws (z and v) MUST be
+    independent; see ``_split_seed`` for the JAX PRNG subtlety this
+    function had to defend against.
     """
     n_voxels = ops.shape(L)[0]
     flat_n = int(np.prod(shape))
-    z = sample_mvn(L, (flat_n,), seed=seed)                 # (N, k)
+    seed_z, seed_v = _split_seed(seed, 2)
+    z = sample_mvn(L, (flat_n,), seed=seed_z)               # (N, k)
     # chi2(dof) = Gamma(dof/2, 2), sample via normal: v = sum of dof normals^2
     dof_int = max(1, int(round(float(ops.convert_to_numpy(ops.convert_to_tensor(dof))))))
-    normals = keras.random.normal((flat_n, dof_int), seed=seed)
+    normals = keras.random.normal((flat_n, dof_int), seed=seed_v)
     v = ops.sum(normals ** 2, axis=1, keepdims=True)        # (N, 1)
     samples = z / ops.sqrt(v / ops.cast(dof, 'float32'))
     return ops.reshape(samples, (*shape, n_voxels))
 
 
 def sample_student_t(dof, scale, shape, seed=None):
-    """Draw i.i.d. samples from Student-T(dof, 0, scale)."""
+    """Draw i.i.d. samples from Student-T(dof, 0, scale).
+
+    Same independence requirement as ``sample_mvt`` — see ``_split_seed``.
+    """
     n = int(np.prod(shape))
     dof_int = max(1, int(round(float(ops.convert_to_numpy(ops.convert_to_tensor(dof))))))
-    z = keras.random.normal((n,), seed=seed)
-    v = ops.sum(keras.random.normal((n, dof_int), seed=seed) ** 2, axis=1)
+    seed_z, seed_v = _split_seed(seed, 2)
+    z = keras.random.normal((n,), seed=seed_z)
+    v = ops.sum(keras.random.normal((n, dof_int), seed=seed_v) ** 2, axis=1)
     samples = z * scale / ops.sqrt(v / ops.cast(dof, 'float32'))
     return ops.reshape(samples, shape)
 

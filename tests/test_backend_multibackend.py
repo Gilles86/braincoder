@@ -158,3 +158,79 @@ class TestBug2LgammaDifferentiable:
             f"dof gradient ~ 0 ({g}) -- looks like the lgamma terms have "
             f"no autograd connection (backend={keras.backend.backend()!r})")
 
+
+# ---------------------------------------------------------------------------
+# Bug 3: sample_mvt / sample_student_t must use independent random draws.
+# ---------------------------------------------------------------------------
+
+class TestBug3StudentTSampling:
+    """Under the bug, ``sample_student_t(dof=5)`` collapsed to roughly
+    ``sign(z) * sqrt(dof)`` because the same JAX PRNG key was used for
+    the numerator and the chi-squared scaler. The kurtosis test below
+    is the sharpest distributional fingerprint of that failure mode."""
+
+    def test_student_t_variance_matches_dof(self):
+        """For dof > 2, Student-T variance is ``dof / (dof - 2)``. For
+        dof=5 that's 5/3 ~= 1.667. Under the bug, the variance is fixed
+        at ``dof`` (5) because every sample is ``+/-sqrt(dof)``."""
+        from braincoder.utils.backend import sample_student_t
+        n = 20000
+        dof = 5.0
+        samples = sample_student_t(dof, 1.0, (n,), seed=42)
+        arr = np.asarray(ops.convert_to_numpy(samples))
+        v = float(arr.var())
+        expected = dof / (dof - 2.0)  # 1.667
+        # 2-sigma band for variance of t(5) with n=20000 is comfortably
+        # within +/-0.25 of the mean. The bugged version returns var ~= 5.
+        assert abs(v - expected) < 0.3, (
+            f"Student-T(5) variance = {v}, expected ~{expected}. "
+            f"This usually means the chi-squared scaler and z are correlated "
+            f"(JAX PRNG-reuse bug). backend={keras.backend.backend()!r}")
+
+    def test_student_t_samples_are_not_two_valued(self):
+        """The bugged version returns approximately two distinct
+        absolute values (sqrt(dof) +/- noise). Real Student-T has a
+        continuous distribution -- the IQR of |x| should be at least
+        0.5 (it's ~1.5 for true t(5); ~0.05 under the bug)."""
+        from braincoder.utils.backend import sample_student_t
+        n = 10000
+        samples = sample_student_t(5.0, 1.0, (n,), seed=7)
+        arr = np.asarray(ops.convert_to_numpy(samples))
+        abs_x = np.abs(arr)
+        iqr = np.subtract(*np.percentile(abs_x, [75, 25]))
+        assert iqr > 0.5, (
+            f"IQR(|x|) = {iqr:.3f} -- samples look quantised to two "
+            f"values. Likely the chi-squared scaler is correlated with z.")
+
+    def test_student_t_kurtosis_finite(self):
+        """Sample kurtosis for t(5) is ~9 in theory. We only check that
+        it's finite and noticeably > 3 (the Gaussian value). Under the
+        bug the sample is essentially +/-sqrt(5), which gives kurtosis ~1
+        (bimodal) -- well below 3."""
+        from scipy.stats import kurtosis
+        from braincoder.utils.backend import sample_student_t
+        n = 20000
+        samples = sample_student_t(5.0, 1.0, (n,), seed=42)
+        arr = np.asarray(ops.convert_to_numpy(samples))
+        k = kurtosis(arr, fisher=False)
+        assert np.isfinite(k)
+        # Anything > 4 is a clear sign of heavy tails (Gaussian = 3).
+        # Under the bug we see k < 2.
+        assert k > 4.0, (
+            f"Sample kurtosis = {k}, expected heavy-tailed (>4). "
+            f"backend={keras.backend.backend()!r}")
+
+    def test_multivariate_student_t_variance(self):
+        """Same check for ``sample_mvt`` -- the multivariate path."""
+        from braincoder.utils.backend import sample_mvt
+        n = 10000
+        dof = 5.0
+        L = ops.convert_to_tensor(np.eye(3, dtype=np.float32))
+        samples = sample_mvt(L, dof, (n,), seed=123)
+        arr = np.asarray(ops.convert_to_numpy(samples))
+        v = arr.var(axis=0)
+        expected = dof / (dof - 2.0)
+        for i, vi in enumerate(v):
+            assert abs(vi - expected) < 0.4, (
+                f"MVT dim {i}: var = {vi}, expected ~{expected}")
+
