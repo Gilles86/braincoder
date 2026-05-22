@@ -134,3 +134,119 @@ def load_vanes2019(raw_files=False, downsample_stimulus=5.):
     data['tr'] = 1.5
 
     return data
+
+
+# Numerosity demo bundle (sub-13 from the Prat-Carrabin et al. 2025
+# numerosity fMRI dataset). The release URL is overridable for local
+# testing via the env var BRAINCODER_NPC_DEMO_URL — point that at a
+# file:// or http(s):// resource.
+# Article: https://doi.org/10.6084/m9.figshare.32358570 (Prat-Carrabin et al.
+# 2025 numerosity NPC extract, sub-13).
+NPC_DEMO_DEFAULT_URL = "https://ndownloader.figshare.com/files/64795824"
+
+
+def load_pratcarrabin2025_npc(force_redownload=False):
+    """Download and load the numerosity demo bundle.
+
+    A small (~4 MB) extract from the numerosity fMRI dataset accompanying
+    Prat-Carrabin et al. (2025, *Distributed range adaptation in human
+    parietal encoding of numbers*, bioRxiv 10.1101/2025.09.25.675916),
+    built from one subject (highest mean NPCr CV-R² with model 15). The
+    bundle is structured so the encoding-pipeline example notebooks
+    (``examples/01_decoding_pipeline``) can run end-to-end without any
+    local BIDS dataset on disk.
+
+    Returns
+    -------
+    dict with keys::
+
+        manifest                 — provenance dict (subject id, hemisphere, ...)
+        r2_wholebrain            — nibabel Nifti1Image, whole-brain
+                                   within-sample R² (use for the mixture-
+                                   model voxel selection)
+        cv_r2_wholebrain         — nibabel Nifti1Image, whole-brain CV-R²
+                                   (for generalisation reporting)
+        brain_mask               — nibabel Nifti1Image, EPI brain mask (T1w)
+        data                     — pd.DataFrame (n_trials × n_vox), NPCr betas
+        paradigm                 — pd.DataFrame (n_trials × {session, run,
+                                   trial_nr, n, range}); ``n`` is the
+                                   presented numerosity, ``range`` ∈
+                                   {'narrow', 'wide'}
+        voxel_coords_mm          — pd.DataFrame (n_vox × {x, y, z}), T1w mm
+        voxel_to_vertex          — pd.DataFrame (n_vox × {vertex,
+                                   distance_mm}) — nearest patch vertex per
+                                   voxel
+        r2                       — pd.Series, NPCr within-sample R² per voxel
+        cv_r2                    — pd.Series, NPCr CV-R² per voxel
+        surface_vertices         — (n_patch_vertices × 3) float32 array
+        surface_faces            — (n_patch_faces × 3) int32 array
+        hemisphere               — 'L' or 'R'
+    """
+    url = os.environ.get('BRAINCODER_NPC_DEMO_URL', NPC_DEMO_DEFAULT_URL)
+    dataset_folder = DATA_DIR / 'pratcarrabin2025_npc'
+    zip_path = DATA_DIR / 'pratcarrabin2025_npc.zip'
+
+    ensure_directory_exists(DATA_DIR)
+    if force_redownload and dataset_folder.exists():
+        shutil.rmtree(dataset_folder)
+
+    if not dataset_folder.exists() or not any(dataset_folder.iterdir()):
+        if url.startswith('file://') or os.path.isabs(url):
+            # Local-file shortcut for development.
+            src = url.removeprefix('file://')
+            print(f'Copying demo bundle from {src} …')
+            shutil.copy(src, zip_path)
+        else:
+            print(f'Downloading demo bundle from {url} …')
+            download_file(url, zip_path)
+        ensure_directory_exists(dataset_folder)
+        extract_zip(zip_path, dataset_folder)
+        zip_path.unlink()
+
+    import json
+    import nibabel as nib
+
+    manifest = json.loads((dataset_folder / 'manifest.json').read_text())
+
+    r2_wholebrain    = nib.load(dataset_folder / 'r2_wholebrain.nii.gz')
+    cv_r2_wholebrain = nib.load(dataset_folder / 'cv_r2_wholebrain.nii.gz')
+    brain_mask       = nib.load(dataset_folder / 'brain_mask.nii.gz')
+
+    npcr = dataset_folder / 'npcr'
+    data = pd.read_csv(npcr / 'single_trial_betas.tsv.gz',
+                       sep='\t', index_col='trial', compression='gzip')
+    data.columns = data.columns.astype(int)
+    data.columns.name = 'voxel'
+    data = data.astype(np.float32)
+
+    paradigm = pd.read_csv(npcr / 'paradigm.tsv', sep='\t')
+
+    voxel_coords_mm = pd.read_csv(npcr / 'voxel_coords_mm.tsv',
+                                  sep='\t', index_col='voxel')
+    voxel_to_vertex = pd.read_csv(npcr / 'voxel_to_vertex.tsv',
+                                  sep='\t', index_col='voxel')
+    r2    = pd.read_csv(npcr / 'r2.tsv',    sep='\t',
+                        index_col='voxel')['r2']
+    cv_r2 = pd.read_csv(npcr / 'cv_r2.tsv', sep='\t',
+                        index_col='voxel')['cv_r2']
+
+    with np.load(dataset_folder / 'surface_patch.npz', allow_pickle=False) as npz:
+        surface_vertices = npz['vertices'].astype(np.float32)
+        surface_faces    = npz['faces'].astype(np.int32)
+        hemi             = str(npz['hemi'])
+
+    return {
+        'manifest':         manifest,
+        'r2_wholebrain':    r2_wholebrain,
+        'cv_r2_wholebrain': cv_r2_wholebrain,
+        'brain_mask':       brain_mask,
+        'data':             data,
+        'paradigm':         paradigm,
+        'voxel_coords_mm':  voxel_coords_mm,
+        'voxel_to_vertex':  voxel_to_vertex,
+        'r2':               r2,
+        'cv_r2':            cv_r2,
+        'surface_vertices': surface_vertices,
+        'surface_faces':    surface_faces,
+        'hemisphere':       hemi,
+    }

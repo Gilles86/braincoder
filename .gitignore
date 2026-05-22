@@ -54,3 +54,6 @@ sg_execution_times.rst
 .DS_store
 
 test*.ipynb
+
+# Bundle artefact uploaded to figshare; do not commit the binary blob.
+scripts/braincoder_npc_demo.zip

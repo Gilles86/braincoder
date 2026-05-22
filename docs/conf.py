@@ -45,8 +45,7 @@ sphinx_gallery_conf = {
     # "show_memory": not sys.platform.startswith("win"),
     "remove_config_comments": True,
     "nested_sections": True,
-    # fit_prf and decode_visual require downloading real fMRI data (load_szinte2024)
-    # and are too slow / data-dependent for a standard doc build
+    # fit_prf needs load_szinte2024 (real fMRI download); skip in docs.
     "expected_failing_examples": [
         "../examples/00_encodingdecoding/fit_prf.py",
     ],
