@@ -279,6 +279,13 @@ class ParameterFitter:
                      ops.convert_to_numpy(r2)), 0))
 
         # ---- assemble outputs --------------------------------------
+        # Per-iteration mean-best-R² trajectory (length = #steps actually
+        # taken; this can be shorter than ``max_n_iterations`` if the
+        # early-stop fired). Useful for diagnosing whether the
+        # ``r2_atol`` / ``lag`` defaults are stopping too soon or too
+        # late on a given dataset.
+        self.r2_history_ = np.asarray(mean_best_r2s, dtype=np.float64)
+
         self.estimated_parameters = format_parameters(
             ops.convert_to_numpy(best_parameters),
             self.model.parameter_labels)
