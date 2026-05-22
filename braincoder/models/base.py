@@ -346,8 +346,14 @@ class EncodingModel(object):
         else:
             raise Exception('Stimulus range needs to be either 1D or 2D')
 
+        # Convert ``data`` to a backend tensor at the entry point so the
+        # downstream ``data - prediction`` in ``_likelihood_timeseries``
+        # doesn't end up mixing numpy with a torch tensor (which raises
+        # ``TypeError: unsupported operand type(s) for -``).
+        data_t = ops.convert_to_tensor(data, dtype='float32')
+
         ll = self._likelihood(stimulus_range,
-                              data[np.newaxis, :, :],
+                              data_t[None, :, :],
                               parameters[np.newaxis, :, :] if parameters is not None else None,
                               weights_,
                               omega_chol,
