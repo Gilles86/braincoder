@@ -33,7 +33,6 @@ import pandas as pd
 from braincoder.models import LogGaussianPRF
 from braincoder.optimize import ParameterFitter, ResidualFitter
 from braincoder.utils.data import load_pratcarrabin2025_npc
-from braincoder.utils.math import get_expected_value, get_sd_posterior
 from braincoder.utils.stats import (
     fit_r2_mixture,
     get_rsq,
@@ -107,55 +106,43 @@ omega, dof = resid_fitter.fit(method='t', init_dof=10.0,
 print(f'Fitted dof: {dof:.1f}')
 
 # %%
-# Simulate from the fitted model and re-decode
+# Simulate, decode, and aggregate in one call
 # -----------------------------------------------------------------
-# For every numerosity in the stimulus grid we draw ``n_repeats``
-# noise-perturbed response patterns, then push them through
-# :meth:`get_stimulus_pdf` to recover the posterior over numerosity.
-# The posterior mean ``E`` is a per-trial estimate of the stimulus.
+# :meth:`EncodingModel.get_expected_uncertainty` wraps the whole
+# pipeline — for every stimulus in ``stim_grid`` it (1) simulates
+# ``n_simulations`` noise-perturbed response vectors from
+# ``(parameters, omega, dof)``, (2) decodes each via
+# :meth:`get_stimulus_pdf`, (3) computes the posterior mean, and (4)
+# aggregates per true stimulus. It returns a DataFrame with
+# ``mean_E, var_E, mean_error, mean_abs_error, n_sims``.
 
 n_repeats = 200
 print(f'Simulating {n_repeats} trials per numerosity '
       f'({len(stim_grid)} numerosities) …')
-sim = model.simulate(paradigm=stim_grid, parameters=pars,
-                      noise=omega, dof=dof, n_repeats=n_repeats)
-print(f'Simulated data: {sim.shape}')
-
-# Decode every simulated trial through the same model + noise.
-posterior = model.get_stimulus_pdf(
-    sim, parameters=pars, omega=omega, dof=dof,
-    stimulus_range=stim_grid, normalize=True,
+summary = model.get_expected_uncertainty(
+    stim_grid['n'].values.astype(np.float32),
+    omega=omega, dof=dof, parameters=pars,
+    n_simulations=n_repeats, progress=True,
 )
-
-E = get_expected_value(posterior, normalize=True).to_frame('E_decoded')
-E['true_n'] = np.tile(stim_grid['n'].values, n_repeats)
-E['error']  = E['E_decoded'] - E['true_n']
-sd_post = get_sd_posterior(posterior, E=E['E_decoded'].values, normalize=True)
-E['posterior_sd'] = sd_post.values
+# Add convenience columns the plot below reads off directly.
+summary['std_decoded'] = np.sqrt(summary['var_E'])
+print(summary.round(3).head())
 
 # %%
-# Aggregate and plot
+# Plot bias + expected uncertainty
 # -----------------------------------------------------------------
-# Per true numerosity, take the mean and standard deviation of the
-# decoded :math:`\\hat{s}` across simulated repeats — these are the
-# **bias** and **expected uncertainty** curves.
-
-summary = E.groupby('true_n').agg(
-    mean_decoded=('E_decoded', 'mean'),
-    std_decoded=('E_decoded', 'std'),
-    mean_error=('error', 'mean'),
-    mean_posterior_sd=('posterior_sd', 'mean'),
-)
-print(summary.round(3).head())
+# Per true numerosity: the bias of the posterior-mean estimator
+# (``mean_E - true``) and the spread of the posterior mean across
+# repeats (``√var_E``).
 
 fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
 
 ax = axes[0]
-ax.plot(summary.index, summary['mean_decoded'], 'o-', color='#1f77b4',
+ax.plot(summary.index, summary['mean_E'], 'o-', color='#1f77b4',
          label='Mean decoded')
 ax.fill_between(summary.index,
-                 summary['mean_decoded'] - summary['std_decoded'],
-                 summary['mean_decoded'] + summary['std_decoded'],
+                 summary['mean_E'] - summary['std_decoded'],
+                 summary['mean_E'] + summary['std_decoded'],
                  color='#1f77b4', alpha=0.2,
                  label='± std across repeats')
 lim = (summary.index.min() - 1, summary.index.max() + 1)
@@ -168,9 +155,9 @@ ax.legend(fontsize=8)
 
 ax = axes[1]
 ax.plot(summary.index, summary['std_decoded'], 'o-', color='#d62728',
-         label='SD of decoded across repeats')
-ax.plot(summary.index, summary['mean_posterior_sd'], 's--', color='#2ca02c',
-         label='Mean posterior SD')
+         label=r'$\sqrt{\mathrm{Var}[\hat{s}]}$ across repeats')
+ax.plot(summary.index, summary['mean_abs_error'], 's--', color='#2ca02c',
+         label=r'$\mathrm{mean}|\hat{s} - s|$')
 ax.set_xlabel('True numerosity')
 ax.set_ylabel('Expected uncertainty')
 ax.set_title('Decoding precision vs. stimulus')
@@ -183,15 +170,21 @@ plt.show()
 # Interpretation
 # -----------------------------------------------------------------
 # * The **bias** curve (left) shows whether the model systematically
-#   over- or under-estimates the true stimulus. A flat identity-line
+#   over- or under-estimates the true stimulus. A flat identity line
 #   means no bias. Deviations often appear near the edges of the
 #   stimulus range (the encoding model can't extrapolate beyond what
 #   it was fit on).
-# * The **expected uncertainty** curve (right) compares two flavours:
-#   the SD of the posterior *mean* across repeats (sampling
-#   uncertainty) and the mean *posterior SD* within a single decode
-#   (model-implied uncertainty). They tend to track each other but
-#   not match perfectly; large gaps point at mis-specification.
-# * Compared to Fisher information, this estimator captures realistic
-#   bias and prior effects at the cost of being slower (we have to
-#   simulate + decode :math:`\\sim 10^3`–:math:`10^4` trials).
+# * The **expected uncertainty** curve (right) shows two flavours:
+#   :math:`\sqrt{\mathrm{Var}[\hat{s}]}` across repeats (sampling
+#   uncertainty of the posterior mean) and the mean absolute error
+#   :math:`\mathrm{mean}|\hat{s} - s|`. They tend to track each other;
+#   a gap means the estimator is biased (the MAE picks up bias, the SD
+#   doesn't).
+# * Under the Cramér–Rao bound the variance of an unbiased estimator
+#   is at least :math:`1 / \mathcal{I}(s)`, so far from the boundary
+#   :math:`\mathrm{Var}[\hat{s}] \approx 1 /` Fisher information.
+#   :meth:`EncodingModel.get_expected_uncertainty` and
+#   :meth:`EncodingModel.get_fisher_information` are the two ends of
+#   that bound — see :doc:`/fisher_information` for the head-to-head.
+# * Cost: simulate + decode :math:`\sim 10^3`–:math:`10^4` trials per
+#   stimulus; use ``batch_stimuli=`` to bound memory for large grids.
