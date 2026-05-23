@@ -117,21 +117,88 @@ print(f'Train R² — median {np.nanmedian(train_r2):.3f}, '
       f'p90 {np.nanpercentile(train_r2, 90):.3f}')
 
 # %%
-# Build the geodesic distance matrix
+# From an fmriprep folder to a geodesic distance matrix
 # -----------------------------------------------------------------
-# The demo bundle ships a cropped cortical-mesh patch (right hemisphere
-# white-matter surface), plus a per-voxel "nearest patch vertex" index.
-# ``geodesic_distance_matrix`` runs Dijkstra along mesh edges and
-# returns the pairwise distance between only the seed vertices we ask
-# for.
+# In a real project the cortical mesh comes straight from fmriprep,
+# which writes a triangulated white-matter surface per hemisphere in
+# the subject's T1w (anatomical) space:
+#
+# .. code-block:: text
+#
+#     derivatives/fmriprep/sub-XX/anat/sub-XX_hemi-L_white.surf.gii
+#     derivatives/fmriprep/sub-XX/anat/sub-XX_hemi-R_white.surf.gii
+#
+# Both are GIfTI files: the first data array holds vertex
+# coordinates in mm (``n_vertices × 3``), the second holds the
+# integer triangle indices (``n_faces × 3``). Because they live in
+# T1w space they line up directly with any volumetric mask you also
+# resampled to T1w (which is the default for fmriprep ``space-T1w``
+# BOLDs).
+#
+# The full recipe — written here against an imaginary fmriprep
+# folder so you can lift it into your own project unchanged — is:
+#
+# .. code-block:: python
+#
+#     import nibabel as nib
+#     from scipy.spatial import cKDTree
+#     from braincoder.utils.cortex import geodesic_distance_matrix
+#
+#     # 1) Load the white-matter surface (right hemi here).
+#     gii = nib.load('derivatives/fmriprep/sub-XX/anat/'
+#                    'sub-XX_hemi-R_white.surf.gii')
+#     vertices = gii.darrays[0].data.astype(np.float32)
+#     faces    = gii.darrays[1].data.astype(np.int32)
+#
+#     # 2) Get voxel-centroid mm coordinates from your ROI mask
+#     #    (T1w-space NIfTI; assumes you already have a NiftiMasker
+#     #    or just an ROI boolean array + the mask image).
+#     mask_img = nib.load('roi_mask_space-T1w.nii.gz')
+#     ijk = np.argwhere(mask_img.get_fdata().astype(bool))
+#     voxel_xyz = nib.affines.apply_affine(mask_img.affine, ijk).astype(np.float32)
+#
+#     # 3) Snap each voxel centroid to its nearest mesh vertex.
+#     tree = cKDTree(vertices)
+#     dist, nearest_vertex = tree.query(voxel_xyz)
+#
+#     # 4) Geodesic distance matrix between those vertices.
+#     #    Dijkstra along mesh edges; expensive on the full hemisphere,
+#     #    cheap if you crop to a neighbourhood of your ROI first.
+#     D = geodesic_distance_matrix(vertices, faces,
+#                                  source_indices=nearest_vertex)
+#
+# That's the whole pipeline. The demo bundle below ships a
+# pre-cropped right-hemisphere patch (so we don't have to lug around
+# a ~150 k-vertex full hemisphere) together with the per-voxel mm
+# coordinates — but otherwise the steps are exactly the same.
 
-voxel_to_vertex = bundle['voxel_to_vertex'].loc[keep, 'vertex'].values
-D = geodesic_distance_matrix(
-    bundle['surface_vertices'],
-    bundle['surface_faces'],
-    source_indices=voxel_to_vertex,
-    progressbar=False,
-)
+# %%
+# Build the geodesic distance matrix (against the bundled patch)
+# -----------------------------------------------------------------
+# We re-do steps 3 and 4 from the recipe above against the bundle's
+# data, so this is real, runnable code that mirrors what you'd do on
+# your own fmriprep outputs.
+
+from scipy.spatial import cKDTree  # noqa: E402
+
+vertices = bundle['surface_vertices']  # (n_patch_vertices × 3) float32, mm
+faces    = bundle['surface_faces']     # (n_patch_faces × 3) int32
+
+# Voxel-centroid mm coordinates inside NPCr (pre-computed in the bundle,
+# but the same thing you'd build with apply_affine on your own NIfTI).
+voxel_xyz = bundle['voxel_coords_mm'].loc[keep, ['x', 'y', 'z']].values
+
+# Snap each NPCr voxel to its nearest white-matter vertex.
+tree = cKDTree(vertices)
+snap_dist, nearest_vertex = tree.query(voxel_xyz)
+print(f'Voxel→vertex snap distance: '
+      f'median {np.median(snap_dist):.2f} mm, '
+      f'p95 {np.percentile(snap_dist, 95):.2f} mm')
+
+# Pairwise geodesic distance between the snapped vertices.
+D = geodesic_distance_matrix(vertices, faces,
+                              source_indices=nearest_vertex,
+                              progressbar=False)
 print(f'Distance matrix: {D.shape}, '
       f'median pairwise distance {np.median(D[np.triu_indices_from(D, k=1)]):.1f} mm')
 

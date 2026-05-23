@@ -236,6 +236,7 @@ class ParameterFitter:
         best_parameters = ops.zeros(init_pars.shape)
         intermediate_parameters = [] if store_intermediate_parameters else None
         mean_best_r2s = []
+        loss_history = []
 
         labels = self.model.parameter_labels
         logger.info('Fitting: %s',
@@ -247,7 +248,8 @@ class ParameterFitter:
                          ', '.join(labels[ix] for ix in shared_parameter_ixs))
 
         for step in pbar:
-            _, gradients = compute_gradients(loss_fn, trainable_variables)
+            loss, gradients = compute_gradients(loss_fn, trainable_variables)
+            loss_history.append(float(ops.convert_to_numpy(loss)))
 
             # Re-compute outside the gradient tape for tracking.
             pars = build_parameters()
@@ -303,6 +305,12 @@ class ParameterFitter:
         # ``r2_atol`` / ``lag`` defaults are stopping too soon or too
         # late on a given dataset.
         self.r2_history_ = np.asarray(mean_best_r2s, dtype=np.float64)
+        # Per-iteration loss (the actual minimization objective; same
+        # length as r2_history_). For ``noise_model='ssq'`` this is
+        # the total SSQ across voxels; for ``'gaussian'`` it is the
+        # total negative log-likelihood. Useful for cross-method
+        # convergence comparisons.
+        self.loss_history_ = np.asarray(loss_history, dtype=np.float64)
 
         self.estimated_parameters = format_parameters(
             ops.convert_to_numpy(best_parameters),
