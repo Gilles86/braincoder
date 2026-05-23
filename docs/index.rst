@@ -55,6 +55,7 @@ More resources
 
    installation
    concepts
+   fisher_information
    api_reference
    tutorial/index
    auto_examples/index

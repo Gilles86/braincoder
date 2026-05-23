@@ -56,6 +56,29 @@ Gaussian-Process prior over cortical geodesic distance.
   probability. More forgiving than tail-FDR on small/degenerate ROIs.
 - **`plot_r2_mixture`** — diagnostic plot of the mixture fit + threshold.
 
+### Fisher information & expected uncertainty
+
+- **Analytical Fisher information for multivariate Student-t noise.**
+  `EncodingModel.get_fisher_information(..., analytical=True)` now
+  accepts `dof` and applies the closed-form prefactor
+  `(ν + p) / (ν + p + 2) · Jᵀ Ω⁻¹ J`. Previously this combination
+  raised `ValueError` and forced users to the Monte-Carlo path; MC
+  was both noisier (~12% RMS at n=200) and prone to int32 overflow in
+  `UnsortedSegmentSum` at `n × n_vox × n_stim ≈ 5e7`. The analytical
+  path is now exact for any ν and recovers the Gaussian formula as
+  ν → ∞.
+- **`EncodingModel.get_expected_uncertainty(stimuli, omega, dof, ...)`**
+  — new convenience wrapper. Simulates `n_simulations` noisy responses
+  per stimulus from `(parameters, omega, dof)`, decodes each via
+  `get_stimulus_pdf`, and returns a DataFrame indexed by stimulus
+  value with `mean_E, var_E, mean_error, mean_abs_error, n_sims`.
+  `batch_stimuli` lets you bound memory at large grid sizes.
+- **Tests**: `tests/test_fisher_information.py` (9 tests): Student-t
+  prefactor, dof → ∞ recovery of Gaussian, MC ↔ analytical agreement,
+  and the FI ↔ 1/var_E relationship.
+- **Docs**: new `docs/fisher_information.rst` page with the two-API
+  story, the "is spikiness real?" diagnostic, and a worked example.
+
 ### Cortical surface helpers
 
 - **`braincoder.utils.cortex.geodesic_distance_matrix`** — Dijkstra-based

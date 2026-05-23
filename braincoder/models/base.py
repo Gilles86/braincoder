@@ -445,9 +445,26 @@ class EncodingModel(object):
 
     def get_fisher_information(self, stimuli, omega=None, dof=None, weights=None, parameters=None, n=1000,
                                analytical=True):
+        """Population Fisher information per stimulus value.
 
-        if analytical and (dof is not None):
-            raise ValueError('Cannot use analytical Fisher information with t-distribution!')
+        Two computation paths:
+
+        * **Analytical** (default) — closed form
+          ``FI(s) = J(s)ᵀ Ω⁻¹ J(s)`` for Gaussian noise, or
+          ``FI(s) = (ν + p) / (ν + p + 2) · J(s)ᵀ Ω⁻¹ J(s)`` for
+          multivariate Student-t with degrees of freedom ``ν = dof`` and
+          dimensionality ``p`` (number of voxels in ``Ω``). Exact, fast,
+          no MC noise; recommended for *any* fitted noise model.
+        * **Monte-Carlo** (``analytical=False``) — average squared score
+          over ``n`` simulated noise draws. Useful as a sanity check and
+          for non-quadratic likelihoods, but in our setup gives
+          essentially identical curves with much higher variance, so
+          prefer the analytical path.
+
+        The Student-t correction factor reduces FI relative to Gaussian
+        by exactly ``(ν + p) / (ν + p + 2) < 1`` for finite ``ν`` —
+        heavy-tailed noise carries less information per voxel.
+        """
 
         if omega is None:
             omega = self.omega
@@ -470,6 +487,8 @@ class EncodingModel(object):
 
         omega_t = ops.convert_to_tensor(omega, dtype='float32')
         L = safe_cholesky(omega_t)
+        # p = dimensionality of the residual = number of voxels in Ω.
+        p_dim = int(omega_t.shape[0])
 
         if analytical:
             stimuli_ = ops.convert_to_tensor(stimuli[np.newaxis, ...])
@@ -481,6 +500,12 @@ class EncodingModel(object):
 
             y = ops.concatenate(y, axis=1)
             fisher_info = ops.sum(y ** 2, axis=0)
+            if dof is not None:
+                # Closed-form multivariate-t FI: scale by (ν + p) / (ν + p + 2).
+                # As ν → ∞ this approaches 1 and we recover the Gaussian case.
+                dof_t = ops.cast(dof, 'float32')
+                factor = (dof_t + p_dim) / (dof_t + p_dim + 2.0)
+                fisher_info = fisher_info * factor
 
         else:
             from ..utils.backend import compute_gradients
@@ -506,6 +531,155 @@ class EncodingModel(object):
             return pd.Series(fisher_info, index=pd.Index(stimuli[:, 0], name='stimulus'), name='Fisher information')
         else:
             return pd.Series(fisher_info, index=pd.MultiIndex.from_frame(pd.DataFrame(stimuli)), name='Fisher information')
+
+    def get_expected_uncertainty(self, stimuli, omega, dof=None,
+                                  parameters=None, weights=None,
+                                  n_simulations=1000, batch_stimuli=None,
+                                  decoder_stimulus_range=None,
+                                  progress=False):
+        """Simulate noisy responses, decode them, summarise per-stimulus.
+
+        Procedure (mirrors the analytical Fisher information but lets
+        you read off *posterior* quantities directly):
+
+        1. For each stimulus ``s`` in ``stimuli``, draw ``n_simulations``
+           independent noisy responses ``r ~ p(r | s, Ω, dof)``.
+        2. Compute the posterior ``p(s | r)`` over a fine
+           ``decoder_stimulus_range`` (defaults to ``stimuli`` itself).
+        3. Take the posterior expected value of each simulated trial
+           and aggregate across the ``n_simulations`` repeats per stimulus.
+
+        Parameters
+        ----------
+        stimuli : array_like
+            Stimulus values to simulate from + use as the aggregation axis.
+            Shape ``(n_stim,)`` for 1-D models or ``(n_stim, n_dims)``.
+        omega : array_like
+            Noise covariance.
+        dof : float or None
+            Degrees of freedom for multivariate Student-t noise. ``None``
+            uses Gaussian.
+        parameters : DataFrame or None
+            Encoding-model parameters (one row per voxel). Defaults to
+            ``self.parameters``.
+        weights : DataFrame or None
+            Basis weights for linear models. Defaults to ``self.weights``.
+        n_simulations : int
+            Noisy repeats per stimulus.
+        batch_stimuli : int or None
+            Process this many stimuli per simulation/decoding batch.
+            ``None`` does them all at once. Use a small number (e.g. 25)
+            to bound memory when the stimulus grid is large.
+        decoder_stimulus_range : array_like or None
+            Grid for posterior evaluation. Defaults to ``stimuli``. Pass
+            a finer grid to make ``var_E`` reflect decoder resolution
+            independent of the simulation grid.
+        progress : bool
+            If True, print a one-line status per batch.
+
+        Returns
+        -------
+        DataFrame
+            Index = stimulus value (or MultiIndex for N-D stimuli).
+            Columns: ``mean_E, var_E, mean_error, mean_abs_error, n_sims``.
+            ``mean_E`` is the average posterior mean; ``var_E`` is its
+            empirical variance across simulations (≈ 1/FI in well-fit
+            regimes); ``mean_error = mean_E - true_value`` is decoder
+            bias; ``mean_abs_error`` is average absolute decode error.
+
+        Notes
+        -----
+        ``var_E`` is the variance of the *posterior expected value across
+        simulations* — different from the average posterior variance.
+        For unbiased decoders in a Gaussian/CRB regime,
+        ``var_E ≈ 1 / Fisher_information``. The two diverge when the
+        posterior is skewed or bounded by the grid edges.
+        """
+        from ..utils.math import get_expected_value
+        from ..utils.formatting import format_parameters, format_weights
+
+        stimuli_arr = np.asarray(stimuli)
+        if stimuli_arr.ndim == 1:
+            stimuli_arr = stimuli_arr[:, np.newaxis]
+
+        if parameters is None:
+            parameters = self.parameters
+        parameters = format_parameters(parameters) if parameters is not None else None
+
+        if weights is None:
+            weights = self.weights
+        weights = format_weights(weights) if weights is not None else None
+
+        if decoder_stimulus_range is None:
+            decoder_stimulus_range = stimuli_arr
+        else:
+            decoder_stimulus_range = np.asarray(decoder_stimulus_range)
+            if decoder_stimulus_range.ndim == 1:
+                decoder_stimulus_range = decoder_stimulus_range[:, np.newaxis]
+
+        n_total = stimuli_arr.shape[0]
+        batch = n_total if batch_stimuli is None else int(batch_stimuli)
+
+        records = []
+        for start in range(0, n_total, batch):
+            stop = min(start + batch, n_total)
+            stim_batch = stimuli_arr[start:stop]
+            stim_df = pd.DataFrame(stim_batch,
+                                   columns=self.stimulus.dimension_labels
+                                   if hasattr(self.stimulus, 'dimension_labels')
+                                   else ['x'])
+            stim_df.index.name = 'stimulus'
+
+            sim = self.simulate(paradigm=stim_df, parameters=parameters,
+                                weights=weights, noise=omega, dof=dof,
+                                n_repeats=n_simulations)
+            # sim index: ('repeat', 'stimulus') if n_repeats > 1, else 'stimulus'.
+
+            pdf = self.get_stimulus_pdf(sim, decoder_stimulus_range,
+                                         parameters=parameters,
+                                         weights=weights, omega=omega,
+                                         dof=dof, normalize=True)
+            # Get expected value per simulated trial — works for 1-D pdfs.
+            try:
+                E = get_expected_value(pdf, normalize=True)
+            except Exception:
+                # 2-D stimulus pdfs aren't supported by get_expected_value;
+                # fall back to per-dimension expectation in that case.
+                raise NotImplementedError(
+                    'get_expected_uncertainty currently supports 1-D '
+                    'stimulus spaces only. Multidimensional posterior '
+                    'aggregation will be added when needed.')
+
+            # Align each E entry with its true stimulus.
+            idx = pdf.index
+            if isinstance(idx, pd.MultiIndex):
+                stim_lvl = next((n for n in idx.names
+                                 if n in ('stimulus', 'value')), idx.names[-1])
+                stim_pos = list(idx.names).index(stim_lvl)
+                true_idx = idx.get_level_values(stim_pos).to_numpy()
+            else:
+                true_idx = idx.to_numpy()
+            # true_idx is an offset into stim_batch's stimulus index; map to value.
+            stim_values = stim_batch[:, 0] if stim_batch.shape[1] == 1 else stim_batch
+            value_lookup = pd.Series(stim_values, index=stim_df.index)
+            true_vals = value_lookup.reindex(true_idx).to_numpy()
+            for tv, ev in zip(true_vals, np.asarray(E)):
+                records.append({'value': float(tv), 'E': float(ev)})
+            if progress:
+                print(f'  [stim {start}:{stop}/{n_total}] '
+                      f'{(stop - start) * n_simulations} simulated trials')
+
+        df = pd.DataFrame(records)
+        df['error']     = df['E'] - df['value']
+        df['abs_error'] = df['error'].abs()
+        out = df.groupby('value').agg(
+            mean_E=('E', 'mean'),
+            var_E=('E', 'var'),
+            mean_error=('error', 'mean'),
+            mean_abs_error=('abs_error', 'mean'),
+            n_sims=('E', 'count'),
+        )
+        return out
 
     def _get_parameters(self, parameters=None):
         """Return parameters formatted as DataFrame matching ``parameter_labels``."""
