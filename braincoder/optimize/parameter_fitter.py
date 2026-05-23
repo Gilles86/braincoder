@@ -13,8 +13,13 @@ from tqdm.auto import tqdm
 from ..utils import format_data, format_parameters, format_paradigm, get_rsq
 from ..utils.backend import compute_gradients, softplus_inverse
 
+logger = logging.getLogger(__name__)
 
 _VALID_NOISE_MODELS = ('ssq', 'gaussian')
+# Floor added inside softplus(log_sigma2) to keep 1/σ² from blowing up
+# on float32 when log_sigma2 drifts very negative for a near-noise-free
+# voxel.
+_SIGMA2_EPS = 1e-8
 
 
 class ParameterFitter:
@@ -115,14 +120,14 @@ class ParameterFitter:
         ssq_data = ops.sum((y - ops.mean(y, axis=0)[None, :]) ** 2, axis=0)
         meaningful_ts = ops.convert_to_numpy(ssq_data > 0.0)
         meaningful_ixs = np.where(meaningful_ts)[0]
-        print(f'Number of problematic voxels (mask): {(~meaningful_ts).sum()}')
-        print(f'Number of voxels remaining (mask): {meaningful_ts.sum()}')
+        logger.info('Voxels masked out (zero-variance): %d; remaining: %d',
+                     int((~meaningful_ts).sum()), int(meaningful_ts.sum()))
 
         # ---- init parameters in unconstrained space ----------------
         if init_pars is None:
             init_pars = self.model.get_init_pars(
                 data=y, paradigm=self.paradigm, confounds=confounds)
-            print('using get_init_pars')
+            logger.info('Using model.get_init_pars (no init_pars given).')
         init_pars = self.model._get_parameters(init_pars)
         init_pars = ops.convert_to_numpy(
             self.model._transform_parameters_backward(
@@ -164,6 +169,13 @@ class ParameterFitter:
             init_resid = y - with_init_pred
             init_sigma2 = ops.convert_to_numpy(
                 ops.mean(init_resid ** 2, axis=0))
+            # NaN columns (all-NaN voxels, or model predictions that
+            # returned NaN at init) would propagate through
+            # ``np.maximum(NaN, 1e-4) -> NaN`` and poison the optimizer
+            # state for every voxel via Adam's shared moments. Replace
+            # with 1.0 (a benign value; the voxel is masked out of the
+            # loss anyway via ``meaningful_mask``).
+            init_sigma2 = np.nan_to_num(init_sigma2, nan=1.0)
             init_sigma2 = np.maximum(init_sigma2, 1e-4).astype(np.float32)
             log_sigma2 = keras.Variable(
                 ops.convert_to_numpy(softplus_inverse(
@@ -210,10 +222,9 @@ class ParameterFitter:
                 pars = build_parameters()
                 native = self.model._transform_parameters_forward(pars)
                 ssq = get_ssq(native)
-                sigma2 = ops.softplus(log_sigma2)
+                sigma2 = ops.softplus(log_sigma2) + _SIGMA2_EPS
                 nll = 0.5 * (n_t_f * (_LOG_2PI + ops.log(sigma2))
                               + ssq / sigma2)
-                # Only sum over meaningful voxels.
                 return ops.sum(nll * meaningful_mask)
 
         # ---- main loop ---------------------------------------------
@@ -226,7 +237,14 @@ class ParameterFitter:
         intermediate_parameters = [] if store_intermediate_parameters else None
         mean_best_r2s = []
 
-        self._print_fit_header(parameter_ix, fixed_pars, shared_parameter_ixs)
+        labels = self.model.parameter_labels
+        logger.info('Fitting: %s',
+                     ', '.join(labels[ix] for ix in parameter_ix))
+        if fixed_pars:
+            logger.info('Fixed: %s', ', '.join(fixed_pars))
+        if shared_parameter_ixs:
+            logger.info('Shared: %s',
+                         ', '.join(labels[ix] for ix in shared_parameter_ixs))
 
         for step in pbar:
             _, gradients = compute_gradients(loss_fn, trainable_variables)
@@ -394,32 +412,23 @@ class ParameterFitter:
                         + shared_expanded * shared_mask)
         return build
 
-    def _print_fit_header(self, parameter_ix, fixed_pars,
-                          shared_parameter_ixs):
-        labels = self.model.parameter_labels
-        print('*** Fitting: ***')
-        for ix in parameter_ix:
-            print(f' * {labels[ix]}')
-        if fixed_pars:
-            print('*** Fixed Parameters: ***')
-            for lbl in fixed_pars:
-                print(f' * {lbl}')
-        if shared_parameter_ixs:
-            print('*** Shared Parameters: ***')
-            for ix in shared_parameter_ixs:
-                print(f' * {labels[ix]}')
-
     # ------------------------------------------------------------ grid fit
     def fit_grid(self, *args, fixed_pars=None,
                  use_correlation_cost=False,
                  positive_amplitude=True, **kwargs):
         n_timepoints, n_voxels = self.data.shape
         chunk_size = self.memory_limit / n_voxels / n_timepoints
-        chunk_size = int(kwargs.pop('chunk_size', chunk_size))
-        print(f'Working with chunk size of {chunk_size}')
+        # ``max(1, ...)`` guards against the case where the grid data
+        # is larger than ``memory_limit`` (e.g., full-cortex run with
+        # many TRs) and ``int(...)`` would otherwise drop to 0, causing
+        # a ZeroDivisionError below at ``len(par_grid) // chunk_size``.
+        chunk_size = max(1, int(kwargs.pop('chunk_size', chunk_size)))
+        logger.info('Working with chunk size of %d', chunk_size)
 
         if fixed_pars is not None:
-            raise NotImplementedError()
+            raise NotImplementedError(
+                'fit_grid does not yet support fixed_pars; use fit() '
+                'with fixed_pars=... after a refine step.')
 
         if len(args) == len(self.model.parameter_labels):
             kwargs = dict(zip(self.model.parameter_labels, args))
@@ -448,7 +457,7 @@ class ParameterFitter:
         paradigm_ = self.paradigm.values
 
         if use_correlation_cost:
-            print("Using correlation cost!")
+            logger.info('Using correlation cost for grid fit.')
             data_demeaned = data - ops.mean(data, axis=0, keepdims=True)
             ssq_data = ops.sum(data_demeaned ** 2, axis=0, keepdims=True)
 
@@ -510,13 +519,20 @@ class ParameterFitter:
         if isinstance(parameters.columns, pd.MultiIndex):
             amplitude_ix = ('amplitude_unbounded', 'Intercept')
             baseline_ix = ('baseline_unbounded', 'Intercept')
-            assert (amplitude_ix in parameters.columns
-                    and baseline_ix in parameters.columns), \
-                "Need parameters with amplitude and baseline"
+            if (amplitude_ix not in parameters.columns
+                    or baseline_ix not in parameters.columns):
+                raise ValueError(
+                    'refine_baseline_and_amplitude needs both '
+                    f'{amplitude_ix} and {baseline_ix} in the parameter '
+                    'DataFrame; got columns: '
+                    f'{list(parameters.columns)}')
         else:
-            assert (('baseline' in parameters.columns)
-                    and ('amplitude' in parameters)), \
-                "Need parameters with amplitude and baseline"
+            if ('baseline' not in parameters.columns
+                    or 'amplitude' not in parameters.columns):
+                raise ValueError(
+                    "refine_baseline_and_amplitude needs both "
+                    "'baseline' and 'amplitude' columns; got: "
+                    f"{list(parameters.columns)}")
             amplitude_ix = 'amplitude'
             baseline_ix = 'baseline'
 
@@ -585,68 +601,3 @@ class ParameterFitter:
     @paradigm.setter
     def paradigm(self, paradigm):
         self._paradigm = format_paradigm(paradigm)
-
-    # ------------------------------------------------------------ partial grid
-    def _partly_fit_grid(self, fixed_pars, n_voxels, chunk_size, **kwargs):
-        # Kept verbatim — only used by an experimental code path.
-        for key in list(kwargs):
-            if key in fixed_pars:
-                print(f'Dropping {key} from fixed_pars since it is in '
-                      f'the grid parameters')
-                fixed_pars = fixed_pars.drop(key, 1)
-
-        if set(list(kwargs) + fixed_pars.columns.tolist()) != \
-                set(self.model.parameter_labels):
-            raise ValueError(
-                f'Please provide parameter ranges for all of: '
-                f'{self.model.parameter_labels}, either in the grid '
-                f'or in fixed_pars')
-
-        chunk_size = chunk_size // self.data.shape[1] + 1
-        grid_key_ixs = [self.model.parameter_labels.index(k)
-                         for k in kwargs.keys()]
-        init_par_ixs = [self.model.parameter_labels.index(k)
-                         for k in fixed_pars.columns]
-
-        par_grid1 = pd.MultiIndex.from_product(
-            kwargs.values(), names=kwargs.keys()).to_frame(index=False)
-        par_grid1 = np.repeat(par_grid1.values[np.newaxis, :, :], n_voxels, 0)
-
-        n_perms = par_grid1.shape[1]
-        n_chunks = ((n_perms - 1) // chunk_size) + 1
-        n_features = self.data.shape[1]
-        n_pars = len(self.model.parameter_labels)
-
-        par_grid = np.zeros((n_perms, n_features, n_pars), dtype=np.float32)
-        for old, new in enumerate(grid_key_ixs):
-            par_grid[:, :, new] = par_grid1[:, :, old].T
-        for old, new in enumerate(init_par_ixs):
-            par_grid[:, :, new] = fixed_pars.values[np.newaxis, :, old]
-
-        best_pars = np.zeros((n_features, n_chunks, n_pars))
-        best_ssq = np.zeros((n_features, n_chunks))
-        vox_ix = np.arange(n_features)
-
-        data = self.data.values
-        paradigm_ = self.paradigm.values
-
-        def _ssq(pg):
-            pred = self.model._predict(paradigm_[None, :, :], pg, None)
-            return ops.sum((data[None, ...] - pred) ** 2, axis=1), \
-                   ops.argmin(ops.sum((data[None, ...] - pred) ** 2, axis=1),
-                              axis=0)
-
-        for chunk in tqdm(range(n_chunks)):
-            pg = par_grid[chunk * chunk_size:(chunk + 1) * chunk_size]
-            ssq_, best_ix = _ssq(pg)
-            ssq_np = ops.convert_to_numpy(ssq_)
-            best_ix_np = ops.convert_to_numpy(best_ix)
-            gather = np.stack((best_ix_np, vox_ix), 1)
-            best_ssq[:, chunk] = ssq_np[gather[:, 0], gather[:, 1]]
-            best_pars[:, chunk, :] = pg[gather[:, 0], gather[:, 1]]
-
-        best_chunks = ops.convert_to_numpy(ops.argmin(best_ssq, axis=1))
-        best_pars = best_pars[vox_ix, best_chunks]
-        return pd.DataFrame(best_pars, index=self.data.columns,
-                            columns=self.model.parameter_labels
-                            ).astype(np.float32)
