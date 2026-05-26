@@ -405,9 +405,15 @@ def compute_jacobian(fn, inputs):
     if backend == 'tensorflow':
         import tensorflow as tf
         inputs_var = tf.Variable(ops.convert_to_tensor(inputs))
-        with tf.GradientTape() as tape:
+        # experimental_use_pfor=False avoids the default vectorized (pfor) path,
+        # whose UnsortedSegmentSum builds an int32 `num_segments` that overflows
+        # to negative on large Jacobians (e.g. n_voxels*n_values in Fisher-info),
+        # raising "num_segments must not be negative". The while_loop path is
+        # slower but returns an identical Jacobian. In eager mode pfor=False
+        # requires a persistent tape.
+        with tf.GradientTape(persistent=True) as tape:
             outputs = fn(inputs_var)
-        return tape.jacobian(outputs, inputs_var)
+        return tape.jacobian(outputs, inputs_var, experimental_use_pfor=False)
     elif backend == 'jax':
         import jax
         return jax.jacobian(fn)(inputs)
