@@ -169,17 +169,38 @@ plt.show()
 # %%
 # Interpretation
 # -----------------------------------------------------------------
-# * The **bias** curve (left) shows whether the model systematically
-#   over- or under-estimates the true stimulus. A flat identity line
-#   means no bias. Deviations often appear near the edges of the
-#   stimulus range (the encoding model can't extrapolate beyond what
-#   it was fit on).
-# * The **expected uncertainty** curve (right) shows two flavours:
-#   :math:`\sqrt{\mathrm{Var}[\hat{s}]}` across repeats (sampling
-#   uncertainty of the posterior mean) and the mean absolute error
-#   :math:`\mathrm{mean}|\hat{s} - s|`. They tend to track each other;
-#   a gap means the estimator is biased (the MAE picks up bias, the SD
-#   doesn't).
+# The two curves together capture the full story of how the decoder
+# behaves under the *fitted* model. The shape you see here is
+# characteristic and worth picking apart:
+#
+# * The **bias** curve (left) crosses zero somewhere in the middle of
+#   the stimulus range and is monotonic on either side — *positive*
+#   below the crossover (decoder over-estimates) and *negative* above
+#   (decoder under-estimates). This is regression-to-the-mean towards
+#   the **centre of the fitted-mu distribution**, not towards the
+#   centre of the stimulus range. Production fits on this subject's
+#   NPCr have most preferred numerosities clustered around ~20–25, so
+#   the decoder pulls every estimate toward that cluster.
+# * The **expected uncertainty** curve (right) is roughly **U-shaped**
+#   with its minimum at the same crossover point. That's *not* the
+#   Weber-law pattern one might expect (uncertainty increasing
+#   monotonically with magnitude). It's the natural consequence of the
+#   bias: where true ≈ mean(fitted mu) the decoder needs to move
+#   least, so its variance across repeats is small; far from that
+#   point the decoder is anchored by the prior support and the same
+#   noise produces a wider spread of estimates.
+# * Both effects are properties of *this subject's NPCr tuning
+#   topography*, not of the simulate+decode procedure itself. If you
+#   ran the same pipeline on a voxel population whose fitted mu
+#   uniformly tiled [10, 40], the bias curve would flatten and the
+#   uncertainty curve would lift into a Weber-like increase with
+#   magnitude. Within a single NPCr ROI the tuning is biologically
+#   local; across-subject pooling broadens it.
+# * The blue solid curve (:math:`\sqrt{\mathrm{Var}[\hat{s}]}`) and
+#   the green dashed curve (:math:`\mathrm{mean}|\hat{s} - s|`) only
+#   coincide when the estimator is unbiased. The gap is therefore a
+#   visual estimate of |bias(s)|; mean absolute error picks up bias,
+#   the SD across repeats doesn't.
 # * Under the Cramér–Rao bound the variance of an unbiased estimator
 #   is at least :math:`1 / \mathcal{I}(s)`, so far from the boundary
 #   :math:`\mathrm{Var}[\hat{s}] \approx 1 /` Fisher information.

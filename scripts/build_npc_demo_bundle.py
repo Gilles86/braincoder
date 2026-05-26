@@ -94,22 +94,42 @@ def _white_surface_path(sub: str, hemi: str) -> Path:
             / f'sub-{sub}_hemi-{hemi}_white.surf.gii')
 
 
+def _mu_wide_path(sub: str) -> Path:
+    """Production fitted ``mu`` (preferred numerosity) for the wide range."""
+    smoothed_part = '.smoothed' if SMOOTHED else ''
+    return (DERIV / 'encoding_models' / f'model{MODEL}{smoothed_part}'
+            / f'sub-{sub}' / 'func'
+            / f'sub-{sub}_desc-mu.wide.optim_space-T1w_pars.nii.gz')
+
+
+def _npcr_r2_path(sub: str) -> Path:
+    """Production within-sample R² for the NPCr-restricted fit (same masker shape as mu)."""
+    smoothed_part = '.smoothed' if SMOOTHED else ''
+    return (DERIV / 'encoding_models' / f'model{MODEL}{smoothed_part}'
+            / f'sub-{sub}' / 'func'
+            / f'sub-{sub}_desc-r2.optim_space-T1w_pars.nii.gz')
+
+
 def _event_path(sub: str, ses: int, run: int) -> Path:
     return (BIDS / f'sub-{sub}' / f'ses-{ses}' / 'func'
             / f'sub-{sub}_ses-{ses}_task-task_run-{run}_events.tsv')
 
 
 def list_candidate_subjects() -> list[str]:
-    """Subjects with both whole-brain R² (within-sample + CV) and NPCr mask."""
+    """Subjects with all the artefacts the bundle needs."""
     out = []
     for d in sorted((DERIV / 'encoding_models' / _model_dir(cv=True)).glob('sub-*')):
         sub = d.name.replace('sub-', '')
-        cvr2 = _wholebrain_cvr2_path(sub)
-        r2   = _wholebrain_r2_path(sub)
-        mask = _npcr_mask_path(sub)
-        st = _single_trial_path(sub)
-        bm = _brain_mask_path(sub)
-        if all(p.exists() for p in (cvr2, r2, mask, st, bm)):
+        needed = [
+            _wholebrain_cvr2_path(sub),
+            _wholebrain_r2_path(sub),
+            _npcr_mask_path(sub),
+            _single_trial_path(sub),
+            _brain_mask_path(sub),
+            _mu_wide_path(sub),
+            _npcr_r2_path(sub),
+        ]
+        if all(p.exists() for p in needed):
             out.append(sub)
     return out
 
@@ -137,15 +157,60 @@ def mean_npcr_cvr2(sub: str) -> float:
     return float(np.nanmean(cvr2[mask]))
 
 
-def pick_best_subject() -> tuple[str, float, dict[str, float]]:
-    scores: dict[str, float] = {}
+STIM_LO, STIM_HI = 10.0, 40.0
+R2_GOOD = 0.10  # cut-off for "trustworthy production fit" within NPCr
+
+
+def score_subject_tuning_diversity(sub: str) -> tuple[float, dict[str, float]]:
+    """Score how well a subject's NPCr tuning will demonstrate decoding.
+
+    What we want for the tutorial is voxels whose *fitted preferred
+    numerosity* sits broadly across the stimulus range [10, 40] — that
+    way a Bayesian decoder applied to model-simulated responses can
+    actually move with the stimulus. Subjects whose voxels mostly fit
+    "monotonic ramp" solutions (mu < 10) or land outside the upper edge
+    will show degenerate simulate+decode curves that collapse toward
+    the mean of mu.
+
+    Score = sqrt(N_good) · in_range_frac · sqrt(in_range_std + 0.1)
+    where N_good is the number of NPCr voxels with production R² above
+    ``R2_GOOD`` and a fitted mu in [10, 40], and in_range_frac /
+    in_range_std are computed over those voxels.
+    """
+    mu_img = image.load_img(str(_mu_wide_path(sub)), dtype=np.float32)
+    r2_img = image.load_img(str(_npcr_r2_path(sub)), dtype=np.float32)
+    # mu/r2 are already in the NPCr-masker shape, but flatten safely.
+    mu = np.asarray(mu_img.get_fdata(), dtype=np.float32).ravel()
+    r2 = np.asarray(r2_img.get_fdata(), dtype=np.float32).ravel()
+    valid = np.isfinite(mu) & np.isfinite(r2)
+    good = valid & (r2 > R2_GOOD)
+    n_good = int(good.sum())
+    if n_good == 0:
+        return float('-inf'), {'n_good': 0}
+    mu_good = mu[good]
+    in_range = (mu_good >= STIM_LO) & (mu_good <= STIM_HI)
+    in_range_frac = float(in_range.mean())
+    in_range_std = float(np.std(mu_good[in_range]) if in_range.any() else 0.0)
+    score = float(np.sqrt(n_good) * in_range_frac * np.sqrt(in_range_std + 0.1))
+    return score, {
+        'n_good': n_good,
+        'in_range_frac': in_range_frac,
+        'in_range_std': in_range_std,
+        'median_r2_npcr': float(np.median(r2[good])),
+    }
+
+
+def pick_best_subject() -> tuple[str, float, dict[str, dict]]:
+    scores: dict[str, dict] = {}
     for sub in list_candidate_subjects():
         try:
-            scores[sub] = mean_npcr_cvr2(sub)
+            score, info = score_subject_tuning_diversity(sub)
+            info['score'] = score
+            scores[sub] = info
         except Exception as exc:  # noqa: BLE001
             print(f'  sub-{sub}: error → {exc!r}', file=sys.stderr)
-    best = max(scores, key=scores.get)
-    return best, scores[best], scores
+    best = max(scores, key=lambda s: scores[s]['score'])
+    return best, scores[best]['score'], scores
 
 
 def load_paradigm(sub: str) -> pd.DataFrame:
@@ -350,14 +415,23 @@ def zip_bundle(bundle_dir: Path, zip_path: Path) -> Path:
     return zip_path
 
 
-def main(out_zip: Path | None = None) -> Path:
-    print('Scanning subjects with model-15 wholebrain CV results …')
-    best, best_score, all_scores = pick_best_subject()
-    print(f'\nMean NPCr CV-R² by subject:')
-    for sub, score in sorted(all_scores.items(), key=lambda kv: -kv[1]):
-        marker = '  *' if sub == best else '   '
-        print(f'{marker} sub-{sub}: {score:+.4f}')
-    print(f'\nBest subject: sub-{best} (mean NPCr CV-R² = {best_score:.4f})')
+def main(out_zip: Path | None = None, subject: str | None = None) -> Path:
+    if subject is None:
+        print('Scanning subjects, scoring by NPCr tuning diversity …')
+        best, best_score, info = pick_best_subject()
+        print(f'\nRanking (score = √n_good · in_range_frac · √(in_range_std + 0.1)):')
+        print(f'{"sub":>4}  {"score":>6}  {"n_good":>6}  '
+              f'{"in_range_frac":>13}  {"in_range_std":>12}  {"med_r2":>6}')
+        ranked = sorted(info.items(), key=lambda kv: -kv[1]['score'])
+        for sub, d in ranked[:15]:
+            marker = '  *' if sub == best else '   '
+            print(f'{marker}{sub:>2}  {d["score"]:>6.2f}  {d["n_good"]:>6d}'
+                  f'  {d["in_range_frac"]:>13.2f}  {d["in_range_std"]:>12.2f}'
+                  f'  {d["median_r2_npcr"]:>6.3f}')
+        print(f'\nBest subject: sub-{best} (score = {best_score:.2f})')
+    else:
+        best = subject
+        print(f'Building bundle for hardcoded subject sub-{best}')
 
     out_zip = out_zip or Path(tempfile.gettempdir()) / 'braincoder_npc_demo.zip'
     with tempfile.TemporaryDirectory() as tmp:
@@ -374,5 +448,7 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--out', type=Path, default=None,
                    help='Output zip path (default: $TMPDIR/braincoder_npc_demo.zip)')
+    p.add_argument('--subject', type=str, default=None,
+                   help='Hardcode the subject id (skip ranking). E.g., --subject 38')
     args = p.parse_args()
-    main(args.out)
+    main(args.out, args.subject)
