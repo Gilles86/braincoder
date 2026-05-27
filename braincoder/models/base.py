@@ -519,8 +519,16 @@ class EncodingModel(object):
             stimuli_var = keras.Variable(stimuli_, name='stimuli')
 
             def ll_fn():
-                return self._likelihood(stimuli_var, data, parameters_, weights_, L, dof,
+                # ``_likelihood`` returns log-probs of shape (n_sim, n_stim).
+                # Each entry depends only on its own ``stimuli_var`` row,
+                # so summing before differentiating is mathematically
+                # equivalent to taking the per-entry gradient and is the
+                # only form that works across TF / JAX / PyTorch backends
+                # (JAX's ``value_and_grad`` and torch's ``autograd.grad``
+                # both reject non-scalar outputs).
+                logp = self._likelihood(stimuli_var, data, parameters_, weights_, L, dof,
                                         logp=True, normalize=False)
+                return ops.sum(logp)
 
             ll, dy_dx = compute_gradients(ll_fn, [stimuli_var])
             fisher_info = ops.mean(dy_dx[0] ** 2, 0)[..., 0]
