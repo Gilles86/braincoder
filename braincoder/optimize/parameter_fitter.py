@@ -238,14 +238,20 @@ class ParameterFitter:
         mean_best_r2s = []
         loss_history = []
 
+        # Regression models (RegressionGaussianPRF and friends) have TUPLE parameter
+        # labels -- (parameter, regressor) -- so a bare str.join raises
+        # "TypeError: sequence item 0: expected str instance, tuple found". These are
+        # logging arguments, evaluated eagerly regardless of log level, so the crash
+        # fires on every fit that passes `fixed_pars`. `fixed_pars` itself is a list of
+        # tuples for the same reason.
         labels = self.model.parameter_labels
         logger.info('Fitting: %s',
-                     ', '.join(labels[ix] for ix in parameter_ix))
+                     ', '.join(str(labels[ix]) for ix in parameter_ix))
         if fixed_pars:
-            logger.info('Fixed: %s', ', '.join(fixed_pars))
+            logger.info('Fixed: %s', ', '.join(str(p) for p in fixed_pars))
         if shared_parameter_ixs:
             logger.info('Shared: %s',
-                         ', '.join(labels[ix] for ix in shared_parameter_ixs))
+                         ', '.join(str(labels[ix]) for ix in shared_parameter_ixs))
 
         for step in pbar:
             loss, gradients = compute_gradients(loss_fn, trainable_variables)
