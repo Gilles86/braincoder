@@ -47,6 +47,10 @@ class ResidualFitter(object):
 
         n_voxels = self.data.shape[1]
 
+        if n_voxels == 0:
+            raise ValueError('ResidualFitter: data contains 0 voxels — '
+                             'cannot fit a noise model')
+
         if residuals is None:
             residuals = (self.data - self.model.predict(paradigm=self.paradigm)).values
 
@@ -78,8 +82,6 @@ class ResidualFitter(object):
 
         if init_tau is None:
             init_tau = residuals.std(0)[np.newaxis, :]
-
-        print(f'init_tau: {init_tau.min()}, {init_tau.max()}')
 
         tau_ = keras.Variable(softplus_inverse(init_tau),
                               name='tau_trans', dtype='float32')
@@ -128,7 +130,10 @@ class ResidualFitter(object):
 
                 def get_omega(variables):
                     tau = transform_variables(variables)
-                    return ops.diag(ops.squeeze(tau**2))
+                    # reshape, not squeeze: with a single voxel tau has
+                    # shape (1, 1) and squeeze collapses it to a 0-d
+                    # scalar, which ops.diag rejects
+                    return ops.diag(ops.reshape(tau**2, [-1]))
 
                 def get_pbar_description(cost, best_cost, variables):
                     tau = transform_variables(variables)
