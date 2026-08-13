@@ -739,9 +739,12 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
         srf_amplitude = parameters[:, :, 4][:, None, :]
         neural_baseline = parameters[:, :, 6][:, None, :]
         surround_baseline = parameters[:, :, 7][:, None, :]
+        epsilon = ops.cast(1e-6, surround_baseline.dtype)
+        surround_baseline = ops.maximum(surround_baseline, epsilon)
 
         neural_activation = rf_amplitude * ops.tensordot(paradigm, rf, axes=[[2], [2]])[:, :, 0, :] + neural_baseline
         normalization = (srf_amplitude * rf_amplitude) * ops.tensordot(paradigm, srf, axes=[[2], [2]])[:, :, 0, :] + surround_baseline
+        normalization = ops.maximum(normalization, epsilon)
 
         normalized_activation = (neural_activation / normalization)
 
@@ -800,6 +803,9 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
 
         neural_baseline = parameters[None, :, :, 6]
         surround_baseline = parameters[None, :, :, 7]
+        epsilon = ops.cast(1e-6, surround_baseline.dtype)
+        surround_baseline = ops.maximum(surround_baseline, epsilon)
+
         bold_baseline = parameters[None, :, :, 8]
 
         pre_convolve = pre_convolve - (neural_baseline / surround_baseline)
