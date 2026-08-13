@@ -51,6 +51,23 @@ class ResidualFitter(object):
             raise ValueError('ResidualFitter: data contains 0 voxels — '
                              'cannot fit a noise model')
 
+        if D is not None and self.lambd > 0.0:
+            # get_omega() below checks self.lambd>0 first and returns
+            # _get_omega_lambda(...) without ever touching D/alpha/beta --
+            # confirmed empirically (alpha/beta sit frozen at their init
+            # values across the whole fit, "Gradients do not exist for
+            # variables ['alpha_trans', 'beta']" UserWarning). A caller
+            # passing both would silently get a non-geodesic Omega while
+            # believing they'd requested the geodesic-distance structure.
+            # Loud failure here beats a mislabeled result downstream.
+            raise ValueError(
+                'ResidualFitter.fit(): D (geodesic distance) and '
+                'lambd > 0 (shrinkage toward the sample covariance) are '
+                'not composable in this implementation -- lambd > 0 '
+                'silently overrides the distance-structured Omega and '
+                'never uses D/alpha/beta. Pass lambd=0 when fitting with '
+                'D, or drop D if you want lambd-shrinkage instead.')
+
         if residuals is None:
             residuals = (self.data - self.model.predict(paradigm=self.paradigm)).values
 
