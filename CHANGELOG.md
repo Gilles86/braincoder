@@ -85,6 +85,53 @@ Gaussian-Process prior over cortical geodesic distance.
   pairwise geodesic distance on a triangulated mesh, restricted to a
   set of source vertices (typical use: project EPI-mask centroids to
   nearest vertex then run Dijkstra on the matched set).
+- **Heat-method geodesics**: `geodesic_distance_matrix(..., method='heat')`
+  computes true surface geodesics (Crane, Weischedel & Wardetzky 2013)
+  with scipy only, via the new `HeatMethodSolver`. On a FreeSurfer
+  hemisphere it matches `cortex.polyutils.Surface.geodesic_distance`
+  (pycortex) to floating-point precision; mesh-edge Dijkstra runs ~6 %
+  long on the same surface. About 50 ms per source vertex on a 120k-vertex
+  hemisphere after a one-off ~4 s factorisation.
+- `geodesic_distance_matrix` also gains `target_indices` (rectangular
+  source × target matrices), `max_distance` (truncate to `inf`; bounds the
+  Dijkstra search), and `vertex_mask` (compute on a submesh, e.g. the
+  cortex label so paths cannot cross the medial wall). Default behaviour
+  (`method='dijkstra'`, square matrix) is unchanged.
+- **`submesh`** and **`block_distance_matrix`** (per-hemisphere blocks with
+  `inf` between hemispheres).
+
+### Connective-field models
+
+Surface-based connective-field (CF) modelling (Haak et al. 2013): a target's
+activity as a Gaussian-weighted pool of a source region's activity, with the
+Gaussian over geodesic distance on the cortical surface.
+
+- **`braincoder.models.GaussianConnectiveField(distance_matrix, truncate=3.0,
+  normalize='density')`**: an `EncodingModel` whose "paradigm" is the source
+  signal (n_samples × n_sources). Parameters `center_index, sigma, baseline,
+  amplitude`, named and scaled as in popylar's `prfmodel.models.cf.GaussianCFModel`
+  (`normalize='density'` = prfmodel's `1/(2πσ²)`; `'sum'` and `None` are
+  also available). `get_cf_weights()`, a batched `predict(batch_size=...)`,
+  and `source_properties(parameters, properties)`, which maps each fitted
+  centre to any property of the source vertices (atlas x, y, eccentricity, ...).
+- **`braincoder.optimize.ConnectiveFieldFitter`**:
+  - `fit_grid(sigmas, centers=None, exclude=None, positive=True)`: every
+    source vertex × every σ, by pooled correlation (equivalent to least
+    squares with free baseline and positive amplitude), with closed-form
+    amplitude and baseline. Candidate pooled signals are computed once, and
+    targets are scored in batches with `keras.ops`, so 10k sources × 150k
+    targets runs on CPU or GPU.
+  - `exclude=` gives leave-neighbourhood-out fits for targets inside or next
+    to the source region. Build it with `exclusion_from_distances(D_target_source, radius)`.
+  - `refine()` runs `ParameterFitter` with `center_index` fixed, to refine
+    σ, baseline and amplitude by gradient descent.
+  - `fit_cv(groups, sigmas)` gives leave-one-group-out cvR² and cv r.
+- Tests (`tests/test_connective_field.py`) cover heat-method accuracy (flat
+  grid, sphere), recovery of centres and sizes on a toy mesh,
+  geodesic vs Euclidean on a folded "sulcus" mesh (the Euclidean Gaussian
+  puts >20 % of its weight on the opposite bank), leave-neighbourhood-out,
+  σ refinement and CV. They pass on TF, JAX and torch.
+- Example: `examples/02_connective_fields/01_geodesic_connective_field.py`.
 
 ### Robustness fixes
 

@@ -21,6 +21,10 @@ Encoding models
    :members:
    :show-inheritance:
 
+.. autoclass:: braincoder.models.GaussianConnectiveField
+   :members: predict, get_cf_weights, source_properties
+   :show-inheritance:
+
 HRF utilities
 =============
 
@@ -44,3 +48,21 @@ Optimization helpers
 .. autoclass:: braincoder.optimize.ParameterFitter
    :members:
    :show-inheritance:
+
+.. autoclass:: braincoder.optimize.ConnectiveFieldFitter
+   :members: fit_grid, refine, fit_cv, get_rsq
+   :show-inheritance:
+
+.. autofunction:: braincoder.optimize.exclusion_from_distances
+
+Cortical surfaces
+=================
+
+.. autofunction:: braincoder.utils.cortex.geodesic_distance_matrix
+
+.. autoclass:: braincoder.utils.cortex.HeatMethodSolver
+   :members: distances
+
+.. autofunction:: braincoder.utils.cortex.submesh
+
+.. autofunction:: braincoder.utils.cortex.block_distance_matrix
