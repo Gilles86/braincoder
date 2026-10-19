@@ -101,6 +101,22 @@ Gaussian-Process prior over cortical geodesic distance.
   norm gradient clip instead of `keras.optimizers.Adam(clipnorm=...)`,
   which under PyTorch would poison Adam's moment buffers with NaN if
   any single gradient went non-finite.
+- **`ResidualFitter.fit` no longer swallows every exception.** It used
+  to catch any exception, record cost=inf, back off the learning rate
+  and carry on, so a fit that failed at every step (e.g. the old
+  `_lgamma` under JAX) returned the *initial* Ω and dof as if it had
+  converged. Now: programming errors (`TypeError`, which includes JAX
+  tracer-conversion errors, plus `AttributeError`, `NameError`, …) are
+  re-raised immediately; numerical failures (exceptions such as a
+  Cholesky failure, non-finite cost or gradients) are still rolled back
+  with a 10% learning-rate cut, but `max_consecutive_failures=50` in a
+  row raises `RuntimeError`, and so does a fit that never reaches a
+  finite cost. A step with non-finite gradients is no longer applied
+  (previously NaN gradients could poison the variables). Failed steps
+  emit a `RuntimeWarning` and are counted in `fitter.n_failed_steps`.
+  The stored best values now correspond to the parameters at which the
+  best cost was evaluated (previously the post-update values were
+  stored, one Adam step past the best cost).
 
 ### Backend layer fixes (TF / JAX / torch parity)
 
@@ -111,6 +127,11 @@ Gaussian-Process prior over cortical geodesic distance.
 - `_lgamma` routes through differentiable backend-native
   lgamma (`tf.math.lgamma` / `jax.scipy.special.gammaln` /
   `torch.lgamma`) instead of the non-differentiable scipy fallback.
+  **Downstream impact:** Student-t `dof` fitted on TF before this fix
+  is biased low (the gradient was missing
+  `0.5[ψ((ν+k)/2) − ψ(ν/2)]` per observation); on JAX the residual
+  fit silently never ran. Refit Ω/dof for any decoding results that
+  used `method='t'` with an older checkout.
 - torch `compute_gradients` uses `torch.autograd.grad` instead of
   reading `.grad` off each variable.
 - `get_stimulus_pdf` converts user data arrays to tensors before
