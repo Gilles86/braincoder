@@ -1,9 +1,21 @@
+import warnings
+
 import numpy as np
 import keras
 from keras import ops
 from tqdm.auto import tqdm
 from ..utils import format_data, format_paradigm, logit
 from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, compute_gradients, safe_cholesky
+
+# Exceptions that indicate a bug in the likelihood / model code rather
+# than numerical divergence. Re-raised immediately by ResidualFitter.fit:
+# lowering the learning rate cannot fix them. TypeError covers JAX's
+# TracerArrayConversionError and ConcretizationTypeError (both subclass
+# jax.errors.JAXTypeError -> TypeError), i.e. host conversions such as
+# ``float(ops.convert_to_numpy(x))`` inside traced code.
+_PROGRAMMING_ERRORS = (TypeError, AttributeError, NameError, ImportError,
+                       NotImplementedError, KeyError, IndexError)
+
 
 class ResidualFitter(object):
 
@@ -35,7 +47,8 @@ class ResidualFitter(object):
             init_alpha=0.99,
             init_beta=0.0,
             spherical=False,
-            progressbar=True):
+            progressbar=True,
+            max_consecutive_failures=50):
         """``use_wwt`` (default True): include the ``σ² · WᵀW`` term in
         Ω. When False, Ω is built without the tuning-similarity
         contribution — useful for testing whether ``WᵀW`` is doing
@@ -43,6 +56,17 @@ class ResidualFitter(object):
         signal-correlation structure that interacts with regularized
         encoding fits. ``σ²`` stays in the trainable set but has zero
         effect on Ω (gradient → 0; Adam leaves it inert).
+
+        Failure handling: a step whose cost or gradients are non-finite,
+        or which raises a numerical error (e.g. a Cholesky failure), is
+        rolled back to the best values so far and the learning rate is
+        reduced by 10%. ``max_consecutive_failures`` (default 50) such
+        steps in a row raise ``RuntimeError``. Programming errors
+        (``TypeError`` -- including JAX tracer-conversion errors --
+        ``AttributeError``, ``NameError``, ...) are re-raised
+        immediately. If no step ever produces a finite cost the fit
+        raises instead of returning an unfitted Ω. The number of
+        rolled-back steps is stored in ``self.n_failed_steps``.
         """
 
         n_voxels = self.data.shape[1]
@@ -241,35 +265,92 @@ class ResidualFitter(object):
                 var.assign(val)
 
         best_cost = np.inf
-        best_omega = get_omega(trainable_variables)
+        best_omega = None
         best_values = save_values(trainable_variables)
 
-        for step in pbar:
-            try:
-                def loss_fn():
-                    omega = get_omega(trainable_variables)
-                    return -fit_stat(omega)
+        # Bookkeeping for failed steps. A step "fails" when the cost or
+        # gradients are non-finite, or when a *numerical* exception is
+        # raised (e.g. safe_cholesky giving up, a backend Cholesky
+        # error). Those are treated as divergence: roll back to the best
+        # values, shrink the learning rate by 10%, retry. Programming
+        # errors (TypeError -- which includes JAX's
+        # TracerArrayConversionError / ConcretizationTypeError --
+        # AttributeError, NameError, ...) are re-raised immediately:
+        # backing off the learning rate cannot fix them, and swallowing
+        # them used to make a fit "complete" with Ω frozen at its
+        # initial value.
+        self.n_failed_steps = 0
+        consecutive_failures = 0
+        seen_failure_types = set()
 
+        def _register_failure(reason, exc=None):
+            nonlocal learning_rate, opt, consecutive_failures
+            self.n_failed_steps += 1
+            consecutive_failures += 1
+            key = type(exc).__name__ if exc is not None else reason
+            if key not in seen_failure_types:
+                seen_failure_types.add(key)
+                msg = (f'ResidualFitter step {step}: {reason}; restoring best '
+                       f'values and reducing learning rate to '
+                       f'{0.9 * learning_rate:.3g}.')
+                if exc is not None:
+                    msg += f' Exception: {type(exc).__name__}: {exc}'
+                warnings.warn(msg, RuntimeWarning, stacklevel=3)
+            learning_rate = 0.9 * learning_rate
+            opt = keras.optimizers.Adam(learning_rate=learning_rate)
+            restore_values(trainable_variables, best_values)
+            if consecutive_failures >= max_consecutive_failures:
+                raise RuntimeError(
+                    f'ResidualFitter: {consecutive_failures} consecutive '
+                    f'failed optimisation steps (last: {reason}). '
+                    f'Best cost so far: {best_cost}. Aborting rather than '
+                    f'returning an unfitted Ω.') from exc
+
+        for step in pbar:
+            def loss_fn():
+                omega = get_omega(trainable_variables)
+                return -fit_stat(omega)
+
+            try:
                 cost_tensor, gradients = compute_gradients(loss_fn, trainable_variables)
                 cost = float(ops.convert_to_numpy(ops.convert_to_tensor(cost_tensor)))
-
-                opt.apply_gradients(zip(gradients, trainable_variables))
-                self.costs[step] = cost
-
-                if cost < best_cost:
-                    best_omega = ops.convert_to_numpy(get_omega(trainable_variables))
-                    best_cost = cost
-                    best_values = save_values(trainable_variables)
-
-            except Exception:
-                learning_rate = 0.9 * learning_rate
-                opt = keras.optimizers.Adam(learning_rate=learning_rate)
-                restore_values(trainable_variables, best_values)
+                grads_finite = all(
+                    g is not None and
+                    bool(np.all(np.isfinite(ops.convert_to_numpy(g))))
+                    for g in gradients)
+            except _PROGRAMMING_ERRORS:
+                raise
+            except Exception as exc:  # numerical failure -> back off
                 self.costs[step] = np.inf
                 cost = np.inf
+                _register_failure('exception during cost/gradient evaluation', exc)
+            else:
+                if not np.isfinite(cost) or not grads_finite:
+                    # Do NOT apply the update: NaN gradients would poison
+                    # the variables for every later step.
+                    reason = ('non-finite cost' if not np.isfinite(cost)
+                              else 'non-finite gradients')
+                    self.costs[step] = np.inf
+                    cost = np.inf
+                    _register_failure(reason)
+                else:
+                    consecutive_failures = 0
+                    self.costs[step] = cost
+                    if cost < best_cost:
+                        # best values are the ones the cost was evaluated at
+                        # (before this step's update is applied).
+                        best_omega = ops.convert_to_numpy(get_omega(trainable_variables))
+                        best_cost = cost
+                        best_values = save_values(trainable_variables)
+                    opt.apply_gradients(zip(gradients, trainable_variables))
 
             if progressbar:
                 pbar.set_description(get_pbar_description(cost, best_cost, best_values))
+
+            if not np.isfinite(cost):
+                # A rolled-back step says nothing about convergence (and
+                # inf / previous_cost would trigger the rtol break below).
+                continue
 
             previous_cost = self.costs[np.max((step - lag, 0))]
 
@@ -280,6 +361,17 @@ class ResidualFitter(object):
                 else:
                     if (cost / previous_cost) > 1 - rtol:
                         break
+
+        if not np.isfinite(best_cost):
+            raise RuntimeError(
+                'ResidualFitter: no optimisation step produced a finite cost '
+                f'({self.n_failed_steps} failed steps). Ω was never fitted.')
+
+        if self.n_failed_steps > 0:
+            warnings.warn(
+                f'ResidualFitter: {self.n_failed_steps} of {step + 1} steps '
+                f'failed and were rolled back (final learning rate '
+                f'{learning_rate:.3g}).', RuntimeWarning, stacklevel=2)
 
         omega = best_omega
 
