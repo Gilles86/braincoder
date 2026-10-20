@@ -123,6 +123,14 @@ Gaussian over geodesic distance on the cortical surface.
     targets runs on CPU or GPU.
   - `exclude=` gives leave-neighbourhood-out fits for targets inside or next
     to the source region. Build it with `exclusion_from_distances(D_target_source, radius)`.
+    Excluded targets are re-scored in covariance space by default
+    (`exclusion_method='covariance'`): the pooled-signal correlations with
+    the excluded sources removed follow exactly from `XᵀX`, `XᵀP` and the
+    target-source cross-products, so the per-target cost no longer scales
+    with the number of samples (time series with thousands of volumes and
+    ~10k excluded V1 targets: minutes instead of hours).
+    `exclusion_method='samples'` keeps the original sample-space rebuild;
+    a test checks that both give identical winners and r.
   - `refine()` runs `ParameterFitter` with `center_index` fixed, to refine
     σ, baseline and amplitude by gradient descent.
   - `fit_cv(groups, sigmas)` gives leave-one-group-out cvR² and cv r.

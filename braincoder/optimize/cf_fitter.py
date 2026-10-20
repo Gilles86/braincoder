@@ -112,7 +112,7 @@ class ConnectiveFieldFitter:
     # ---------------------------------------------------------- grid fit
     def fit_grid(self, sigmas, centers=None, exclude=None, positive=True,
                  candidate_batch_size=2048, target_batch_size=1024,
-                 progressbar=True):
+                 progressbar=True, exclusion_method='covariance'):
         """Grid search over CF centre x size.
 
         Parameters
@@ -134,6 +134,17 @@ class ConnectiveFieldFitter:
             maximises |r| (allows negative amplitudes).
         candidate_batch_size, target_batch_size : int
             Memory bounds.
+        exclusion_method : {'covariance', 'samples'}
+            How excluded targets are re-scored. ``'samples'`` rebuilds every
+            affected pooled signal over all samples (cost per target
+            ``n_samples x |E| x n_affected``). ``'covariance'`` (default)
+            gets the same correlations from source cross-products computed
+            once (``X^T X`` and ``X^T P``), so the per-target cost no longer
+            grows with the number of samples -- the difference between
+            minutes and hours for time series (thousands of samples) with
+            thousands of excluded targets. Both give the same scores up to
+            float32 round-off (pools that lose > 99.9999 % of their variance
+            to the exclusion are dropped by ``'covariance'``).
 
         Returns
         -------
@@ -154,6 +165,12 @@ class ConnectiveFieldFitter:
         neg_inf = ops.full((1, n_c), -np.inf)
 
         excl_rows = self._exclusion_rows(exclude, n_v)
+        if exclusion_method not in ('covariance', 'samples'):
+            raise ValueError(f"exclusion_method must be 'covariance' or 'samples', "
+                             f"not {exclusion_method!r}")
+        cov = None
+        if excl_rows and exclusion_method == 'covariance':
+            cov = self._exclusion_crossproducts(X, P, p_mean, p_sd, p_valid, n_t)
 
         best = np.zeros(n_v, dtype=np.int64)
         r_search = np.full(n_v, np.nan, dtype=np.float32)
@@ -176,10 +193,22 @@ class ConnectiveFieldFitter:
             todo = [j for j in range(i0, i1) if j in excl_rows]
             if todo:
                 r_np = ops.convert_to_numpy(r)
-                for j in todo:
-                    b_j, r_j = self._fit_excluded(
-                        j, r_np[j - i0], excl_rows[j], X, Y, P, cand_centre, cand_sigma,
-                        positive)
+                if cov is not None:
+                    # centred target-source cross-products for this batch
+                    jj = np.asarray(todo) - i0
+                    Yc = ops.take(Y[:, i0:i1], ops.convert_to_tensor(jj.astype(np.int32)), axis=1) \
+                        - ops.take(y_mean[i0:i1], ops.convert_to_tensor(jj.astype(np.int32)))[None, :]
+                    A = ops.convert_to_numpy(ops.matmul(ops.transpose(Yc), cov['Xc'])).astype(np.float64)
+                    ysd = ops.convert_to_numpy(y_sd).astype(np.float64)
+                for k_, j in enumerate(todo):
+                    if cov is not None:
+                        b_j, r_j = self._fit_excluded_cov(
+                            r_np[j - i0], excl_rows[j], A[k_], ysd[j], n_t, cov,
+                            cand_centre, cand_sigma, positive)
+                    else:
+                        b_j, r_j = self._fit_excluded(
+                            j, r_np[j - i0], excl_rows[j], X, Y, P, cand_centre, cand_sigma,
+                            positive)
                     best[j], r_search[j], r_full[j] = b_j, r_j, r_np[j - i0, b_j]
 
         # closed-form amplitude / baseline on the model's (normalised, full)
@@ -218,6 +247,62 @@ class ConnectiveFieldFitter:
             raise ValueError(f'exclude has {E.shape[0]} rows, data has {n_v} targets')
         return {j: E.indices[E.indptr[j]:E.indptr[j + 1]]
                 for j in range(n_v) if E.indptr[j + 1] > E.indptr[j]}
+
+    @staticmethod
+    def _exclusion_crossproducts(X, P, p_mean, p_sd, p_valid, n_t):
+        """Centred source cross-products for covariance-space exclusion:
+        ``R = Xc^T Xc`` (sources x sources), ``G = Xc^T Pc`` (sources x
+        candidates) and the candidates' centred sums of squares."""
+        Xc = X - ops.mean(X, axis=0)[None, :]
+        Pc = P - p_mean[None, :]
+        R = ops.convert_to_numpy(ops.matmul(ops.transpose(Xc), Xc))
+        G = ops.convert_to_numpy(ops.matmul(ops.transpose(Xc), Pc))
+        p_sd = ops.convert_to_numpy(p_sd).astype(np.float64)
+        return dict(Xc=Xc, R=R, G=G, p_sd=p_sd, pss=n_t * p_sd ** 2,
+                    p_valid=ops.convert_to_numpy(p_valid))
+
+    def _excluded_weights(self, E, cand_centre, cand_sigma):
+        """Unnormalised weights of the excluded sources E in every candidate
+        pool they reach: (relevant candidate indices, weights (rel, |E|))."""
+        D = self.model.distance_matrix
+        dE = D[np.ix_(E, cand_centre)]                                    # (|E|, c)
+        reach = np.isfinite(dE)
+        if self.model.truncate is not None:
+            reach &= dE <= self.model.truncate * cand_sigma[None, :]
+        rel = np.flatnonzero(reach.any(0))
+        d = np.where(reach[:, rel], dE[:, rel], 0.0).astype(np.float64).T
+        s = cand_sigma[rel].astype(np.float64)[:, None]
+        w = np.where(reach[:, rel].T, np.exp(-d ** 2 / (2.0 * s ** 2)), 0.0)
+        return rel, w
+
+    def _fit_excluded_cov(self, r_row, E, a, y_sd, n_t, cov, cand_centre, cand_sigma,
+                          positive):
+        """Re-score one target with sources E removed from every pool, from
+        cross-products only. For a pool p_c = X w_c with the E-part removed,
+        p'_c = p_c - X_E w_cE:
+
+            y'p'_c   = y'p_c - (y'X_E) w_cE
+            |p'_c|^2 = |p_c|^2 - 2 w_cE' (X_E'p_c) + w_cE' (X_E'X_E) w_cE
+
+        (all centred), so r needs only the target-source cross-products ``a``
+        and the precomputed R and G."""
+        score = np.array(r_row, dtype=np.float64)
+        rel, w = self._excluded_weights(E, cand_centre, cand_sigma)
+        if len(rel):
+            yss = n_t * y_sd ** 2
+            # y'p_c from the full-pool correlation (finite where p_c is valid)
+            yp = np.where(cov['p_valid'][rel], score[rel], 0.0) * n_t * y_sd * cov['p_sd'][rel]
+            num = yp - w @ a[E]
+            GE = cov['G'][np.ix_(E, rel)].astype(np.float64).T              # (rel, |E|)
+            RE = cov['R'][np.ix_(E, E)].astype(np.float64)
+            ss = cov['pss'][rel] - 2.0 * (w * GE).sum(1) + ((w @ RE) * w).sum(1)
+            ok = ss > 1e-6 * np.maximum(cov['pss'][rel], 1e-30)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                rr = num / np.sqrt(np.where(ok, ss, np.nan) * yss)
+            score[rel] = np.where(ok & np.isfinite(rr), rr, -np.inf)
+        score[np.isin(cand_centre, E)] = -np.inf
+        b = int(np.argmax(score if positive else np.where(np.isfinite(score), np.abs(score), -np.inf)))
+        return b, float(score[b])
 
     def _fit_excluded(self, j, r_row, E, X, Y, P, cand_centre, cand_sigma, positive):
         """Re-score target j with sources E removed from every pool."""

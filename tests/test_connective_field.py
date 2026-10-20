@@ -238,3 +238,35 @@ def test_refine_sigma_and_cv():
     noise = pd.DataFrame(rng.normal(size=(400, 5)).astype(np.float32))
     cv0 = ConnectiveFieldFitter(model, noise, X).fit_cv(groups, [1.0, 2.0, 4.0])
     assert (cv0['cv_r2'] < 0.05).all()
+
+
+def test_exclusion_covariance_matches_samples():
+    """Covariance-space re-scoring of excluded targets (the default) equals
+    rebuilding the pooled signals over samples, including with non-centred,
+    spatially smooth sources and two 'hemispheres'."""
+    V, F, u, v = grid_mesh(18, 18)
+    D1 = geodesic_distance_matrix(V, F, method='heat', progressbar=False)
+    D = block_distance_matrix([D1, D1])
+    rng = np.random.default_rng(7)
+    n = len(V)
+    centres = np.r_[rng.choice(n, 10, replace=False), n + rng.choice(n, 10, replace=False)]
+    X, Y, _ = simulate(D, centres, rng.choice([1.0, 2.0, 4.0], 20), noise=1.0,
+                       smooth=1.5, n_samples=350, seed=8)
+    X = X + rng.normal(size=(1, X.shape[1])).astype(np.float32) * 3   # non-zero source means
+    excl = exclusion_from_distances(D[centres], radius=2.5)
+    model = GaussianConnectiveField(D, normalize='sum', truncate=3.0)
+    fitter = ConnectiveFieldFitter(model, Y, X)
+    res = {}
+    for m in ('samples', 'covariance'):
+        est = fitter.fit_grid([1.0, 2.0, 4.0], exclude=excl, exclusion_method=m,
+                              target_batch_size=7, progressbar=False)
+        res[m] = (est.copy(), fitter.grid_r_.values.copy())
+    np.testing.assert_array_equal(res['samples'][0]['center_index'].values,
+                                  res['covariance'][0]['center_index'].values)
+    np.testing.assert_array_equal(res['samples'][0]['sigma'].values,
+                                  res['covariance'][0]['sigma'].values)
+    np.testing.assert_allclose(res['samples'][1], res['covariance'][1], atol=2e-4)
+    c = res['covariance'][0]['center_index'].astype(int).values
+    assert (D[centres, c] >= 2.5).all()
+    with pytest.raises(ValueError):
+        fitter.fit_grid([1.0], exclude=excl, exclusion_method='nope', progressbar=False)
