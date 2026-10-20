@@ -44,3 +44,23 @@ Optimization helpers
 .. autoclass:: braincoder.optimize.ParameterFitter
    :members:
    :show-inheritance:
+
+Voxel selection
+===============
+
+.. automodule:: braincoder.selection
+
+.. autoclass:: braincoder.selection.PermutationSelector
+   :members: fit
+
+.. autoclass:: braincoder.selection.PermutationSelectionResult
+   :members:
+
+.. autoclass:: braincoder.selection.NullBank
+   :members:
+
+.. autofunction:: braincoder.selection.subsample_voxels
+
+.. autofunction:: braincoder.selection.make_r2_fitter
+
+.. autofunction:: braincoder.selection.permutation_indices
