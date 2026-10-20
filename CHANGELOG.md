@@ -73,6 +73,12 @@ Gaussian-Process prior over cortical geodesic distance.
   selects few or no voxels in participants without signal. Note: with
   small K the pooled-BH rule cannot select fewer than about `1/(q·K)`
   voxels (4 for K = 5, q = .05).
+- **`PermutationSelector.fit_null` / `NullBank`** — cached null: fit only
+  the K shuffles (optionally on a fixed random voxel subsample of a big ROI,
+  `subsample_voxels`), `save` / `load` (npz + JSON metadata), and
+  `select(r2, q)` for an existing real-data statistic (e.g. per-fold
+  training R² of a CV fit). `calibration(test_null)` gives the
+  leave-one-shuffle-out false-positive rate.
 
 ### Fisher information & expected uncertainty
 

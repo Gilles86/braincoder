@@ -245,3 +245,57 @@ def test_real_braincoder_fit():
     assert res.null_r2.shape == (4, n_vox)
     assert res.mask.values[:n_sig].mean() >= 0.75
     assert res.mask.values[n_sig:].sum() <= 1
+
+
+# ---------------------------------------------------------------------------
+# cached null (NullBank)
+
+from braincoder.selection import NullBank, subsample_voxels  # noqa: E402
+
+
+def test_null_bank_fdr_on_pure_noise(tmp_path):
+    """Null fitted on a 300-voxel subsample, saved, reloaded, and used to
+    select among all 600 voxels (real R² from a separate fit): P(any
+    discovery) stays <= q."""
+    n_sim, hits = 200, 0
+    for s in range(n_sim):
+        data, paradigm, runs = simulate(n_vox=600, seed=9000 + s)
+        bank = PermutationSelector(grid_r2, 20, groups=runs, seed=s, stack=True).fit_null(
+            data, paradigm, n_voxels=300, voxel_seed=s, metadata=dict(model='grid'))
+        if s == 0:
+            fn = tmp_path / 'bank.npz'
+            bank.save(fn)
+            b2 = NullBank.load(fn)
+            np.testing.assert_allclose(b2.null_r2, bank.null_r2, rtol=1e-6)
+            assert b2.metadata['model'] == 'grid' and b2.K == 20
+            np.testing.assert_array_equal(b2.voxel_ids, bank.voxel_ids)
+        hits += bank.select(grid_r2(data, paradigm), q=0.05).mask.any()
+    assert hits / n_sim <= 0.09, hits / n_sim
+
+
+def test_subsample_null_matches_full_null():
+    """Exchangeable data: p against a subsample null ~= p against the null of
+    all voxels; the selections agree."""
+    data, paradigm, runs = simulate(n_vox=2000, n_signal=100, amplitude=1.0, seed=21)
+    sel = PermutationSelector(grid_r2, 10, groups=runs, seed=3, stack=True)
+    full = sel.fit_null(data, paradigm)
+    sub = sel.fit_null(data, paradigm, n_voxels=500, voxel_seed=1)
+    r2 = grid_r2(data, paradigm)
+    pf, ps = full.pvalues(r2), sub.pvalues(r2)
+    ok = pf < 0.5
+    assert np.corrcoef(np.log(pf[ok]), np.log(ps[ok]))[0, 1] > 0.98
+    mf, ms = full.select(r2).mask, sub.select(r2).mask
+    assert (mf == ms).mean() > 0.98
+    assert mf[:100].mean() > 0.8
+
+
+def test_null_bank_calibration_and_subsample():
+    ids = subsample_voxels(1000, 200, seed=(4, 2))
+    assert len(ids) == 200 and np.all(np.diff(ids) > 0)
+    np.testing.assert_array_equal(ids, subsample_voxels(1000, 200, seed=(4, 2)))
+    np.testing.assert_array_equal(subsample_voxels(50, 200, 0), np.arange(50))
+    data, paradigm, runs = simulate(n_vox=400, seed=8)
+    bank = PermutationSelector(grid_r2, 10, groups=runs, seed=0, stack=True).fit_null(data, paradigm)
+    cal = bank.calibration(bank.null_r2)
+    assert cal['any_discovery_rate'] <= 0.2
+    assert len(cal['n_discoveries']) == 10

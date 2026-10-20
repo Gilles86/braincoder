@@ -56,6 +56,11 @@ Voxel selection
 .. autoclass:: braincoder.selection.PermutationSelectionResult
    :members:
 
+.. autoclass:: braincoder.selection.NullBank
+   :members:
+
+.. autofunction:: braincoder.selection.subsample_voxels
+
 .. autofunction:: braincoder.selection.make_r2_fitter
 
 .. autofunction:: braincoder.selection.permutation_indices
