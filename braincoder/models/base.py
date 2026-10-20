@@ -11,6 +11,19 @@ import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
 
+def _apply_temperature(ll, temperature):
+    """Divide a log-likelihood table by the temperature (None/1 = unchanged,
+    inf = flat)."""
+    if temperature is None or temperature == 1:
+        return ll
+    temperature = float(temperature)
+    if temperature <= 0:
+        raise ValueError('temperature must be > 0')
+    if np.isinf(temperature):
+        return np.zeros_like(ll)
+    return ll / temperature
+
+
 class EncodingModel(object):
     """Abstract base class for encoding models."""
 
@@ -307,35 +320,9 @@ class EncodingModel(object):
 
         return likelihood
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
-                         include_multidimensional_stimulus_index=False):
-        """Evaluate posterior over stimuli for each time point given data."""
-
-        if hasattr(data, 'values'):
-            time_index = data.index
-            data = data.values
-        else:
-            time_index = pd.Index(np.arange(len(data)), name='frame')
-
-        parameters = self._get_parameters(parameters)
-
+    def _prepare_stimulus_range(self, stimulus_range):
         if hasattr(stimulus_range, 'values'):
             stimulus_range = stimulus_range.values
-
-        if hasattr(parameters, 'values'):
-            parameters = parameters.values
-
-        if omega is None:
-            omega = self.omega
-
-        # Compute Cholesky factor here so callers never need to do it themselves.
-        # ``safe_cholesky`` symmetrises and adds adaptive diagonal jitter so a
-        # noise covariance that slipped slightly below PSD (e.g. residual
-        # fitter drove α/β/ρ to numerical edges) still factorises cleanly.
-        omega_t = ops.convert_to_tensor(omega, dtype='float32')
-        omega_chol = safe_cholesky(omega_t)
-
-        weights, weights_ = self._get_weights(weights)
 
         stimulus_range = self.stimulus._clean_paradigm(stimulus_range)
 
@@ -345,23 +332,100 @@ class EncodingModel(object):
             stimulus_range = stimulus_range[:, np.newaxis, :]
         else:
             raise Exception('Stimulus range needs to be either 1D or 2D')
+        return stimulus_range
 
-        # Convert ``data`` to a backend tensor at the entry point so the
-        # downstream ``data - prediction`` in ``_likelihood_timeseries``
-        # doesn't end up mixing numpy with a torch tensor (which raises
-        # ``TypeError: unsupported operand type(s) for -``).
-        data_t = ops.convert_to_tensor(data, dtype='float32')
+    def predict_stimulus_grid(self, stimulus_range, parameters=None, weights=None):
+        """Predicted response to every stimulus of a decoding grid.
 
-        ll = self._likelihood(stimulus_range,
-                              data_t[None, :, :],
-                              parameters[np.newaxis, :, :] if parameters is not None else None,
-                              weights_,
-                              omega_chol,
-                              dof,
-                              logp=True,
-                              normalize=False)
+        Returns a float64 array ``(n_stimuli, n_voxels)``. Uses the same
+        batching as :meth:`get_stimulus_pdf` (one batch per grid point).
+        """
+        parameters = self._get_parameters(parameters)
+        if hasattr(parameters, 'values'):
+            parameters = parameters.values
+        weights, weights_ = self._get_weights(weights)
+        stimulus_range = self._prepare_stimulus_range(stimulus_range)
+        pred = self._predict(stimulus_range,
+                             parameters[np.newaxis, :, :] if parameters is not None else None,
+                             weights_)
+        return np.asarray(ops.convert_to_numpy(pred), dtype=np.float64)[:, 0, :]
 
-        ll = ops.convert_to_numpy(ll)
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
+                         include_multidimensional_stimulus_index=False, noise_model=None, temperature=None):
+        """Evaluate posterior over stimuli for each time point given data.
+
+        Parameters
+        ----------
+        data : DataFrame or array (n_timepoints, n_voxels)
+        stimulus_range : array (n_stimuli,) or (n_stimuli, n_dims)
+            Grid of candidate stimuli (flat prior over the grid).
+        omega, dof : array, float, optional
+            Dense noise covariance and Student-t degrees of freedom (``dof=None``
+            = Gaussian), e.g. from ``ResidualFitter.fit``. Ignored when
+            ``noise_model`` is given.
+        noise_model : braincoder.noise.LowRankNoise, optional
+            Factored noise model (low-rank + diagonal Ω, Gaussian or
+            Student-t). The likelihood is evaluated with the Woodbury identity
+            (no dense V × V matrix). Its ``temperature`` is applied unless
+            ``temperature`` is passed explicitly.
+        temperature : float, optional
+            Likelihood temperature T: posterior ∝ likelihood^(1/T). Default
+            ``None`` = 1 (or the noise model's own temperature). ``np.inf``
+            gives a flat posterior.
+        """
+
+        if hasattr(data, 'values'):
+            time_index = data.index
+        else:
+            time_index = pd.Index(np.arange(len(data)), name='frame')
+
+        stimulus_range = self._prepare_stimulus_range(stimulus_range)
+
+        if noise_model is not None:
+            pred = self.predict_stimulus_grid(stimulus_range[:, 0, :], parameters=parameters,
+                                              weights=weights)
+            ll = noise_model.grid_log_likelihood(data, pred).T          # (n_stimuli, n_timepoints)
+            if temperature is None:
+                temperature = noise_model.temperature
+        else:
+            if hasattr(data, 'values'):
+                data = data.values
+
+            parameters = self._get_parameters(parameters)
+
+            if hasattr(parameters, 'values'):
+                parameters = parameters.values
+
+            if omega is None:
+                omega = self.omega
+
+            # Compute Cholesky factor here so callers never need to do it themselves.
+            # ``safe_cholesky`` symmetrises and adds adaptive diagonal jitter so a
+            # noise covariance that slipped slightly below PSD (e.g. residual
+            # fitter drove α/β/ρ to numerical edges) still factorises cleanly.
+            omega_t = ops.convert_to_tensor(omega, dtype='float32')
+            omega_chol = safe_cholesky(omega_t)
+
+            weights, weights_ = self._get_weights(weights)
+
+            # Convert ``data`` to a backend tensor at the entry point so the
+            # downstream ``data - prediction`` in ``_likelihood_timeseries``
+            # doesn't end up mixing numpy with a torch tensor (which raises
+            # ``TypeError: unsupported operand type(s) for -``).
+            data_t = ops.convert_to_tensor(data, dtype='float32')
+
+            ll = self._likelihood(stimulus_range,
+                                  data_t[None, :, :],
+                                  parameters[np.newaxis, :, :] if parameters is not None else None,
+                                  weights_,
+                                  omega_chol,
+                                  dof,
+                                  logp=True,
+                                  normalize=False)
+
+            ll = ops.convert_to_numpy(ll)
+
+        ll = _apply_temperature(ll, temperature)
 
         if stimulus_range.shape[-1] == 1:
             ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
@@ -872,12 +936,33 @@ class EncodingRegressionModel(EncodingModel):
 
         return transformed_parameters
 
+    def predict_stimulus_grid(self, stimulus_range, parameters=None, weights=None):
+        """Predicted response to every row of ``stimulus_range`` (n_stimuli, n_voxels)."""
+        self.set_paradigm(stimulus_range)
+        pred = self.predict(stimulus_range, parameters=parameters, weights=weights)
+        return np.asarray(pred.values, dtype=np.float64)
+
     def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
-                            include_multidimensional_stimulus_index=False):
+                            include_multidimensional_stimulus_index=False, noise_model=None, temperature=None):
+        """Posterior (unnormalised by default: max = 1) over regression stimuli.
+
+        ``noise_model`` / ``temperature``: see
+        :meth:`EncodingModel.get_stimulus_pdf`.
+        """
 
         self.set_paradigm(stimulus_range)
 
         pred = self.predict(stimulus_range, parameters=parameters, weights=weights)
+
+        if noise_model is not None:
+            ll = noise_model.grid_log_likelihood(data, pred.values)
+            if temperature is None:
+                temperature = noise_model.temperature
+            ll = _apply_temperature(ll, temperature)
+            ll = pd.DataFrame(ll, index=data.index, columns=pd.MultiIndex.from_frame(stimulus_range))
+            if normalize:
+                ll = ll.sub(ll.max(axis=1), axis=0)
+            return np.exp(ll)
 
         residuals = data.values[np.newaxis, :, :] - pred.values[:, np.newaxis, :]
 
@@ -896,6 +981,7 @@ class EncodingRegressionModel(EncodingModel):
 
         ll = ops.reshape(ll_flat, (n_batches, n_timepoints))
         ll = ops.convert_to_numpy(ll)
+        ll = _apply_temperature(ll, temperature)
 
         ll = pd.DataFrame(ll, index=pd.MultiIndex.from_frame(stimulus_range), columns=data.index).T
 

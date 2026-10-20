@@ -45,6 +45,8 @@ More resources
 ==============
 
 - :doc:`concepts` — architectural overview and workflow tips.
+- :doc:`noise_models` — calibrated decoding: low-rank Ω with
+  cross-validated rank and temperature.
 - :doc:`api_reference` — autodoc for the most used modules.
 - :doc:`tutorial/index` — hands-on lessons that walk through realistic
   encoding/decode pipelines.
@@ -56,6 +58,7 @@ More resources
    installation
    concepts
    fisher_information
+   noise_models
    api_reference
    tutorial/index
    auto_examples/index
