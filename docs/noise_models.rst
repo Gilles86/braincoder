@@ -92,6 +92,16 @@ likelihood. On 7T single-trial betas the held-out covariance likelihood
 keeps improving up to k = 160 while decoding gets worse beyond k ≈ 40;
 choosing k by covariance fit would pick the wrong model.
 
+The best k is data-dependent, which is why it is cross-validated rather
+than fixed. In a 19-participant validation on the same data (two ROIs ×
+16 leave-one-run-out folds, smoothed betas, ~2,000 voxels, 480 training
+trials), the nested CV chose **k = 0** — a diagonal Student-t with
+per-voxel scales and no shared factors — in ~60% of folds and k = 10 in
+~17%, with T ≈ 360 (median). That beat both the production Ω and a fixed
+k = 40 with CV-chosen T on held-out log score, and gave 95% joint HDI
+coverage of 0.94 (production: 0.79). Always report the chosen k and T
+(``noise.summary()``).
+
 Encoding parameters inside the inner folds (``inner_parameters``):
 
 * ``None`` (default) — the parameters you pass are **held fixed**. The
@@ -127,7 +137,9 @@ On 7T single-trial numerosity betas (19 participants; see the
 
 A low-rank Ω alone makes posteriors *sharper* — and at T = 1 even more
 overconfident — but it whitens away shared noise and roughly doubled the
-correlation between posterior mean and true stimulus. The CV temperature
+correlation between posterior mean and true stimulus in a 4-participant
+pilot (in the 19-participant validation, CV-chosen k and T raised it from
+0.05 to 0.14). The CV temperature
 (there T ≈ 60–600, reflecting how little calibrated information there
 is about the stimulus) then brings coverage to nominal. Use both.
 
