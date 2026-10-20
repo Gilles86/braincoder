@@ -38,6 +38,23 @@ Example
 >>> res = sel.fit(data, paradigm, fit_kwargs=dict(grid=(mus, sds, [1.], [0.])))
 >>> res.mask.sum(), res.exchangeability_report()
 
+Cached null (fit once, select many times)
+-----------------------------------------
+Often the real-data fit already exists (e.g. per-fold training R² of a CV fit)
+and only the null is missing. :meth:`PermutationSelector.fit_null` fits ONLY
+the K shuffles, on the voxels of one ROI (or a fixed random subsample of a big
+ROI), and returns a :class:`NullBank` that can be saved and reused::
+
+    bank = PermutationSelector(fit_fn, 10, groups=train_runs, seed=(sub, fold),
+                               stack=True).fit_null(train_roi_data, train_paradigm,
+                                                    n_voxels=2000, voxel_seed=sub)
+    bank.save('sub-01_fold-1_desc-nullr2.npz')
+    ...
+    sel = NullBank.load(fn).select(r2_roi, q=0.05)      # p, q, mask
+    bank.calibration(bank.null_r2)                       # leave-one-shuffle-out FDR check
+
+The pooled null assumes exchangeability across the ROI's voxels.
+
 ``model`` can be a braincoder :class:`~braincoder.models.EncodingModel`
 (fitted with :func:`make_r2_fitter`'s default procedure) or any callable
 ``fit_fn(data, paradigm, **fit_kwargs) -> per-voxel R²``, so the selection
@@ -54,9 +71,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-__all__ = ['PermutationSelector', 'PermutationSelectionResult',
+__all__ = ['PermutationSelector', 'PermutationSelectionResult', 'NullBank',
            'make_r2_fitter', 'permutation_indices', 'pooled_pvalues',
-           'voxelwise_pvalues', 'bh_qvalues']
+           'voxelwise_pvalues', 'bh_qvalues', 'subsample_voxels']
 
 
 # --------------------------------------------------------------------------
@@ -405,6 +422,133 @@ def _pq(r2, null, method, bh_groups, pool_mask, pool_within_family=False):
 
 
 # --------------------------------------------------------------------------
+# null bank
+
+def subsample_voxels(n_total, n, seed):
+    """Sorted random subset of ``n`` of ``n_total`` voxel positions (all of
+    them if ``n >= n_total``), reproducible from ``seed`` (int or tuple)."""
+    if n is None or n >= n_total:
+        return np.arange(n_total)
+    rng = np.random.default_rng(np.random.SeedSequence(
+        [int(x) for x in (seed if isinstance(seed, (tuple, list)) else [seed])]))
+    return np.sort(rng.choice(n_total, n, replace=False))
+
+
+@dataclass
+class BankSelection:
+    """Result of :meth:`NullBank.select`: p, BH q (within the tested set or
+    within each family) and ``mask = q <= q_thresh``."""
+    p: np.ndarray
+    q: np.ndarray
+    mask: np.ndarray
+    q_thresh: float
+    n_null: int
+
+    @property
+    def n_selected(self):
+        return int(self.mask.sum())
+
+    @property
+    def selected(self):
+        return np.where(self.mask)[0]
+
+
+@dataclass
+class NullBank:
+    """Null statistics of K label shuffles on a voxel subsample, for one
+    (participant, fold, model). Select voxels in any mask against it.
+
+    Attributes
+    ----------
+    null_r2 : (K, n) array
+    voxel_ids : (n,) ids of the bank voxels (e.g. indices into a brain mask)
+    permutations : (K, n_rows) row permutations used
+    metadata : dict (model key, fit settings, seeds, versions, ...)
+    """
+    null_r2: np.ndarray
+    voxel_ids: np.ndarray
+    permutations: np.ndarray | None = None
+    metadata: dict = field(default_factory=dict)
+
+    @property
+    def K(self):
+        return self.null_r2.shape[0]
+
+    def pool(self, exclude=None):
+        """Flattened finite null values (optionally without permutation(s) ``exclude``)."""
+        null = self.null_r2
+        if exclude is not None:
+            null = np.delete(null, np.atleast_1d(exclude), axis=0)
+        v = null.ravel()
+        return v[np.isfinite(v)]
+
+    def pvalues(self, r2, exclude=None):
+        """Pooled p of each tested statistic: (1 + #{null >= r2}) / (1 + N_null)."""
+        return pooled_pvalues(np.asarray(r2, dtype=float), self.pool(exclude))
+
+    def select(self, r2, q=0.05, families=None, exclude=None):
+        """p, BH q and mask for statistics ``r2`` (e.g. one ROI's training R²).
+        BH runs over all finite r2, or within each label of ``families``."""
+        p = self.pvalues(r2, exclude=exclude)
+        if families is None:
+            qv = bh_qvalues(p)
+        else:
+            fam = np.asarray(families, dtype=object)
+            qv = np.full(p.shape, np.nan)
+            for g in pd.unique(fam[pd.notnull(fam)]):
+                m = fam == g
+                qv[m] = bh_qvalues(p[m])
+        mask = np.nan_to_num(qv, nan=1.0) <= q
+        return BankSelection(p=p, q=qv, mask=mask, q_thresh=q,
+                             n_null=len(self.pool(exclude)))
+
+    def quantiles(self, qs=(.9, .95, .99, .999)):
+        return dict(zip(qs, np.quantile(self.pool(), qs)))
+
+    def calibration(self, test_null, q=0.05):
+        """Leave-one-shuffle-out false positives. ``test_null`` (K, V) are null
+        statistics of the SAME K shuffles on the voxels you want to test (e.g.
+        an ROI). Shuffle k of the test voxels is selected against the bank
+        without shuffle k. Returns the per-shuffle discovery counts and the
+        fraction of shuffles with any discovery (≲ q under the null)."""
+        test_null = np.asarray(test_null, dtype=float)
+        n = [self.select(test_null[k], q=q, exclude=k).n_selected
+             for k in range(test_null.shape[0])]
+        return dict(any_discovery_rate=float(np.mean(np.array(n) > 0)),
+                    n_discoveries=n)
+
+    def exchangeability_report(self, warn=True, **kw):
+        """Split-half / variance-ratio check of the bank itself (see
+        :meth:`PermutationSelectionResult.exchangeability_report`)."""
+        V = self.null_r2.shape[1]
+        cols = np.arange(V)
+        res = PermutationSelectionResult(
+            r2=pd.Series(np.zeros(V), index=cols),
+            null_r2=pd.DataFrame(self.null_r2, columns=cols),
+            p=pd.Series(np.nan, index=cols), q=pd.Series(np.nan, index=cols),
+            mask=pd.Series(False, index=cols), q_thresh=.05, method='pooled',
+            permutations=np.zeros((self.K, 1), int))
+        return res.exchangeability_report(warn=warn, **kw)
+
+    def save(self, fn):
+        import json
+        np.savez_compressed(
+            fn, null_r2=self.null_r2.astype(np.float32), voxel_ids=self.voxel_ids,
+            permutations=(self.permutations if self.permutations is not None
+                          else np.zeros((0, 0), int)),
+            metadata=json.dumps(self.metadata, default=str))
+
+    @classmethod
+    def load(cls, fn):
+        import json
+        with np.load(fn, allow_pickle=False) as z:
+            perms = z['permutations']
+            return cls(null_r2=z['null_r2'].astype(float), voxel_ids=z['voxel_ids'],
+                       permutations=perms if perms.size else None,
+                       metadata=json.loads(str(z['metadata'])))
+
+
+# --------------------------------------------------------------------------
 # selector
 
 class PermutationSelector:
@@ -453,6 +597,53 @@ class PermutationSelector:
         self.seed = seed
         self.method = method
         self.stack = stack
+
+    def fit_null(self, data, paradigm, n_voxels=None, voxel_ids=None, voxel_seed=0,
+                 fit_kwargs=None, metadata=None):
+        """Fit ONLY the K shuffles, on a voxel subsample, and return a
+        :class:`NullBank` (the real data are not fitted).
+
+        Parameters
+        ----------
+        data : DataFrame (n_rows, V_all), e.g. one ROI's training data in a fold
+        n_voxels : int, optional random subsample size (:func:`subsample_voxels`,
+            seeded by ``voxel_seed``) for big ROIs; default all columns
+        voxel_ids : explicit column positions to use instead
+        metadata : dict stored with the bank (model key, fit settings, ...).
+        """
+        fit_kwargs = {} if fit_kwargs is None else dict(fit_kwargs)
+        data = data if isinstance(data, pd.DataFrame) else pd.DataFrame(data)
+        n_rows, V_all = data.shape
+        if voxel_ids is None:
+            voxel_ids = subsample_voxels(V_all, n_voxels, voxel_seed)
+        voxel_ids = np.asarray(voxel_ids)
+        sub = data.iloc[:, voxel_ids]
+        V = sub.shape[1]
+        groups = _resolve_groups(self.groups, data)
+        perms = permutation_indices(n_rows, groups, self.n_permutations, self.seed)
+        K = len(perms)
+        if self.stack:
+            blocks = [sub.values[np.argsort(pm)] for pm in perms]
+            stacked = pd.DataFrame(np.concatenate(blocks, axis=1), index=data.index,
+                                   columns=np.arange(K * V))
+            null = np.asarray(self.fit_fn(stacked, paradigm, **fit_kwargs),
+                              dtype=float).ravel().reshape(K, V)
+        else:
+            null = np.empty((K, V))
+            for k, pm in enumerate(perms):
+                null[k] = self._as_series(
+                    self.fit_fn(sub, _take_rows(paradigm, pm), **fit_kwargs),
+                    sub.columns).values
+        meta = dict(K=K, seed=self.seed, voxel_seed=voxel_seed, n_rows=n_rows,
+                    n_voxels_total=V_all, stack=self.stack)
+        try:
+            from . import __version__
+            meta['braincoder_version'] = __version__
+        except ImportError:
+            pass
+        meta.update(metadata or {})
+        return NullBank(null_r2=null, voxel_ids=voxel_ids, permutations=perms,
+                        metadata=meta)
 
     def _as_series(self, r2, columns):
         r2 = np.asarray(r2, dtype=float).ravel()
