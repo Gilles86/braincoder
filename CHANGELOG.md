@@ -55,6 +55,24 @@ Gaussian-Process prior over cortical geodesic distance.
   posterior `P(signal | R²)` and the R² at which it crosses a chosen
   probability. More forgiving than tail-FDR on small/degenerate ROIs.
 - **`plot_r2_mixture`** — diagnostic plot of the mixture fit + threshold.
+- **`braincoder.selection.PermutationSelector`** (new module) —
+  label-permutation voxel selection. Fits the real data and `K` within-group
+  (e.g. within-run) label shuffles with the *identical* fitting callable
+  (a braincoder model via `make_r2_fitter`, or any
+  `fit_fn(data, paradigm) -> R²`), then pooled empirical p
+  `(1 + #{null >= R²}) / (1 + K·V)` and Benjamini-Hochberg q within
+  user-given families (`bh_groups`, e.g. ROI labels; optional
+  `pool_within_family`). The result carries `r2`, `null_r2`, `p`, `q`,
+  `mask`, the unpooled `p_voxelwise`, `summary()`,
+  `exchangeability_report()` (split-half r and variance ratio of the
+  per-voxel null; warns when the pooled-null assumption looks violated)
+  and `calibration()` (leave-one-permutation-out false-positive rate).
+  Seeds are `SeedSequence([*seed, k])`, so permutation k never depends on
+  K. `stack=True` fits real + all shuffles in one optimiser run (valid for
+  row-wise / single-trial models). Unlike the R²-mixture rules above it
+  selects few or no voxels in participants without signal. Note: with
+  small K the pooled-BH rule cannot select fewer than about `1/(q·K)`
+  voxels (4 for K = 5, q = .05).
 
 ### Fisher information & expected uncertainty
 
@@ -141,7 +159,8 @@ Gaussian-Process prior over cortical geodesic distance.
 
 ### Tests & CI
 
-- New test files: `test_gp_prior.py` (+360 lines), `test_safe_cholesky.py`
+- New test files: `test_selection.py` (FDR on pure noise, power,
+  within-group shuffles, seed reproducibility), `test_gp_prior.py` (+360 lines), `test_safe_cholesky.py`
   (+174), `test_backend_multibackend.py` (+376), additions to
   `test_utils.py` (+168).
 - `scikit-learn` now declared as a runtime dep (used by
