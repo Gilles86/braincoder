@@ -16,6 +16,8 @@ from .models import (
     DiscreteModel, LinearModel, LinearModelWithBaseline, LinearModelWithBaselineHRF,
 )
 from .optimize import WeightFitter, ParameterFitter, ResidualFitter
+from . import noise
+from .noise import LowRankNoise
 try:
     from .optimize import (
         StimulusFitter, CustomStimulusFitter,

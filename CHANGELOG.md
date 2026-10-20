@@ -29,6 +29,43 @@ fitter, and a per-fold voxel-selection helper.
 - **0.7 will flip the default to `'gaussian'`**. If you need exact
   reproduction of pre-0.6 fits, pin `noise_model='ssq'` explicitly.
 
+### Calibrated decoding: low-rank noise model with CV rank + temperature
+
+- **`braincoder.noise.LowRankNoise`** (also `braincoder.LowRankNoise`) —
+  noise covariance Ω = D (F Fᵀ + Ψ) D: `k` principal factors of the residual
+  correlation plus diagonal uniquenesses (floored), Student-t (ν by ML) or
+  Gaussian. Stored and evaluated in factored form (Woodbury + determinant
+  lemma; no dense V × V inverse), so it scales to thousands of voxels.
+- **`LowRankNoise.fit(model, data, paradigm, parameters, stimulus_range=grid,
+  groups=runs)`** chooses the rank `k` and a likelihood **temperature** `T`
+  (posterior ∝ likelihood^(1/T)) jointly by nested, group-wise CV *within the
+  training data* on the decoding objective (held-out log posterior of the
+  true stimulus). Fixed `k=` / `temperature=` also accepted. Encoding
+  parameters are held fixed in the inner folds by default;
+  `inner_parameters=` takes per-group parameters (dict) or a refit callable.
+  `noise.summary()` / `noise.cv_scores_` report the choice.
+- **`get_stimulus_pdf(..., noise_model=, temperature=)`** — new optional
+  arguments (also on `EncodingRegressionModel`). Defaults unchanged: without
+  them the output is identical to 0.5.x. `temperature` also works with a
+  dense `omega=`. New helper `EncodingModel.predict_stimulus_grid`.
+- **`braincoder.noise.fit_lowrank_omega(residuals, k)`** → dense
+  `(omega, dof)` for code that passes `omega=` / `dof=`.
+- **`braincoder.utils.calibration`** — randomised PIT, HPD level of the
+  truth, HDI coverage, log score vs uniform, `marginalize`,
+  `calibration_summary`, `plot_calibration`; works on any
+  `get_stimulus_pdf` DataFrame.
+- Docs: new page `docs/noise_models.rst`, example
+  `examples/01_decoding_pipeline/04_lowrank_noise_calibration.py`.
+- **Warnings documented there** (from 7T single-trial numerosity data):
+  `ResidualFitter`'s one-factor Ω underestimates held-out noise (Mahalanobis
+  ~4× too large; posteriors overconfident, all 38 participant × ROI worse
+  than flat); `lambd` shrinkage is unsafe when voxels > trials; the
+  pseudo-WWᵀ from `init_pseudoWWT` is uncentred (dominated by the
+  common-mode response). `ResidualFitter` itself is unchanged.
+- Tests: `tests/test_noise_models.py` (Woodbury vs dense, CV recovery of k,
+  calibrated coverage, T ≈ 1 when correct and > 1 when tuning is
+  misspecified, backward compatibility, all backends).
+
 ### Hierarchical Bayesian / GP prior
 
 A new hierarchical-Bayesian fitter for any encoding model, with a

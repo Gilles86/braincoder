@@ -12,6 +12,9 @@ right numerosity-tuned parietal cortex):
    covariance is regularised by *geodesic* distance on the cortical surface.
 3. Quantify *expected* decoding uncertainty by simulating from the fitted
    model and re-decoding.
+4. Calibrate decoding posteriors with a low-rank noise model whose rank and
+   likelihood temperature are chosen by nested cross-validation
+   (``braincoder.noise.LowRankNoise``; simulated data).
 
 Each example is self-contained but share the same demo dataset, which is
 downloaded on first run via ``braincoder.utils.data.load_dehollander2024_npc``.

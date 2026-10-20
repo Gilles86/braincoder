@@ -18,6 +18,21 @@ _PROGRAMMING_ERRORS = (TypeError, AttributeError, NameError, ImportError,
 
 
 class ResidualFitter(object):
+    """Fit a parametric noise covariance Ω (and Student-t ν) to residuals.
+
+    Ω = ρ ττᵀ + (1 − ρ) diag(τ²) + σ² WWᵀ (optionally mixed with the sample
+    covariance via ``lambd``).
+
+    .. warning::
+       Ω has a single shared factor. On real single-trial fMRI betas the
+       residuals typically need tens of factors, and this Ω underestimates
+       held-out noise (held-out Mahalanobis distances ~4× too large on 7T
+       data), giving overconfident decoding posteriors. ``lambd > 0`` is
+       unsafe when n_voxels > n_trials (rank-deficient sample covariance).
+       The pseudo-WWᵀ from ``init_pseudoWWT`` is uncentred. For calibrated
+       decoding see :class:`braincoder.noise.LowRankNoise` and the
+       "Noise models for decoding" docs page.
+    """
 
     def __init__(self, model, data, paradigm=None, parameters=None, weights=None, lambd=0.0):
 
