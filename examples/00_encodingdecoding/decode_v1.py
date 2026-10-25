@@ -14,8 +14,10 @@ from braincoder.utils.data import load_szinte2024
 import numpy as np
 import pandas as pd
 
-# Load data (high-res for PRF fitting)
-data = load_szinte2024()
+# Load data (high-res for PRF fitting). To keep this example fast (it is
+# executed when the documentation is built) we only use the 500 V1 voxels
+# with the best pRF fits in the original study.
+data = load_szinte2024(best_voxels=500)
 stimulus = data['stimulus']
 grid_coordinates = data['grid_coordinates']
 tr = data['tr']
@@ -60,7 +62,7 @@ grid_pars = par_fitter.fit_grid(x, y, sd, baseline, amplitudes, use_correlation_
 refined_grid_pars = par_fitter.refine_baseline_and_amplitude(grid_pars)
 
 # Now we use gradient descent to further optimize the parameters
-pars = par_fitter.fit(init_pars=refined_grid_pars, learning_rate=1e-2, max_n_iterations=5000,
+pars = par_fitter.fit(init_pars=refined_grid_pars, learning_rate=1e-2, max_n_iterations=1000,
         min_n_iterations=100,
         r2_atol=0.0001)
 
@@ -101,7 +103,7 @@ otherwise the optimization takes too long on a CPU
 we can do that by simply setting up a new model with a different grid
 
 """
-data = load_szinte2024(resize_factor=2.5)
+data = load_szinte2024(resize_factor=2.5, best_voxels=500)
 grid_coordinates = data['grid_coordinates']
 stimulus = data['stimulus']
 tr = data['tr']
@@ -117,7 +119,7 @@ stim_fitter = StimulusFitter(data.loc[:, best_voxels], model, omega)
 
 # Legacy Adam is a bit faster than the default Adam optimizer on M1
 # Learning rate of 1.0 is a bit high, but works well here
-reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=1000, learning_rate=.1)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=50, max_n_iterations=100, learning_rate=.1)
 
 def play_reconstruction(reconstructed_stimulus):
 
@@ -152,7 +154,7 @@ We can induce less extreme intensities, and thereby less
 sparseness, by inducing a L2-penalty on the stimulus intensities
 """
 
-reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=1000, learning_rate=0.1, l2_norm=0.01)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=50, max_n_iterations=100, learning_rate=0.1, l2_norm=0.01)
 
 play_reconstruction(reconstructed_stimulus)
 
@@ -164,5 +166,5 @@ Reconstruct stimulus with L1-norm
 ---------------------------------
 For completeness, one can also use a sparse-inducing L1-norm
 """
-reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=1000, learning_rate=.1, l1_norm=0.01)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=50, max_n_iterations=100, learning_rate=.1, l1_norm=0.01)
 play_reconstruction(reconstructed_stimulus)

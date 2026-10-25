@@ -86,9 +86,12 @@ posterior, HDI coverage at 50% and 95%, the SD of the randomised PIT
 between posterior mean and true stimulus. The figure below is the
 calibration plot of
 :doc:`auto_examples/01_decoding_pipeline/04_lowrank_noise_calibration`
-(simulated data): the ``ResidualFitter`` Ω and the untempered low-rank Ω
-are overconfident (HDI coverage below the diagonal, U-shaped PIT); the
-CV-tempered low-rank model is calibrated.
+(simulated data: 4 shared noise factors, tuning widths underestimated by
+30%). The untempered low-rank Ω (T = 1) is overconfident: HDI coverage
+falls below the diagonal and the PIT histogram is U-shaped. The
+CV-chosen temperature restores calibration. On these simulated data the
+``ResidualFitter`` Ω is also close to calibrated; on real 7T single-trial
+betas it was not (see below).
 
 .. figure:: auto_examples/01_decoding_pipeline/images/sphx_glr_04_lowrank_noise_calibration_001.png
    :width: 90%

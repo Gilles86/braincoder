@@ -12,10 +12,14 @@ Gaussian PRF model, and then add more complexity step by step.
 # Load data
 # ---------
 # First we load in the data. We will use the Szinte (2024)-dataset.
+# To keep this example fast (it is executed when the documentation is
+# built), we use the 200 V1 voxels with the best pRF fits in the original
+# study and a 2.5x downsampled stimulus. For real analyses, use all voxels
+# and the full-resolution stimulus, and more gradient-descent iterations.
 from braincoder.utils.data import load_szinte2024
 import matplotlib.pyplot as plt
 
-data = load_szinte2024()
+data = load_szinte2024(resize_factor=2.5, best_voxels=200)
 
 # This is the visual stimulus ("design matrix")
 paradigm = data['stimulus']
@@ -75,7 +79,7 @@ sns.despine()
 
 # %%
 # We can substantially improve the fit by using gradient descent optimisation
-pars_gauss_gd = par_fitter.fit(init_pars=pars_gauss_ols, max_n_iterations=1000)
+pars_gauss_gd = par_fitter.fit(init_pars=pars_gauss_ols, max_n_iterations=250)
 
 # %%
 r2_gauss_gd = par_fitter.get_rsq(pars_gauss_gd)
@@ -106,7 +110,7 @@ par_fitter_hrf = ParameterFitter(model=model_hrf, data=d, paradigm=paradigm)
 pars_gauss_gd['hrf_delay'] = 6
 pars_gauss_gd['hrf_dispersion'] = 1
 
-pars_gauss_hrf = par_fitter_hrf.fit(init_pars=pars_gauss_gd, max_n_iterations=1000)
+pars_gauss_hrf = par_fitter_hrf.fit(init_pars=pars_gauss_gd, max_n_iterations=250)
 
 # %%
 r2_gauss_hrf = par_fitter_hrf.get_rsq(pars_gauss_hrf)
@@ -157,11 +161,11 @@ pars_dog_init['srf_size'] = 2.
 par_fitter_dog = ParameterFitter(model=model_dog, data=d, paradigm=paradigm)
 
 # Note how, for now, we are not optimizing the HRF parameters.
-pars_dog = par_fitter_dog.fit(init_pars=pars_dog_init, max_n_iterations=1000,
+pars_dog = par_fitter_dog.fit(init_pars=pars_dog_init, max_n_iterations=250,
                               fixed_pars=['hrf_delay', 'hrf_dispersion'])
 
 # Now we optimize _with_ the HRF parameters
-pars_dog_hrf = par_fitter_dog.fit(init_pars=pars_dog, max_n_iterations=1000)
+pars_dog_hrf = par_fitter_dog.fit(init_pars=pars_dog, max_n_iterations=250)
 
 r2_dog_hrf = par_fitter_dog.get_rsq(pars_dog_hrf)
 
@@ -209,10 +213,10 @@ pars_dn_init['surround_baseline'] = 1.0
 
 par_fitter_dn = ParameterFitter(model=model_dn, data=d, paradigm=paradigm)
 # Without HRF
-pars_dn = par_fitter_dn.fit(init_pars=pars_dn_init, max_n_iterations=1000, fixed_pars=['hrf_delay', 'hrf_dispersion'])
+pars_dn = par_fitter_dn.fit(init_pars=pars_dn_init, max_n_iterations=250, fixed_pars=['hrf_delay', 'hrf_dispersion'])
 
 # With HRF
-pars_dn = par_fitter_dn.fit(init_pars=pars_dn, max_n_iterations=1000)
+pars_dn = par_fitter_dn.fit(init_pars=pars_dn, max_n_iterations=250)
 
 # %%
 # Again, let's  plot the R2 improvements
@@ -245,12 +249,7 @@ sns.relplot(x='frame', y='value', hue='model', col='source', data=tmp.reset_inde
 # First we fit the noise models
 from braincoder.optimize import ResidualFitter, StimulusFitter
 
-# Let's first get grid coordinates and paradigm at a slightly lower resolution
-data = load_szinte2024(resize_factor=2.5)
-grid_coordinates = data['grid_coordinates']
-paradigm = data['stimulus']
-
-best_voxels_gauss = r2_gauss_gd[pars_gauss_gd['sd'] > 0.5].sort_values(ascending=False).index[:200]
+best_voxels_gauss = r2_gauss_gd[pars_gauss_gd['sd'] > 0.5].sort_values(ascending=False).index[:100]
 
 model_gauss = GaussianPRF2DWithHRF(data=d[best_voxels_gauss],
                                    hrf_model=hrf_model,
@@ -268,7 +267,7 @@ omega_gauss, _ = resid_fitter_gauss.fit()
 
 
 # %%
-best_voxels_dn = r2_dn[pars_dn['sd'] > 0.5].sort_values(ascending=False).index[:200]
+best_voxels_dn = r2_dn[pars_dn['sd'] > 0.5].sort_values(ascending=False).index[:100]
 
 model_dn = DivisiveNormalizationGaussianPRF2DWithHRF(data=d[best_voxels_dn], 
                                               hrf_model=hrf_model,
@@ -285,7 +284,7 @@ omega_dn, _ = resid_fitter_dn.fit()
 # ===============================
 # Now we can decode the stimulus from the fMRI responses
 stim_fitter_gauss = StimulusFitter(model=model_gauss, data=d.loc[:, best_voxels_gauss], omega=omega_gauss)
-stim_gauss = stim_fitter_gauss.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=1000)
+stim_gauss = stim_fitter_gauss.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=250)
 
 # %%
 from matplotlib.animation import FuncAnimation
@@ -316,7 +315,7 @@ play_reconstruction(stim_gauss)
 # Decoded stimulus: DN model
 # ==========================
 stim_fitter_dn = StimulusFitter(model=model_dn, data=d.loc[:, best_voxels_dn], omega=omega_dn)
-stim_dn = stim_fitter_dn.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=1000)
+stim_dn = stim_fitter_dn.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=250)
 
 # %%
 play_reconstruction(stim_dn)
