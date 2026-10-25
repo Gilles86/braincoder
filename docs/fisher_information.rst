@@ -6,9 +6,6 @@ Why the spiky FI curves you may have seen are *real*, and how to compute
 Fisher information and decoder uncertainty reliably from an
 :class:`~braincoder.models.EncodingModel`.
 
-.. contents::
-   :local:
-
 Two questions, two APIs
 -----------------------
 
@@ -18,8 +15,7 @@ of two things:
 **How much information does the population carry about a stimulus value?**
   → :meth:`EncodingModel.get_fisher_information`
 
-**How well will an unbiased decoder recover the true stimulus, averaged
-over noise draws?**
+**How well will an unbiased decoder recover the true stimulus, averaged over noise draws?**
   → :meth:`EncodingModel.get_expected_uncertainty`
 
 Both work on the same fitted ``(parameters, omega, dof)`` tuple. The

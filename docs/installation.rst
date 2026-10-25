@@ -4,10 +4,6 @@ Installation
 Braincoder requires Python 3.10+ and `Keras 3 <https://keras.io>`_ with at least one
 backend (TensorFlow, JAX, or PyTorch).
 
-.. contents:: On this page
-   :local:
-   :depth: 1
-
 Recommended: conda + editable install
 --------------------------------------
 
