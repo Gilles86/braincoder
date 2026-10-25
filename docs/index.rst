@@ -44,6 +44,8 @@ paradigm, instantiate a model, simulate data, and fit parameters.
 More resources
 ==============
 
+- :doc:`whats_new` — release notes; **0.6.0** adds calibrated decoding
+  (:doc:`noise_models`).
 - :doc:`concepts` — architectural overview and workflow tips.
 - :doc:`noise_models` — calibrated decoding: low-rank Ω with
   cross-validated rank and temperature.
@@ -55,6 +57,7 @@ More resources
 .. toctree::
    :maxdepth: 1
 
+   whats_new
    installation
    concepts
    fisher_information

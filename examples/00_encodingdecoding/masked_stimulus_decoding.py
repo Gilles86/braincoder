@@ -38,7 +38,7 @@ stim_fitter = StimulusFitter(data, model, omega)
 
 
 # Note how we use the original stimulus as a mask to only fit the stimulus at the locations where it was actually presented
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=1000, max_n_iterations=2000, learning_rate=.05, mask=(stimulus > 0.1))
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=1000, max_n_iterations=2000, learning_rate=.05, mask=(stimulus > 0.1))
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation

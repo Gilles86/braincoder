@@ -1,11 +1,15 @@
 # Changelog
 
-## 0.6.0 (DRAFT — unreleased)
+## 0.6.0 (2026-10-25)
 
 The headline of 0.6 is a new **per-voxel Gaussian likelihood** option in
 `ParameterFitter`, opt-in here and the default in 0.7. Same fixed points
 as the existing sum-of-squares loss, much faster convergence under
 heteroskedastic noise — which is to say, on every real fMRI dataset.
+
+The second headline is **calibrated decoding**: `braincoder.noise.LowRankNoise`
+(low-rank + diagonal noise covariance with cross-validated rank and
+likelihood temperature) and `braincoder.utils.calibration`.
 
 The rest of 0.6 is a substantial set of stability fixes, a new GP-prior
 fitter, and a per-fold voxel-selection helper.
@@ -28,6 +32,8 @@ fitter, and a per-fold voxel-selection helper.
   for the full convergence study.
 - **0.7 will flip the default to `'gaussian'`**. If you need exact
   reproduction of pre-0.6 fits, pin `noise_model='ssq'` explicitly.
+- **`ParameterFitter.r2_history_` / `loss_history_`** — the R² and loss
+  trajectories of the last `fit()` call are now stored on the fitter.
 
 ### Calibrated decoding: low-rank noise model with CV rank + temperature
 
@@ -156,6 +162,12 @@ Gaussian-Process prior over cortical geodesic distance.
   stored, one Adam step past the best cost).
 
 ### Backend layer fixes (TF / JAX / torch parity)
+
+- TF `compute_jacobian` uses `tf.while_loop` instead of `pfor`, which
+  overflowed int32 indexing on large (trials × voxels × parameters) problems.
+- Monte-Carlo Fisher information sums the log-probability before taking the
+  gradient, so `analytical=False` works under JAX / torch (previously it
+  raised on the non-scalar loss; TF summed it silently).
 
 - JAX `compute_gradients` runs inside a `StatelessScope` so
   `keras.Variable` reads inside `value_and_grad` don't leak tracers.

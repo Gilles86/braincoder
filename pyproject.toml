@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "braincoder"
-version = "0.5.1"
+version = "0.6.0"
 description = "A modern neuroimaging modeling package"
 authors = [
     {name = "Gilles de Hollander", email = "gilles.dehollander@gmail.com"}
@@ -29,11 +29,23 @@ license = "MIT"
 test = [
     "pytest",
 ]
+docs = [
+    "sphinx",
+    "sphinx-gallery",
+    "sphinxcontrib-bibtex",
+    "furo",
+    "myst-parser",
+    "ipython",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["braincoder*"]
 exclude = ["notebooks*"]
+
+[tool.setuptools.package-data]
+# example data for braincoder.utils.data.load_szinte2024 (not a Python package)
+braincoder = ["data/szinte2024/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

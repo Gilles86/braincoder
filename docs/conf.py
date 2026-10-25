@@ -9,6 +9,8 @@
 project = 'Braincoder'
 copyright = '2023, Gilles de Hollander'
 author = 'Gilles de Hollander'
+version = '0.6'
+release = '0.6.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -21,7 +23,8 @@ html_static_path = ['_static']
 html_css_files = ['css/custom.css']
 
 extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.duration', 
-              'sphinx_gallery.gen_gallery', 'sphinxcontrib.bibtex', 'sphinx.ext.mathjax']
+              'sphinx_gallery.gen_gallery', 'sphinxcontrib.bibtex', 'sphinx.ext.mathjax',
+              'myst_parser']
 
 bibtex_bibfiles = ["./references.bib"]
 bibtex_style = "unsrt"
@@ -30,6 +33,9 @@ bibtex_footreference_style = "author_year"
 bibtex_footbibliography_header = ""
 
 autosummary_generate = True
+
+# MyST (Markdown) is used for whats_new.md, which includes ../CHANGELOG.md
+source_suffix = {'.rst': 'restructuredtext', '.md': 'markdown'}
 
 # Generate the plots for the gallery
 plot_gallery = "True"

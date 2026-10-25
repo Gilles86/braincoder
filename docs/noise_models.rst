@@ -8,6 +8,56 @@ A Bayesian decoder inverts an encoding model through a noise model,
 trials — if the noise covariance Ω is right, in particular along the
 directions in which the stimulus moves the predicted response.
 
+.. admonition:: New in 0.6.0
+
+   :class:`braincoder.noise.LowRankNoise`, the ``noise_model=`` and
+   ``temperature=`` arguments of ``get_stimulus_pdf``, and
+   :mod:`braincoder.utils.calibration` are new in braincoder 0.6.0
+   (see :doc:`whats_new`).
+
+Why the noise model matters
+===========================
+
+The likelihood :math:`p(y \mid s)` is a Gaussian or Student-t in the
+residuals :math:`y - f(s)`, with covariance Ω. If Ω underestimates the
+noise, especially the noise that is shared across voxels, every trial
+looks more informative than it is: the posterior is too narrow, its
+intervals miss the true stimulus far more often than they claim to, and
+the posterior mean and SD can no longer be read as "decoded value" and
+"uncertainty". A decoder with a misspecified Ω can therefore have a
+reasonable posterior *mean* and badly overconfident posterior *widths*.
+Check calibration on held-out trials (below) before you interpret
+posterior uncertainty.
+
+Which noise model?
+==================
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 38 40
+
+   * - Noise model
+     - How
+     - When
+   * - Spherical / diagonal
+     - ``omega=np.diag(residuals.var(0))`` (or ``LowRankNoise`` with
+       ``k=0``: diagonal Student-t, per-voxel scales)
+     - Baseline; few voxels; weakly correlated noise. In our 7T data
+       the nested CV often chose ``k=0`` (see below).
+   * - ``ResidualFitter``
+     - :class:`~braincoder.optimize.ResidualFitter`: one shared factor
+       plus a tuning-similarity term :math:`\sigma^2 WW^\top`
+       (after van Bergen, Ma, Pratte & Jehee, 2015, *Nat. Neurosci.*), Gaussian or Student-t
+     - Existing pipelines and comparison with the literature. **Caveat:**
+       on single-trial fMRI its one-factor Ω underestimates held-out
+       noise, so posteriors are overconfident (details below).
+   * - ``LowRankNoise``
+     - :class:`~braincoder.noise.LowRankNoise`: ``k`` factors + diagonal,
+       Student-t or Gaussian; rank ``k`` and temperature ``T`` chosen by
+       nested group-wise CV on the decoding objective
+     - Default recommendation for decoding when you need calibrated
+       posteriors and have several runs (groups) of training data.
+
 Quick start
 ===========
 
@@ -30,8 +80,23 @@ and to check calibration on held-out data:
     calibration_summary(pdf, test_paradigm)   # log score, HDI coverage, PIT SD, r
     plot_calibration(pdf, test_paradigm)
 
-See :doc:`auto_examples/01_decoding_pipeline/04_lowrank_noise_calibration`
-for a worked example with a calibration plot.
+``calibration_summary`` returns the log score relative to a flat
+posterior, HDI coverage at 50% and 95%, the SD of the randomised PIT
+(≈ 0.289 when calibrated, larger when overconfident) and the correlation
+between posterior mean and true stimulus. The figure below is the
+calibration plot of
+:doc:`auto_examples/01_decoding_pipeline/04_lowrank_noise_calibration`
+(simulated data): the ``ResidualFitter`` Ω and the untempered low-rank Ω
+are overconfident (HDI coverage below the diagonal, U-shaped PIT); the
+CV-tempered low-rank model is calibrated.
+
+.. figure:: auto_examples/01_decoding_pipeline/images/sphx_glr_04_lowrank_noise_calibration_001.png
+   :width: 90%
+   :alt: Calibration plot: HDI coverage and PIT histogram for three noise models
+
+   Left: fraction of trials whose q-HDI contains the true stimulus
+   (diagonal = calibrated). Right: randomised PIT (flat = calibrated).
+
 
 The model
 =========
@@ -161,10 +226,14 @@ or ``noise.to_dense()``. ``ResidualFitter`` and the default behaviour of
 API
 ===
 
-.. autoclass:: braincoder.noise.LowRankNoise
-   :members: fit, from_residuals, summary, to_dense, log_prob, log_prob_backend, grid_log_likelihood, mahalanobis
+Full reference: :ref:`api-noise` and :ref:`api-calibration` in the
+:doc:`api_reference`.
 
-.. autofunction:: braincoder.noise.fit_lowrank_omega
-
-.. automodule:: braincoder.utils.calibration
-   :members: calibration_summary, hdi_coverage, hpd_level, pit, log_score, marginalize, plot_calibration
+* :class:`braincoder.noise.LowRankNoise`, :func:`braincoder.noise.fit_lowrank_omega`
+* :func:`braincoder.utils.calibration.calibration_summary`,
+  :func:`~braincoder.utils.calibration.hdi_coverage`,
+  :func:`~braincoder.utils.calibration.pit`,
+  :func:`~braincoder.utils.calibration.log_score`,
+  :func:`~braincoder.utils.calibration.plot_calibration`
+* :meth:`braincoder.models.EncodingModel.get_stimulus_pdf`
+  (``noise_model=``, ``temperature=``)

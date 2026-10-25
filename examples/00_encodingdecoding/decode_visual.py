@@ -71,7 +71,7 @@ import seaborn as sns
 data = model.simulate(noise=1.)
 data.columns.set_names('voxel', inplace=True)
 tmp = data.stack().to_frame('activity')
-sns.relplot(x='frame', y='activity', data=tmp.reset_index(), hue='voxel', kind='line', palette=sns.color_palette('tab10', n_colors=parameters.shape[0]), aspect=2.)
+sns.relplot(x=data.index.name or 'index', y='activity', data=tmp.reset_index(), hue='voxel', kind='line', palette=sns.color_palette('tab10', n_colors=parameters.shape[0]), aspect=2.)
 
 # %%
 
@@ -146,7 +146,7 @@ stim_fitter = StimulusFitter(unseen_data, model, omega)
 
 # Legacy Adam is a bit faster than the default Adam optimizer on M1
 # Learning rate of 1.0 is a bit high, but works well here
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=200, max_n_iterations=200, learning_rate=.1)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=200, learning_rate=.1)
 
 # Here we make a movie of the decoded stimulus
 # Set up a function to draw a single frame

@@ -117,7 +117,7 @@ stim_fitter = StimulusFitter(data.loc[:, best_voxels], model, omega)
 
 # Legacy Adam is a bit faster than the default Adam optimizer on M1
 # Learning rate of 1.0 is a bit high, but works well here
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=200, max_n_iterations=1000, learning_rate=.1)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=1000, learning_rate=.1)
 
 def play_reconstruction(reconstructed_stimulus):
 
@@ -152,7 +152,7 @@ We can induce less extreme intensities, and thereby less
 sparseness, by inducing a L2-penalty on the stimulus intensities
 """
 
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=200, max_n_iterations=1000, learning_rate=0.1, l2_norm=0.01)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=1000, learning_rate=0.1, l2_norm=0.01)
 
 play_reconstruction(reconstructed_stimulus)
 
@@ -164,5 +164,5 @@ Reconstruct stimulus with L1-norm
 ---------------------------------
 For completeness, one can also use a sparse-inducing L1-norm
 """
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=200, max_n_iterations=1000, learning_rate=.1, l1_norm=0.01)
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=200, max_n_iterations=1000, learning_rate=.1, l1_norm=0.01)
 play_reconstruction(reconstructed_stimulus)
