@@ -418,6 +418,14 @@ class LowRankNoise(object):
             * callable ``f(train_data, train_paradigm, group) -> parameters``:
               refit the encoding model on the inner-training trials.
 
+            For weight-based models (a fixed basis set whose per-voxel
+            ``weights`` are what is fitted, e.g. via ``WeightFitter``), the
+            dict value / callable return may instead be a
+            ``(parameters, weights)`` tuple: the inner fold then uses those
+            weights rather than the outer ``weights``. Otherwise the outer
+            ``weights`` are used in every inner fold, so a basis-set model
+            is effectively decoded with fixed (optimistic) inner parameters.
+
             In fold ``g``, Ω is fitted on the residuals of the inner-training
             trials under these parameters, and the held-out trials are
             decoded with them.
@@ -446,9 +454,9 @@ class LowRankNoise(object):
         Y = _as_2d_array(data)
         n, V = Y.shape
 
-        def residuals_for(pars, idx):
+        def residuals_for(pars, idx, w=weights):
             pred = model.predict(paradigm=_subset(paradigm, idx),
-                                 parameters=pars, weights=weights)
+                                 parameters=pars, weights=w)
             return Y[idx] - _as_2d_array(pred)
 
         all_idx = np.arange(n)
@@ -505,6 +513,7 @@ class LowRankNoise(object):
         for g in iterator:
             te = np.where(groups == g)[0]
             tr = np.where(groups != g)[0]
+            w_g = weights
             if inner_parameters is None:
                 pars_g = parameters
                 R_tr = R_all[tr]
@@ -513,9 +522,11 @@ class LowRankNoise(object):
                     pars_g = inner_parameters(_subset(data, tr), _subset(paradigm, tr), g)
                 else:
                     pars_g = inner_parameters[g]
-                R_tr = residuals_for(pars_g, tr)
+                if isinstance(pars_g, tuple):
+                    pars_g, w_g = pars_g
+                R_tr = residuals_for(pars_g, tr, w_g)
 
-            P = _grid_predictions(model, grid, pars_g, weights)    # S x V
+            P = _grid_predictions(model, grid, pars_g, w_g)        # S x V
             svd = cls._svd(R_tr)
             for ki, kk in enumerate(ks):
                 nm = cls.from_residuals(R_tr, k=kk, dof=dof, psi_floor=psi_floor,

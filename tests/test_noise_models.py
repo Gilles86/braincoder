@@ -316,3 +316,37 @@ def test_calibration_overconfident_detected():
     s = calibration_summary(pdf, GRID[truth_idx])
     assert s['coverage_0.95'] < 0.8
     assert s['pit_sd'] > 0.32
+
+
+def test_inner_weights_for_basis_set_models():
+    """Weight-based models: inner folds can supply their own (parameters, weights)."""
+    from braincoder.optimize import WeightFitter
+    rng = np.random.default_rng(3)
+    basis = pd.DataFrame({'mu': np.linspace(-5, 5, 6), 'sd': np.full(6, 2.),
+                          'amplitude': np.ones(6), 'baseline': np.zeros(6)}).astype(np.float32)
+    V, n_runs, n_per = 25, 6, 30
+    W = pd.DataFrame(rng.normal(size=(6, V)).astype(np.float32), index=basis.index)
+    model = GaussianPRF()
+    x = pd.DataFrame({'x': rng.choice(GRID, n_runs * n_per)})
+    mu = model.predict(paradigm=x, parameters=basis, weights=W).values
+    Y = pd.DataFrame((mu + rng.normal(size=mu.shape)).astype(np.float32))
+    W.columns = Y.columns
+    groups = np.repeat(np.arange(n_runs), n_per)
+    w_hat = WeightFitter(model, basis, Y, x).fit()
+
+    kw = dict(stimulus_range=GRID, groups=groups, k_grid=(0, 2), weights=w_hat)
+    fixed = LowRankNoise.fit(model, Y, x, basis, **kw)
+    same = LowRankNoise.fit(model, Y, x, basis, **kw,
+                            inner_parameters=lambda d, p, g: (basis, w_hat))
+    pd.testing.assert_frame_equal(fixed.cv_scores_, same.cv_scores_)
+
+    refit = LowRankNoise.fit(
+        model, Y, x, basis, **kw,
+        inner_parameters=lambda d, p, g: (basis, WeightFitter(model, basis, d, p).fit()))
+    # refit inner weights never saw the held-out run: held-out score is lower
+    assert refit.cv_scores_.values.max() < fixed.cv_scores_.values.max()
+    assert refit.cv_info_['inner_parameters'] == 'callable'
+    # and the inner weights are really used (zero weights = no stimulus information)
+    zero = LowRankNoise.fit(model, Y, x, basis, **kw,
+                            inner_parameters=lambda d, p, g: (basis, w_hat * 0))
+    np.testing.assert_allclose(zero.cv_scores_[1.0].values, 0, atol=1e-6)
