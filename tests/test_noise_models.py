@@ -350,3 +350,33 @@ def test_inner_weights_for_basis_set_models():
     zero = LowRankNoise.fit(model, Y, x, basis, **kw,
                             inner_parameters=lambda d, p, g: (basis, w_hat * 0))
     np.testing.assert_allclose(zero.cv_scores_[1.0].values, 0, atol=1e-6)
+
+
+def test_fit_select_voxels_prefers_informative_subset():
+    """N chosen by nested CV: few informative voxels among many pure-noise ones."""
+    rng = np.random.default_rng(5)
+    V_sig, V_noise, n_runs, n_per = 20, 180, 8, 30
+    V = V_sig + V_noise
+    pars = pd.DataFrame({'mu': rng.uniform(-5, 5, V), 'sd': rng.uniform(1, 2, V),
+                         'amplitude': np.r_[np.full(V_sig, 1.5), np.zeros(V_noise)],
+                         'baseline': np.zeros(V)}).astype(np.float32)
+    model = GaussianPRF(parameters=pars)
+    x = pd.DataFrame({'x': rng.choice(GRID, n_runs * n_per)})
+    mu = model.predict(paradigm=x, parameters=pars).values
+    Y = pd.DataFrame((mu + rng.normal(size=mu.shape)).astype(np.float32))
+    pars.index = Y.columns
+    groups = np.repeat(np.arange(n_runs), n_per)
+    noise = LowRankNoise.fit_select_voxels(model, Y, x, pars, stimulus_range=GRID,
+                                           groups=groups, n_voxels_grid=(10, 20, 50, None),
+                                           k_grid=(0, 1, 2, 5))
+    assert noise.n_voxels_selected_ in (10, 20, 50)
+    assert noise.n_voxels == noise.n_voxels_selected_ == len(noise.voxels)
+    assert np.mean(np.asarray(noise.voxels) < V_sig) > 0.35
+    assert set(noise.cv_scores_.index.names) == {'n_voxels', 'k'}
+    # k never exceeds max_k_fraction * N
+    for N, kk in noise.cv_scores_.index:
+        assert kk <= 0.25 * N or kk == 0
+    # decoding on the selected voxels runs through get_stimulus_pdf
+    pdf = model.get_stimulus_pdf(Y.loc[:, noise.voxels].iloc[:20], GRID,
+                                 parameters=pars.loc[noise.voxels], noise_model=noise)
+    assert pdf.shape == (20, len(GRID))

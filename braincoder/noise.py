@@ -566,6 +566,143 @@ class LowRankNoise(object):
                           'extending it.', RuntimeWarning, stacklevel=2)
         return out
 
+    @classmethod
+    def fit_select_voxels(cls, model, data, paradigm, parameters=None,
+                          stimulus_range=None, groups=None, weights=None,
+                          n_voxels_grid=(25, 50, 100, 200, 400, 800, None),
+                          inner_parameters=None, k_grid=DEFAULT_K_GRID,
+                          temperature_grid=DEFAULT_TEMPERATURE_GRID,
+                          max_k_fraction=0.25, dof='fit', psi_floor=0.02):
+        """Choose the number of voxels N jointly with ``k`` and ``T`` by nested CV.
+
+        Voxels are ranked by their in-sample R² under the encoding model, on
+        training trials only: inside inner fold ``g`` by the R² of that fold's
+        inner parameters on its inner-training trials, and for the returned
+        model by the R² of ``parameters`` on all training trials. For each
+        candidate N the top-N voxels of the fold's own ranking are taken and
+        Ω(k) is refitted on them (the factors of a voxel subset are not a
+        subset of the factors of a larger set), then scored on the held-out
+        group exactly as in :meth:`fit`. The objective is the same held-out
+        log posterior of the true grid stimulus.
+
+        Parameters
+        ----------
+        data : DataFrame (n_trials, V)
+            Training data of ALL candidate voxels (e.g. a whole ROI). Must be
+            a DataFrame: the selected voxels are returned by label.
+        n_voxels_grid : sequence of int or None
+            Candidate N; ``None`` = all voxels. Values above V are capped at V.
+        inner_parameters : None, dict or callable
+            As in :meth:`fit`, but for ALL voxels (``(parameters, weights)``
+            tuples allowed). ``None`` holds ``parameters`` fixed, which also
+            fixes the ranking across inner folds (optimistic).
+        max_k_fraction : float
+            Only ranks ``k <= max_k_fraction * N`` are considered for N.
+
+        Returns
+        -------
+        LowRankNoise
+            Fitted on the selected voxels of all training trials. Extra
+            attributes: ``voxels`` (selected labels, in ranking order),
+            ``n_voxels_selected_``, ``voxel_ranking_`` (all labels, best first)
+            and ``cv_scores_`` with a (n_voxels, k) row MultiIndex.
+            Decode with the selected voxels only, i.e. subset ``parameters``
+            (or ``weights``) and the test data to ``noise.voxels``.
+        """
+        if not isinstance(data, pd.DataFrame):
+            raise ValueError('fit_select_voxels needs data as a DataFrame (voxel labels)')
+        if stimulus_range is None:
+            raise ValueError('stimulus_range is required')
+        if parameters is None:
+            parameters = model.parameters
+        labels = pd.Index(data.columns)
+        Y = _as_2d_array(data)
+        n, V = Y.shape
+        grid = _as_2d_array(stimulus_range)
+        true_idx = _match_to_grid(paradigm, grid)
+        S = len(grid)
+        groups = np.asarray(groups)
+        if len(groups) != n:
+            raise ValueError('groups must have one entry per training trial')
+        ugroups = pd.unique(groups)
+        if len(ugroups) < 2:
+            raise ValueError('need at least two groups for cross-validation')
+        n_tr_min = min((groups != g).sum() for g in ugroups)
+        Ns = sorted({V if N is None else int(min(N, V)) for N in n_voxels_grid})
+        Ns = [N for N in Ns if N >= 2]
+        Ts = np.asarray(temperature_grid, dtype=float)
+
+        def ks_for(N):
+            ks = sorted({int(kk) for kk in k_grid
+                         if kk < min(n_tr_min, N) and kk <= max_k_fraction * N})
+            return ks or [0]
+
+        def predict(pars, idx, w):
+            return _as_2d_array(model.predict(paradigm=_subset(paradigm, idx),
+                                              parameters=pars, weights=w))
+
+        def r2_order(Ysub, pred):
+            ss_res = ((Ysub - pred) ** 2).sum(0)
+            ss_tot = ((Ysub - Ysub.mean(0)) ** 2).sum(0)
+            r2 = 1 - ss_res / np.where(ss_tot > 0, ss_tot, np.inf)
+            return np.argsort(-r2, kind='stable')
+
+        scores = {(N, kk): np.zeros(len(Ts)) for N in Ns for kk in ks_for(N)}
+        for g in ugroups:
+            te = np.where(groups == g)[0]
+            tr = np.where(groups != g)[0]
+            pars_g, w_g = parameters, weights
+            if inner_parameters is not None:
+                pars_g = (inner_parameters(_subset(data, tr), _subset(paradigm, tr), g)
+                          if callable(inner_parameters) else inner_parameters[g])
+                if isinstance(pars_g, tuple):
+                    pars_g, w_g = pars_g
+            pred_tr = predict(pars_g, tr, w_g)
+            R_tr_full = Y[tr] - pred_tr
+            order = r2_order(Y[tr], pred_tr)
+            P_full = _grid_predictions(model, grid, pars_g, w_g)       # S x V
+            for N in Ns:
+                cols = order[:N]
+                R_tr = R_tr_full[:, cols]
+                svd = cls._svd(R_tr)
+                for kk in ks_for(N):
+                    nm = cls.from_residuals(R_tr, k=kk, dof=dof, psi_floor=psi_floor,
+                                            _svd=svd)
+                    ll = nm.grid_log_likelihood(Y[te][:, cols], P_full[:, cols])
+                    ll_true = ll[np.arange(len(te)), true_idx[te]]
+                    sc = scores[(N, kk)]
+                    for ti, T in enumerate(Ts):
+                        if np.isinf(T):
+                            sc[ti] += -len(te) * np.log(S)
+                        else:
+                            sc[ti] += (ll_true / T - logsumexp(ll / T, axis=1)).sum()
+
+        keys = list(scores)
+        rel = np.array([scores[key] for key in keys]) / n + np.log(S)
+        cv = pd.DataFrame(rel, index=pd.MultiIndex.from_tuples(keys, names=['n_voxels', 'k']),
+                          columns=pd.Index(Ts, name='temperature'))
+        ri, ti = np.unravel_index(np.nanargmax(rel), rel.shape)
+        N_best, k_best = keys[ri]
+        T_best = float(Ts[ti])
+
+        pred_all = predict(parameters, np.arange(n), weights)
+        order = r2_order(Y, pred_all)
+        cols = order[:N_best]
+        out = cls.from_residuals((Y - pred_all)[:, cols], k=k_best, dof=dof,
+                                 psi_floor=psi_floor, temperature=T_best)
+        out.voxels = labels[cols]
+        out.n_voxels_selected_ = int(N_best)
+        out.voxel_ranking_ = labels[order]
+        out.cv_scores_ = cv
+        out.cv_info_ = dict(n_trials=n, n_voxels=V, n_groups=len(ugroups), n_stimuli=S,
+                            n_voxels_grid=Ns, inner_parameters=(
+                                'fixed' if inner_parameters is None else
+                                'callable' if callable(inner_parameters) else 'dict'))
+        if N_best == max(Ns) and len(Ns) > 1 and max(Ns) < V:
+            warnings.warn('Chosen n_voxels is the largest candidate below V; consider '
+                          'extending n_voxels_grid.', RuntimeWarning, stacklevel=2)
+        return out
+
     # -- reporting -----------------------------------------------------------
 
     def summary(self):
