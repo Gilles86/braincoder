@@ -402,13 +402,33 @@ class GaussianMixturePRF2D(EncodingModel):
                               parameters[:, 6][:, None]], axis=1)
 
 class GaussianPRF2D(EncodingModel):
+    """2D Gaussian population receptive field on a pixel grid.
+
+    ``rf_normalization`` (ctor kwarg) sets the scale of the Gaussian
+    before ``amplitude`` multiplies it, and so what the amplitude means:
+
+    - ``'legacy'`` (default): divided by ``σ·√(2π) / pixel_area``.
+    - ``'peak'``: peak 1 (prfpy's ``normalize_RFs=False``); amplitude is
+      the drive per stimulated pixel at the pRF centre.
+    - ``'area'``: integral 1 over the visual field (``pixel_area /
+      (2π σ²)``); ``<stimulus, G>`` is the stimulated fraction of the pRF.
+
+    The three are reparameterisations of each other: with σ fixed,
+    amplitudes convert exactly by the ratio of the scale factors.
+    """
 
     parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude']
     stimulus_type = ImageStimulus
+    RF_NORMALIZATIONS = ('legacy', 'peak', 'area')
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO, **kwargs):
+                 weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO,
+                 rf_normalization='legacy', **kwargs):
 
+        if rf_normalization not in self.RF_NORMALIZATIONS:
+            raise ValueError(f'rf_normalization must be one of {self.RF_NORMALIZATIONS}, '
+                             f'got {rf_normalization!r}')
+        self.rf_normalization = rf_normalization
         self.data = data
         self.parameters = format_parameters(parameters)
         self.weights = weights
@@ -483,10 +503,17 @@ class GaussianPRF2D(EncodingModel):
         gauss = (ops.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
 
         if normalize:
-            norm_val = sd * ops.sqrt(ops.convert_to_tensor(2 * np.pi)) / self.pixel_area
-            gauss = gauss / norm_val
+            gauss = gauss * self._rf_scale(sd)
 
         return gauss
+
+    def _rf_scale(self, sd):
+        """Factor applied to a peak-1 Gaussian of width ``sd`` (see ``rf_normalization``)."""
+        if self.rf_normalization == 'peak':
+            return ops.ones_like(sd)
+        if self.rf_normalization == 'area':
+            return float(self.pixel_area) / (2 * np.pi * sd ** 2)
+        return float(self.pixel_area) / (sd * np.sqrt(2 * np.pi))
 
     def _transform_parameters_forward(self, parameters):
         return ops.concatenate([parameters[:, 0][:, None],
@@ -643,6 +670,19 @@ class DifferenceOfGaussiansPRF2D(GaussianPRF2D):
     transformations = ['identity', 'identity', 'softplus', 'identity',
                        'softplus', 'softplus', 'softplus']
 
+    # The parent Gaussian transforms cover only the first 5 columns.
+    def _transform_parameters_forward(self, parameters):
+        gauss_pars = GaussianPRF2D._transform_parameters_forward(self, parameters[:, :5])
+        srf_amplitude = ops.softplus(parameters[:, 5][:, None])
+        srf_size = ops.softplus(parameters[:, 6][:, None]) + 1.0   # surround wider than center
+        return ops.concatenate([gauss_pars, srf_amplitude, srf_size], axis=1)
+
+    def _transform_parameters_backward(self, parameters):
+        gauss_pars = GaussianPRF2D._transform_parameters_backward(self, parameters[:, :5])
+        srf_amplitude = softplus_inverse(parameters[:, 5][:, None])
+        srf_size = softplus_inverse(parameters[:, 6][:, None] - 1.0)
+        return ops.concatenate([gauss_pars, srf_amplitude, srf_size], axis=1)
+
     def _get_rf(self, grid_coordinates, parameters):
 
         mu_x = parameters[:, :, 0, None]
@@ -770,7 +810,7 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
 
             encoding_pars = DivisiveNormalizationGaussianPRF2D._transform_parameters_forward(self, parameters[:, :-n_hrf_pars-1])
             bold_baseline = parameters[:, -n_hrf_pars-1][:, None]
-            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars-1:])
+            hrf_pars = self.hrf_model._transform_parameters_forward(parameters[:, -n_hrf_pars:])
 
             return ops.concatenate([encoding_pars, bold_baseline, hrf_pars], axis=1)
         else:

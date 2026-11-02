@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.1 (2026-11-02)
+
+Bug-fix release.
+
+- **`DivisiveNormalizationGaussianPRF2DWithHRF` with `flexible_hrf_parameters=True`:** the
+  forward parameter transform passed `bold_baseline` and `hrf_delay` to the HRF model instead
+  of `hrf_delay` and `hrf_dispersion`. The fitted HRF delay was therefore a fixed function of
+  the BOLD baseline (`delay = range·sigmoid(bold_baseline) + min`) and the dispersion was driven
+  by the raw delay; backward/forward did not round-trip. **Refit any DN model fitted with a
+  flexible HRF.**
+- **`DifferenceOfGaussiansPRF2D`:** had no transforms of its own, so it inherited the
+  5-column Gaussian ones and dropped `srf_amplitude` / `srf_size`. It now transforms all 7
+  columns (`srf_amplitude > 0`, `srf_size > 1`).
+- **New `rf_normalization` option** on `GaussianPRF2D` and all subclasses:
+  `'legacy'` (default, unchanged: Gaussian divided by `σ·√(2π)/pixel_area`), `'peak'`
+  (peak 1, as prfpy's `normalize_RFs=False`) and `'area'` (integral 1). The three are exact
+  reparameterisations of the amplitudes; existing fits are unaffected.
+- Tests: parameter-transform round trips for all `*WithHRF` 2D PRF models; normalisation scales.
+
 ## 0.6.0 (2026-10-25)
 
 The headline of 0.6 is a new **per-voxel Gaussian likelihood** option in
