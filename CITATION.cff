@@ -13,7 +13,7 @@ authors:
   - name: "Tomas H. Knapen"
     orcid: "0000-0001-5863-8689"
 repository-code: "https://github.com/Gilles86/braincoder"
-date-released: "2026-10-25"
+date-released: "2026-11-02"
 abstract: |
   braincoder is a Python package designed to help researchers fit encoding models to neural data 
   and decode stimulus features from unseen neural data. It leverages computational modeling to 
