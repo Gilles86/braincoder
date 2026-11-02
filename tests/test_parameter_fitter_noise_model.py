@@ -80,7 +80,7 @@ def test_gaussian_populates_sigma2():
     fitter = ParameterFitter(model, data, paradigm, log_dir=False)
     fitter.fit(init_pars=init, max_n_iterations=200,
                 noise_model='gaussian', progressbar=False)
-    assert fitter.estimated_sigma2 is None
+    assert fitter.estimated_sigma2 is not None
     assert len(fitter.estimated_sigma2) == data.shape[1]
     assert (fitter.estimated_sigma2 > 0).all()
 
