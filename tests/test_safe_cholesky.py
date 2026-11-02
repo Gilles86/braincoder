@@ -20,6 +20,7 @@ tests pin down the contract:
   4. The fix is wired into ``EncodingModel.get_stimulus_pdf`` so
      callers don't have to remember to call safe_cholesky themselves.
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pytest
 from keras import ops
@@ -158,13 +159,13 @@ class TestSafeCholeskyIntegration:
             "amplitude": np.ones(n_vox),
             "baseline": np.zeros(n_vox),
         })
-        model = GaussianPRF(parameters=params)
+        model = Bound(GaussianPRF(), None, params)
         paradigm = pd.Series(rng.uniform(0, 10, n_trials), name="x")
         data = model.simulate(paradigm=paradigm, noise=0.5)
         # Borderline-PSD omega — would NaN under plain cholesky
         omega = _make_borderline_omega(n=n_vox, neg_eig=-1e-6).astype(np.float32)
         # Call the path that previously crashed
-        pdf = model.get_stimulus_pdf(data, omega=omega,
+        pdf = model.get_stimulus_pdf(data, parameters=params, omega=omega,
                                        stimulus_range=stim_grid,
                                        normalize=False)
         # No NaNs, finite output, right shape

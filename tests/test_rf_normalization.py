@@ -1,3 +1,4 @@
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -12,8 +13,7 @@ PIX = (G[1] - G[0]) ** 2
 
 def rf(norm, sd=1.3):
     pars = pd.DataFrame(dict(x=[0.], y=[0.], sd=[sd], baseline=[0.], amplitude=[1.])).astype(np.float32)
-    m = GaussianPRF2D(grid_coordinates=GRID, paradigm=np.zeros((2, len(GRID)), np.float32), parameters=pars,
-                      rf_normalization=norm)
+    m = Bound(GaussianPRF2D(grid_coordinates=GRID, rf_normalization=norm), np.zeros((2, len(GRID)), np.float32), pars)
     return m.get_rf().ravel()
 
 
@@ -33,16 +33,15 @@ def test_area_integrates_to_one():
 
 def test_unknown_normalization_raises():
     with pytest.raises(ValueError):
-        GaussianPRF2D(grid_coordinates=GRID, paradigm=np.zeros((2, len(GRID)), np.float32), rf_normalization='max')
+        Bound(GaussianPRF2D(grid_coordinates=GRID, rf_normalization='max'), np.zeros((2, len(GRID)), np.float32), None)
 
 
 def test_dn_peak_reparameterises_legacy():
     rng = np.random.default_rng(0)
     paradigm = (rng.random((60, len(GRID))) < .1).astype(np.float32)
     hrf = SPMHRFModel(tr=1.6)
-    legacy = DivisiveNormalizationGaussianPRF2DWithHRF(grid_coordinates=GRID, paradigm=paradigm, hrf_model=hrf)
-    peak = DivisiveNormalizationGaussianPRF2DWithHRF(grid_coordinates=GRID, paradigm=paradigm, hrf_model=hrf,
-                                                     rf_normalization='peak')
+    legacy = Bound(DivisiveNormalizationGaussianPRF2DWithHRF(grid_coordinates=GRID, hrf_model=hrf), paradigm, None)
+    peak = Bound(DivisiveNormalizationGaussianPRF2DWithHRF(grid_coordinates=GRID, hrf_model=hrf, rf_normalization='peak'), paradigm, None)
     p = pd.DataFrame(dict(x=[1.], y=[-.5], sd=[1.2], rf_amplitude=[2.], srf_amplitude=[.3], srf_size=[2.5],
                           neural_baseline=[.5], surround_baseline=[1.5], bold_baseline=[.1])).astype(np.float32)
     w = lambda s: PIX / (s * np.sqrt(2 * np.pi))

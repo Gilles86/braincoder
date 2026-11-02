@@ -18,7 +18,7 @@ VALUES = dict(x=1., y=-.5, sd=1.2, baseline=.3, amplitude=2., rf_amplitude=2., s
                                  DivisiveNormalizationGaussianPRF2DWithHRF])
 @pytest.mark.parametrize('flexible', [False, True])
 def test_transform_round_trip(cls, flexible):
-    model = cls(grid_coordinates=GRID, paradigm=np.zeros((5, len(GRID)), np.float32),
+    model = cls(grid_coordinates=GRID,
                 hrf_model=SPMHRFModel(tr=1.6), flexible_hrf_parameters=flexible)
     pars = np.array([[VALUES[k] for k in model.parameter_labels]], np.float32)
     from keras import ops

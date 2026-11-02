@@ -15,31 +15,33 @@ paradigm, instantiate a model, simulate data, and fit parameters.
 
     import numpy as np
     import pandas as pd
-    from braincoder.models import LinearModelWithBaseline
+    from braincoder.models import GaussianPRF
     from braincoder.optimize import ParameterFitter
 
     n_tp = 200
     paradigm = pd.DataFrame(
-        {"stimulus": np.sin(np.linspace(0, 4 * np.pi, n_tp))},
+        {"x": np.linspace(-5, 5, n_tp)},
         index=pd.Index(np.arange(n_tp), name="time"),
     )
 
     true_params = pd.DataFrame(
-        {"baseline": [0.0, 0.5]},
+        {"mu": [-1.0, 2.0], "sd": [1.0, 2.0], "amplitude": [1.0, 2.0], "baseline": [0.0, 0.5]},
         index=pd.Index(["voxel_1", "voxel_2"], name="voxel"),
     )
 
-    model = LinearModelWithBaseline(paradigm=paradigm, parameters=true_params)
-    simulated = model.simulate(
-        paradigm=paradigm,
-        parameters=true_params,
-        noise=0.1,
-    )
+    model = GaussianPRF()
+    simulated = model.simulate(paradigm, true_params, noise=0.1)
 
     fitter = ParameterFitter(model=model, data=simulated, paradigm=paradigm)
-    estimates = fitter.fit(max_n_iterations=200, learning_rate=0.05)
+    grid = fitter.fit_grid(mu=np.linspace(-4, 4, 17), sd=np.linspace(0.5, 3, 6),
+                           amplitude=[1.0], baseline=[0.0], use_correlation_cost=True)
+    init = fitter.refine_baseline_and_amplitude(grid)
+    estimates = fitter.fit(init_pars=init, max_n_iterations=500, progressbar=False)
 
     print(estimates)
+
+Models hold only their configuration. The paradigm, parameters, weights and noise
+model are passed to each method.
 
 More resources
 ==============
@@ -86,6 +88,7 @@ CSS, delayed normalization and connective fields.
    :maxdepth: 1
 
    whats_new
+   migration
    installation
    concepts
    fisher_information

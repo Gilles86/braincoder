@@ -1,13 +1,16 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "braincoder"
-version = "0.6.2"
-description = "A modern neuroimaging modeling package"
+version = "0.7.0"
+description = "Fit encoding models to fMRI data and invert them for Bayesian decoding"
 authors = [
-    {name = "Gilles de Hollander", email = "gilles.dehollander@gmail.com"}
+    {name = "Gilles de Hollander", email = "gilles.de.hollander@gmail.com"},
+    {name = "Maike Renkert"},
+    {name = "Christian C. Ruff"},
+    {name = "Tomas H. Knapen"}
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -24,8 +27,24 @@ dependencies = [
 ]
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["fMRI", "encoding models", "population receptive field", "pRF", "Bayesian decoding", "neuroimaging"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+
+[project.urls]
+Documentation = "https://braincoder-devs.github.io/"
+Source = "https://github.com/Gilles86/braincoder"
+Changelog = "https://github.com/Gilles86/braincoder/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+tensorflow = ["tensorflow>=2.16"]
+jax = ["jax"]
+torch = ["torch"]
 test = [
     "pytest",
 ]

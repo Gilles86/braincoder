@@ -52,14 +52,6 @@ class HRFModel(object):
                 raise NotImplementedError(f"Unknown transform: {t!r}")
         return ops.concatenate(out, axis=1)
 
-    def set_unique_hrfs(self, unique_hrfs):
-        self.unique_hrfs = unique_hrfs
-        self._convolve = self._convolve_unique if unique_hrfs else self._convolve_shared
-
-    def __init__(self, unique_hrfs=False):
-        self.unique_hrfs = unique_hrfs
-        self._convolve = self._convolve_unique if unique_hrfs else self._convolve_shared
-
     def convolve(self, timeseries, **kwargs):
         hrf = self.get_hrf(**kwargs)
         # Dispatch on HRF shape rather than stored state to avoid bugs when
@@ -171,7 +163,7 @@ class SPMHRFModel(HRFModel):
     parameter_labels = ['hrf_delay', 'hrf_dispersion']
     n_parameters = 2
 
-    def __init__(self, tr, unique_hrfs=False, highres_dt=0.1, time_length=32., onset=0.,
+    def __init__(self, tr, highres_dt=0.1, time_length=32., onset=0.,
                  delay=6., undershoot=16., dispersion=1.,
                  u_dispersion=1., ratio=0.167,
                  min_hrf_delay=3., max_hrf_delay=7.0,
@@ -199,7 +191,6 @@ class SPMHRFModel(HRFModel):
             bounded_sigmoid_transform(self.min_dispersion, self.max_dispersion),
         ]
 
-        super().__init__(unique_hrfs=unique_hrfs)
 
     def get_hrf(self, hrf_delay=None, hrf_dispersion=None):
 
@@ -223,7 +214,7 @@ class SPMHRFDerivativeModel(HRFModel):
     parameter_labels = ['delay_weight', 'dispersion_weight']
     n_parameters = 2
 
-    def __init__(self, tr, unique_hrfs=False, highres_dt=0.1, time_length=32., onset=0.,
+    def __init__(self, tr, highres_dt=0.1, time_length=32., onset=0.,
                  delay=6., dispersion=1., undershoot=16., u_dispersion=1., ratio=0.167,
                  max_weight=2.0):
         self.tr = tr
@@ -244,7 +235,6 @@ class SPMHRFDerivativeModel(HRFModel):
             bounded_sigmoid_transform(-self.max_weight, self.max_weight),
             bounded_sigmoid_transform(-self.max_weight, self.max_weight)
         ]
-        super().__init__(unique_hrfs=unique_hrfs)
 
     def get_hrf(self, delay_weight=0., dispersion_weight=0.):
         base_hrf = spm_hrf(self.time_stamps,

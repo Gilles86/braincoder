@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.7.0 (2026-11-02)
+
+**Breaking.** Models no longer hold data or fitted values. See the
+[migration guide](https://braincoder-devs.github.io/migration.html); most scripts need only
+a few mechanical edits, and old constructor arguments raise an error that points to it.
+
+### Models hold configuration only
+
+- Constructors no longer take `paradigm`, `data`, `parameters`, `weights` or `omega`, and models
+  have no such attributes. Pass them to each method: `model.predict(paradigm, parameters)`.
+- Fitters no longer write to the model. `ResidualFitter` used to overwrite `model.parameters` and
+  `model.weights`, and `StimulusFitter` `model.omega` and `model.dof`, so a model reused across
+  cross-validation folds could silently decode with the last fold's parameters. That can no
+  longer happen: leaving out `parameters` raises `ValueError`.
+- `get_stimulus_pdf` needs `omega` or `noise_model`, and never reads a stored `dof`.
+- `init_pseudoWWT` + `get_pseudoWWT()` become `get_pseudoWWT(stimulus_range, parameters)`, which
+  returns the matrix. `ResidualFitter.fit` takes `stimulus_range=` or `WWT=`.
+- `get_WWT(weights)` and `get_rf(parameters, ...)` take their inputs.
+- `to_linear_model(parameters)` returns `(model, parameters, weights)`, and
+  `to_xy_model(parameters)` returns `(model, parameters)`.
+- `RegressionGaussianPRF` and friends take `design_data=` (it only defines the design) and build
+  their design matrices from the paradigm of each call. `set_paradigm` is gone.
+- `CustomStimulusFitter` and `BarStimulusFitter` take `parameters=` and `weights=`.
+- `HRFModel` is no longer changed by the model using it: `unique_hrfs` and `set_unique_hrfs` are
+  gone, and the HRF's shape decides how it is applied.
+- `GaussianPRF2D` needs `grid_coordinates`. It used to guess them from a 3D paradigm.
+- Removed: `apply_mask`, and `to_discrete_model`, which could not run. `DiscreteModel` takes
+  `stimulus_values`.
+
+Fitters keep their results as attributes (`fitter.r2`, `fitter.estimated_parameters`,
+`fitter.r2_history_`). A fitter represents one fit; a model is reusable.
+
+### New defaults for `ParameterFitter.fit`
+
+- **`r2_atol=1e-4`** (was 1e-6). On large real data, 1e-6 was unreachable within 10,000
+  iterations, and 1e-4 was about 3x faster for under 0.001 of R² in the paper benchmark. Pass
+  `r2_atol=1e-6` for a tighter fit.
+- **`noise_model='gaussian'`** (was `'ssq'`), as announced in 0.6. Same optimum, faster
+  convergence with heteroskedastic noise. Pass `noise_model='ssq'` to reproduce older fits.
+
+### Other changes
+
+- **Available on PyPI:** `pip install "braincoder[tensorflow]"`, `[jax]` or `[torch]`.
+- **Torch on Apple GPUs (MPS):** the GP prior and `safe_cholesky` with float64 input now work. MPS has
+  no float64, so those steps run on the CPU and the rest stays on the GPU.
+- `fit()` without `init_pars` no longer crashes in `GaussianPRF.get_init_pars`, and a fit with a
+  regression model no longer crashes in its logging.
+- Models with a stimulus amplitude no longer fail on a 2-column numpy paradigm.
+
 ## 0.6.2 (2026-11-02)
 
 Bug-fix release: inputs that gave plausible-looking wrong results now give the right

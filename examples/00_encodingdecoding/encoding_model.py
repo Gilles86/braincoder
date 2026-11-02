@@ -23,17 +23,17 @@ parameters = pd.DataFrame(parameters, index=['voxel 1', 'voxel 2'])
 paradigm = np.linspace(-5, 5, 100)
 
 # Set up the model.
-model = GaussianPRF(paradigm=paradigm, parameters=parameters)
+model = GaussianPRF()
 
 # Extract and plot the predictions
-predictions = model.predict()
+predictions = model.predict(paradigm, parameters)
 predictions.index = pd.Index(paradigm, name='Stimulus value')
 ax = predictions.plot()
 
 # %%
 
 # We simulate data with a bit of noise
-data = model.simulate(noise=0.2)
+data = model.simulate(paradigm, parameters, noise=0.2)
 data.plot()
 # %%
 
@@ -67,7 +67,7 @@ grid_pars = optimizer.refine_baseline_and_amplitude(grid_pars)
 import matplotlib.pyplot as plt
 import seaborn as sns
 palette = sns.color_palette()
-grid_pred = model.predict(parameters=grid_pars)
+grid_pred = model.predict(paradigm, grid_pars)
 
 # See how well the predictions align with the data
 # using the explained variance statistic
@@ -81,7 +81,7 @@ plt.title(f'R2 = {r2_grid.mean():.2f}')
 
 # Final optimisation using gradient descent:
 gd_pars = optimizer.fit(init_pars=grid_pars, progressbar=False)
-gd_pred = model.predict(parameters=gd_pars)
+gd_pred = model.predict(paradigm, gd_pars)
 
 r2_gd = get_rsq(data, gd_pred)
 

@@ -3,6 +3,7 @@
 Tests cover: predict/simulate shapes and values, noiseless simulation,
 parameter recovery via ParameterFitter, and import paths.
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -122,32 +123,32 @@ class TestGaussianPRF:
 
     def test_predict_shape(self, gauss_paradigm, gauss_parameters):
         from braincoder.models import GaussianPRF
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=gauss_parameters)
+        model = Bound(GaussianPRF(), gauss_paradigm, gauss_parameters)
         pred = model.predict()
         assert pred.shape == (len(gauss_paradigm), len(gauss_parameters))
 
     def test_predict_finite(self, gauss_paradigm, gauss_parameters):
         from braincoder.models import GaussianPRF
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=gauss_parameters)
+        model = Bound(GaussianPRF(), gauss_paradigm, gauss_parameters)
         pred = model.predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_simulate_shape(self, gauss_paradigm, gauss_parameters):
         from braincoder.models import GaussianPRF
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=gauss_parameters)
+        model = Bound(GaussianPRF(), gauss_paradigm, gauss_parameters)
         sim = model.simulate(noise=0.1)
         assert sim.shape == (len(gauss_paradigm), len(gauss_parameters))
 
     def test_noiseless_simulate_equals_predict(self, gauss_paradigm, gauss_parameters):
         from braincoder.models import GaussianPRF
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=gauss_parameters)
+        model = Bound(GaussianPRF(), gauss_paradigm, gauss_parameters)
         pred = model.predict()
         sim = model.simulate(noise=0.0)
         np.testing.assert_allclose(sim.values, pred.values, rtol=1e-5, atol=1e-5)
 
     def test_noise_changes_output(self, gauss_paradigm, gauss_parameters):
         from braincoder.models import GaussianPRF
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=gauss_parameters)
+        model = Bound(GaussianPRF(), gauss_paradigm, gauss_parameters)
         pred = model.predict()
         sim = model.simulate(noise=1.0)
         assert not np.allclose(sim.values, pred.values)
@@ -162,7 +163,7 @@ class TestGaussianPRF:
             'amplitude': np.ones(3, dtype=np.float32),
             'baseline': np.zeros(3, dtype=np.float32),
         })
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=parameters)
+        model = Bound(GaussianPRF(), gauss_paradigm, parameters)
         pred = model.predict()
         stimulus_values = gauss_paradigm[:, 0]
         for i, mu in enumerate(mus):
@@ -178,25 +179,25 @@ class TestGaussianPRF2D:
 
     def test_predict_shape(self, image_paradigm, gauss2d_parameters):
         from braincoder.models import GaussianPRF2D
-        model = GaussianPRF2D(paradigm=image_paradigm, parameters=gauss2d_parameters)
+        model = Bound(GaussianPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, gauss2d_parameters)
         pred = model.predict()
         assert pred.shape == (len(image_paradigm), len(gauss2d_parameters))
 
     def test_predict_finite(self, image_paradigm, gauss2d_parameters):
         from braincoder.models import GaussianPRF2D
-        model = GaussianPRF2D(paradigm=image_paradigm, parameters=gauss2d_parameters)
+        model = Bound(GaussianPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, gauss2d_parameters)
         pred = model.predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_simulate_shape(self, image_paradigm, gauss2d_parameters):
         from braincoder.models import GaussianPRF2D
-        model = GaussianPRF2D(paradigm=image_paradigm, parameters=gauss2d_parameters)
+        model = Bound(GaussianPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, gauss2d_parameters)
         sim = model.simulate(noise=0.1)
         assert sim.shape == (len(image_paradigm), len(gauss2d_parameters))
 
     def test_noiseless_simulate_equals_predict(self, image_paradigm, gauss2d_parameters):
         from braincoder.models import GaussianPRF2D
-        model = GaussianPRF2D(paradigm=image_paradigm, parameters=gauss2d_parameters)
+        model = Bound(GaussianPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, gauss2d_parameters)
         pred = model.predict()
         sim = model.simulate(noise=0.0)
         np.testing.assert_allclose(sim.values, pred.values, rtol=1e-5, atol=1e-5)
@@ -211,10 +212,8 @@ class TestGaussianPRF2D:
         )
         grid = np.swapaxes(grid, 2, 1).reshape(2, -1).T
 
-        m_auto = GaussianPRF2D(paradigm=image_paradigm, parameters=gauss2d_parameters)
-        m_manual = GaussianPRF2D(
-            grid_coordinates=grid, paradigm=image_paradigm, parameters=gauss2d_parameters
-        )
+        m_auto = Bound(GaussianPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, gauss2d_parameters)
+        m_manual = Bound(GaussianPRF2D(grid_coordinates=grid), image_paradigm, gauss2d_parameters)
         np.testing.assert_allclose(
             m_auto.predict().values, m_manual.predict().values, rtol=1e-5, atol=1e-5
         )
@@ -228,14 +227,14 @@ class TestLinearModel:
 
     def test_predict_shape(self, linear_paradigm, linear_weights):
         from braincoder.models import LinearModel
-        model = LinearModel(paradigm=linear_paradigm)
+        model = Bound(LinearModel(), linear_paradigm, None)
         pred = model.predict(weights=linear_weights)
         assert pred.shape == (len(linear_paradigm), linear_weights.shape[1])
 
     def test_predict_equals_matmul(self, linear_paradigm, linear_weights):
         """predict() should equal paradigm @ weights exactly."""
         from braincoder.models import LinearModel
-        model = LinearModel(paradigm=linear_paradigm)
+        model = Bound(LinearModel(), linear_paradigm, None)
         pred = model.predict(weights=linear_weights)
         expected = linear_paradigm.values @ linear_weights.values
         np.testing.assert_allclose(pred.values, expected, rtol=1e-5, atol=1e-5)
@@ -243,7 +242,7 @@ class TestLinearModel:
     def test_rejects_parameters(self, linear_paradigm):
         from braincoder.models import LinearModel
         with pytest.raises(ValueError):
-            LinearModel(paradigm=linear_paradigm, parameters=pd.DataFrame({'x': [1.0]}))
+            LinearModel().predict(linear_paradigm, pd.DataFrame({'x': [1.0]}))
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +260,7 @@ class TestLinearModelWithBaseline:
 
     def test_predict_shape(self, linear_paradigm, linear_weights, baseline_parameters):
         from braincoder.models import LinearModelWithBaseline
-        model = LinearModelWithBaseline(paradigm=linear_paradigm, parameters=baseline_parameters)
+        model = Bound(LinearModelWithBaseline(), linear_paradigm, baseline_parameters)
         pred = model.predict(weights=linear_weights)
         assert pred.shape == (len(linear_paradigm), linear_weights.shape[1])
 
@@ -270,7 +269,7 @@ class TestLinearModelWithBaseline:
     ):
         """predict() should equal (paradigm @ weights) + baseline."""
         from braincoder.models import LinearModelWithBaseline
-        model = LinearModelWithBaseline(paradigm=linear_paradigm, parameters=baseline_parameters)
+        model = Bound(LinearModelWithBaseline(), linear_paradigm, baseline_parameters)
         pred = model.predict(weights=linear_weights)
         expected = (
             linear_paradigm.values @ linear_weights.values
@@ -282,7 +281,7 @@ class TestLinearModelWithBaseline:
         self, linear_paradigm, linear_weights, baseline_parameters
     ):
         from braincoder.models import LinearModelWithBaseline
-        model = LinearModelWithBaseline(paradigm=linear_paradigm, parameters=baseline_parameters)
+        model = Bound(LinearModelWithBaseline(), linear_paradigm, baseline_parameters)
         pred = model.predict(weights=linear_weights)
         sim = model.simulate(weights=linear_weights, noise=0.0)
         np.testing.assert_allclose(sim.values, pred.values, rtol=1e-5, atol=1e-5)
@@ -308,7 +307,7 @@ class TestParameterFitter:
             'baseline':  np.zeros(n_voxels, dtype=np.float32),
         })
 
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=true_pars)
+        model = Bound(GaussianPRF(), gauss_paradigm, true_pars)
         data = model.simulate(noise=0.1)
 
         fitter = ParameterFitter(model, data, gauss_paradigm)
@@ -334,7 +333,7 @@ class TestParameterFitter:
             'amplitude': np.ones(5, dtype=np.float32),
             'baseline':  np.zeros(5, dtype=np.float32),
         })
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=true_pars)
+        model = Bound(GaussianPRF(), gauss_paradigm, true_pars)
         data = model.simulate(noise=0.2)
 
         fitter = ParameterFitter(model, data, gauss_paradigm)
@@ -360,7 +359,7 @@ class TestWeightFitter:
         from braincoder.models import LinearModel
         from braincoder.optimize import WeightFitter
 
-        model = LinearModel(paradigm=linear_paradigm)
+        model = Bound(LinearModel(), linear_paradigm, None)
         # LinearModel.simulate() requires parameters; use predict() + manual DataFrame instead
         pred = model.predict(weights=linear_weights)
         data = pd.DataFrame(pred.values, columns=pred.columns, index=pred.index)

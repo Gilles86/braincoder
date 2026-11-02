@@ -1,8 +1,8 @@
 """Top-level package for braincoder."""
 
 __author__ = """Gilles de Hollander"""
-__email__ = 'giles.de.hollander@gmail.com'
-__version__ = '0.6.2'
+__email__ = 'gilles.de.hollander@gmail.com'
+__version__ = '0.7.0'
 
 from .models import (
     EncodingModel, EncodingRegressionModel, HRFEncodingModel,

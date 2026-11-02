@@ -13,10 +13,12 @@ These tests verify:
 1. Both modes recover the ground-truth θ at high iterations.
 2. Gaussian gets there faster on heteroskedastic noise (its raison
    d'être).
-3. The default is unchanged in 0.6 (still ``'ssq'``).
+3. The default is ``'gaussian'`` since 0.7.
 4. Invalid kwargs raise.
 """
 from __future__ import annotations
+
+from helpers import Bound, grid_for
 
 import numpy as np
 import pandas as pd
@@ -37,7 +39,7 @@ def _simulate(n_voxels=12, n_t=120, seed=0, hetero=False):
         'amplitude': np.full(n_voxels, 2.0, dtype=np.float32),
         'baseline':  np.zeros(n_voxels, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
 
     if hetero:
@@ -60,13 +62,13 @@ def _mu_rmse(fitted, truth):
 
 
 # ---------------------------------------------------------------- core tests
-def test_default_is_ssq():
-    """Back-compat: omitting ``noise_model`` runs the SSQ loss."""
+def test_default_is_gaussian():
+    """Since 0.7, omitting ``noise_model`` runs the Gaussian likelihood."""
     model, paradigm, data, _, init = _simulate(n_voxels=8, n_t=80)
     fitter = ParameterFitter(model, data, paradigm, log_dir=False)
     fitter.fit(init_pars=init, max_n_iterations=50, progressbar=False)
     # The Gaussian path sets self.estimated_sigma2; SSQ leaves it None.
-    assert fitter.estimated_sigma2 is None
+    assert fitter.estimated_sigma2 is not None
 
 
 def test_invalid_noise_model_raises():

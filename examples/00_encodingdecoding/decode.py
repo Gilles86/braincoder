@@ -27,8 +27,8 @@ parameters = pd.DataFrame({'mu':mu, 'sd':sd, 'amplitude':amplitude, 'baseline':b
 # We have a paradigm of random numbers between 0 and 100
 paradigm = np.ceil(np.random.rand(n_trials) * 100)
 
-model = GaussianPRF(parameters=parameters)
-data = model.simulate(paradigm=paradigm, noise=noise)
+model = GaussianPRF()
+data = model.simulate(paradigm, parameters, noise=noise)
 
 # %%
 
@@ -55,18 +55,17 @@ for par in ['mu', 'sd', 'amplitude', 'baseline']:
 # Now we fit the covariance matrix
 stimulus_range = np.arange(1, 100).astype(np.float32)
 
-model.init_pseudoWWT(stimulus_range=stimulus_range, parameters=gd_pars)
 resid_fitter = ResidualFitter(model, data, paradigm, gd_pars)
-omega, dof = resid_fitter.fit(progressbar=False)
+omega, dof = resid_fitter.fit(stimulus_range=stimulus_range, progressbar=False)
 
 # %%
 
 # Now we simulate unseen test data:
 test_paradigm = np.ceil(np.random.rand(n_trials) * 100)
-test_data = model.simulate(paradigm=test_paradigm, noise=noise)
+test_data = model.simulate(test_paradigm, parameters, noise=noise)
 
 # And decode the test paradigm
-posterior = model.get_stimulus_pdf(test_data, stimulus_range, model.parameters, omega=omega, dof=dof)
+posterior = model.get_stimulus_pdf(test_data, stimulus_range, gd_pars, omega=omega, dof=dof)
 # Rename the row index so it doesn't clash with the column index (both default to 'stimulus')
 posterior.index.name = 'frame'
 
@@ -128,7 +127,7 @@ plt.ylabel('Objective error')
 
 # Now, let's try to find the MAP estimate using gradient descent
 from braincoder.optimize import StimulusFitter
-stimulus_fitter = StimulusFitter(model=model, data=test_data, omega=omega)
+stimulus_fitter = StimulusFitter(model=model, data=test_data, omega=omega, parameters=gd_pars)
 
 # We start with a very coarse grid search, so we are sure we are in the right ballpark
 estimated_stimuli_grid = stimulus_fitter.fit_grid(np.arange(1, 100, 5))

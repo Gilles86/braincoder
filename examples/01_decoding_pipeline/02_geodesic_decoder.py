@@ -216,20 +216,20 @@ resid_df = pd.DataFrame(resid, columns=data.columns)
 # once over a dense stimulus grid and reuse it for both fits below.
 stim_grid_fit = pd.DataFrame({'n': np.linspace(10, 40, 31)})
 stim_grid_fit.index.name = 'stimulus'
-model.init_pseudoWWT(stim_grid_fit, pars)
+WWT = model.get_pseudoWWT(stim_grid_fit, pars)
 
 print('Fitting Ω without distance regularisation …')
 rf_std = ResidualFitter(model, data.iloc[train_idx],
                          paradigm[['n']].iloc[train_idx],
                          parameters=pars)
-omega_std, dof_std = rf_std.fit(method='t', init_dof=10.0,
+omega_std, dof_std = rf_std.fit(method='t', init_dof=10.0, WWT=WWT,
                                   max_n_iterations=400, progressbar=False)
 
 print('Fitting Ω with geodesic-distance regularisation …')
 rf_geo = ResidualFitter(model, data.iloc[train_idx],
                          paradigm[['n']].iloc[train_idx],
                          parameters=pars)
-omega_geo, dof_geo = rf_geo.fit(method='t', init_dof=10.0,
+omega_geo, dof_geo = rf_geo.fit(method='t', init_dof=10.0, WWT=WWT,
                                   D=D, init_alpha=0.5, init_beta=0.05,
                                   max_n_iterations=400, progressbar=False)
 print(f'  fitted dof:  std={dof_std:.1f}, geo={dof_geo:.1f}')

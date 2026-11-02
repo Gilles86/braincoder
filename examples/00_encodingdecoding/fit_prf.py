@@ -38,7 +38,7 @@ tr = data['tr']
 from braincoder.models import GaussianPRF2DWithHRF
 from braincoder.hrf import SPMHRFModel
 hrf_model = SPMHRFModel(tr=tr)
-model_gauss = GaussianPRF2DWithHRF(data=d, paradigm=paradigm, hrf_model=hrf_model, grid_coordinates=grid_coordinates)
+model_gauss = GaussianPRF2DWithHRF(hrf_model=hrf_model, grid_coordinates=grid_coordinates)
 
 # %%
 # And a parameter fitter...
@@ -101,7 +101,7 @@ plt.plot([0, 1], [0, 1], 'k--')
 # The standard canonical (SPM) HRF we use is often not a great fit to actual
 # data. To better account for the HRF. We can optimize the HRFs per voxel.
 # We first initialize a GaussianPRF-model with a flexible HRF.
-model_hrf = GaussianPRF2DWithHRF(data=d, paradigm=paradigm, hrf_model=hrf_model,
+model_hrf = GaussianPRF2DWithHRF(hrf_model=hrf_model,
                              grid_coordinates=grid_coordinates, flexible_hrf_parameters=True)
 
 par_fitter_hrf = ParameterFitter(model=model_hrf, data=d, paradigm=paradigm)
@@ -126,8 +126,8 @@ plt.plot([0, 1], [0, 1], 'k--')
 # HRFs have shorter delays than the default setting.
 improvement = r2_gauss_hrf - r2_gauss_gd
 largest_improvements = improvement.sort_values(ascending=False).index[:9]
-pred_gauss_gd = model_gauss.predict(parameters=pars_gauss_gd)
-pred_gauss_hrf = model_hrf.predict(parameters=pars_gauss_hrf)
+pred_gauss_gd = model_gauss.predict(paradigm, pars_gauss_gd)
+pred_gauss_hrf = model_hrf.predict(paradigm, pars_gauss_hrf)
 pred = pd.concat((d.loc[:, largest_improvements], pred_gauss_gd.loc[:, largest_improvements], pred_gauss_hrf.loc[:, largest_improvements]), axis=1, keys=['data', 'gauss', 'gauss+hrf'], names=['model'])
 
 #
@@ -145,7 +145,7 @@ sns.relplot(x='frame', y='value', hue='model', col='source', data=tmp.reset_inde
 # The inhibitory receptive field is subtracted from the excitatory one.
 # The resulting receptive field is then convolved with the HRF.
 from braincoder.models import DifferenceOfGaussiansPRF2DWithHRF
-model_dog = DifferenceOfGaussiansPRF2DWithHRF(data=d, paradigm=paradigm, hrf_model=hrf_model,
+model_dog = DifferenceOfGaussiansPRF2DWithHRF(hrf_model=hrf_model,
                                          grid_coordinates=grid_coordinates, flexible_hrf_parameters=True)
 
 pars_dog_init = pars_gauss_hrf.copy()
@@ -180,7 +180,7 @@ sns.relplot(x='r2_hrf', y='r2_dog_hrf', data=pd.concat((r2_gauss_hrf, r2_dog_hrf
 # imoproved the most.
 improvement = r2_dog_hrf - r2_gauss_hrf
 largest_improvements = improvement.sort_values(ascending=False).index[:9]
-pred_dog_hrf = model_dog.predict(parameters=pars_dog_hrf)
+pred_dog_hrf = model_dog.predict(paradigm, pars_dog_hrf)
 pred = pd.concat((d.loc[:, largest_improvements], pred_gauss_hrf.loc[:, largest_improvements], pred_dog_hrf.loc[:, largest_improvements]), axis=1, keys=['data', 'gauss+hrf', 'dog+hrf'], names=['model'])
 
 tmp = pred.stack(['model', 'source']).to_frame('value')
@@ -198,16 +198,13 @@ sns.relplot(x='frame', y='value', hue='model', col='source', data=tmp.reset_inde
 # by the sum of the excitatory and inhibitory receptive fields. 
 # The resulting receptive field is then convolved with the HRF.
 from braincoder.models import DivisiveNormalizationGaussianPRF2DWithHRF
-model_dn = DivisiveNormalizationGaussianPRF2DWithHRF(data=d,
-                                              paradigm=paradigm,
-                                              hrf_model=hrf_model,
+model_dn = DivisiveNormalizationGaussianPRF2DWithHRF(hrf_model=hrf_model,
                                               grid_coordinates=grid_coordinates,
                                               flexible_hrf_parameters=True)
 
-pars_dn_init = pars_dog_hrf.copy()
+pars_dn_init = pars_dog_hrf.rename(columns={'amplitude': 'rf_amplitude', 'baseline': 'bold_baseline'})
 pars_dn_init['srf_amplitude'] = 0.01
 pars_dn_init['srf_size'] = 2.
-pars_dn_init['baseline'] = 0.0
 pars_dn_init['neural_baseline'] = 1.0
 pars_dn_init['surround_baseline'] = 1.0
 
@@ -230,7 +227,7 @@ plt.plot([0, 1], [0, 1], 'k--')
 improvement = r2_dn - r2_dog_hrf
 largest_improvements = improvement.sort_values(ascending=False).index[:9]
 
-pred_dn = model_dn.predict(parameters=pars_dn)
+pred_dn = model_dn.predict(paradigm, pars_dn)
 pred = pd.concat((d.loc[:, largest_improvements], pred_dog_hrf.loc[:, largest_improvements], pred_dn.loc[:, largest_improvements]), axis=1, keys=['data', 'dog+hrf', 'dn+hrf'], names=['model'])
 
 tmp = pred.stack(['model', 'source']).to_frame('value')
@@ -251,10 +248,8 @@ from braincoder.optimize import ResidualFitter, StimulusFitter
 
 best_voxels_gauss = r2_gauss_gd[pars_gauss_gd['sd'] > 0.5].sort_values(ascending=False).index[:100]
 
-model_gauss = GaussianPRF2DWithHRF(data=d[best_voxels_gauss],
-                                   hrf_model=hrf_model,
-                                   grid_coordinates=grid_coordinates.astype(np.float32),
-                                   parameters=pars_gauss_gd.loc[best_voxels_gauss].astype(np.float32))
+model_gauss = GaussianPRF2DWithHRF(hrf_model=hrf_model,
+                                   grid_coordinates=grid_coordinates.astype(np.float32))
 
 resid_fitter_gauss = ResidualFitter(model=model_gauss, data=d.loc[:, best_voxels_gauss],
                                     paradigm=paradigm.astype(np.float32), parameters=pars_gauss_gd.loc[best_voxels_gauss].astype(np.float32))
@@ -269,10 +264,8 @@ omega_gauss, _ = resid_fitter_gauss.fit()
 # %%
 best_voxels_dn = r2_dn[pars_dn['sd'] > 0.5].sort_values(ascending=False).index[:100]
 
-model_dn = DivisiveNormalizationGaussianPRF2DWithHRF(data=d[best_voxels_dn], 
-                                              hrf_model=hrf_model,
-                                              grid_coordinates=grid_coordinates.astype(np.float32),
-                                              parameters=pars_dn.loc[best_voxels_dn].astype(np.float32))
+model_dn = DivisiveNormalizationGaussianPRF2DWithHRF(hrf_model=hrf_model,
+                                              grid_coordinates=grid_coordinates.astype(np.float32))
 
 resid_fitter_dn = ResidualFitter(model=model_dn, data=d.loc[:, best_voxels_dn],
                                     paradigm=paradigm, parameters=pars_dn.loc[best_voxels_dn])
@@ -283,7 +276,8 @@ omega_dn, _ = resid_fitter_dn.fit()
 # Decoded stimulus: Gaussian model
 # ===============================
 # Now we can decode the stimulus from the fMRI responses
-stim_fitter_gauss = StimulusFitter(model=model_gauss, data=d.loc[:, best_voxels_gauss], omega=omega_gauss)
+stim_fitter_gauss = StimulusFitter(model=model_gauss, data=d.loc[:, best_voxels_gauss], omega=omega_gauss,
+                                   parameters=pars_gauss_gd.loc[best_voxels_gauss].astype(np.float32))
 stim_gauss = stim_fitter_gauss.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=250)
 
 # %%
@@ -314,7 +308,8 @@ play_reconstruction(stim_gauss)
 # %%
 # Decoded stimulus: DN model
 # ==========================
-stim_fitter_dn = StimulusFitter(model=model_dn, data=d.loc[:, best_voxels_dn], omega=omega_dn)
+stim_fitter_dn = StimulusFitter(model=model_dn, data=d.loc[:, best_voxels_dn], omega=omega_dn,
+                                parameters=pars_dn.loc[best_voxels_dn].astype(np.float32))
 stim_dn = stim_fitter_dn.fit(l2_norm=0.01, learning_rate=0.01, max_n_iterations=250)
 
 # %%

@@ -29,7 +29,7 @@ class ResidualFitter(object):
        held-out noise (held-out Mahalanobis distances ~4× too large on 7T
        data), giving overconfident decoding posteriors. ``lambd > 0`` is
        unsafe when n_voxels > n_trials (rank-deficient sample covariance).
-       The pseudo-WWᵀ from ``init_pseudoWWT`` is uncentred. For calibrated
+       The pseudo-WWᵀ from ``get_pseudoWWT`` is uncentred. For calibrated
        decoding see :class:`braincoder.noise.LowRankNoise` and the
        "Noise models for decoding" docs page.
     """
@@ -41,15 +41,8 @@ class ResidualFitter(object):
         self.lambd = lambd
 
         self.paradigm = self.model.get_paradigm(paradigm)
-
-        if parameters is None:
-            if self.model.parameters is None:
-                raise ValueError('Need to have parameters')
-        else:
-            self.model.parameters = parameters
-
-        if weights is not None:
-            self.model.weights = weights
+        self.parameters = parameters
+        self.weights = weights
 
     def fit(self, init_rho=.1, init_tau=None, init_dof=1., init_sigma2=1e-3, D=None, max_n_iterations=1000,
             resid_dist='gauss',
@@ -63,7 +56,9 @@ class ResidualFitter(object):
             init_beta=0.0,
             spherical=False,
             progressbar=True,
-            max_consecutive_failures=50):
+            max_consecutive_failures=50,
+            stimulus_range=None,
+            WWT=None):
         """``use_wwt`` (default True): include the ``σ² · WᵀW`` term in
         Ω. When False, Ω is built without the tuning-similarity
         contribution — useful for testing whether ``WᵀW`` is doing
@@ -71,6 +66,10 @@ class ResidualFitter(object):
         signal-correlation structure that interacts with regularized
         encoding fits. ``σ²`` stays in the trainable set but has zero
         effect on Ω (gradient → 0; Adam leaves it inert).
+
+        The ``WWT`` term comes from, in order: the ``WWT`` argument; the
+        ``weights`` of the fitter; or the model's pseudo-WWT, which needs
+        ``stimulus_range`` for models that are not image-based.
 
         Failure handling: a step whose cost or gradients are non-finite,
         or which raises a numerical error (e.g. a Cholesky failure), is
@@ -90,7 +89,7 @@ class ResidualFitter(object):
                              'cannot be fitted to an empty selection.')
 
         if residuals is None:
-            predictions = self.model.predict(paradigm=self.paradigm)
+            predictions = self.model.predict(self.paradigm, self.parameters, self.weights)
             if len(predictions) != len(self.data):
                 raise ValueError(f'paradigm has {len(predictions)} rows but data '
                                  f'has {len(self.data)}.')
@@ -152,11 +151,16 @@ class ResidualFitter(object):
                                      name='sigma2_trans', dtype='float32')
 
             if use_wwt:
-                if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
-                    print('USING A PSEUDO-WWT!')
-                    WWT = self.model.get_pseudoWWT()
-                else:
-                    WWT = self.model.get_WWT()
+                if WWT is None:
+                    if self.weights is not None:
+                        WWT = self.model.get_WWT(self.weights)
+                    else:
+                        if stimulus_range is None and self.model.pseudo_wwt_needs_stimulus_range:
+                            raise ValueError(
+                                'ResidualFitter needs a stimulus_range to build the pseudo-WWT from '
+                                'parameters: call fit(stimulus_range=...). Alternatively, pass WWT=..., '
+                                'pass weights to the fitter, or use use_wwt=False.')
+                        WWT = self.model.get_pseudoWWT(stimulus_range, self.parameters)
 
                 import pandas as pd
                 if isinstance(WWT, (pd.DataFrame, pd.Series)):

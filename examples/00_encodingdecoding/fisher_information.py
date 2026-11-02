@@ -50,8 +50,8 @@ paradigm = pd.Series(np.linspace(-2, 12, 100, dtype=np.float32))
 # For now let's assume the noise is spherical
 omega = np.identity(len(parameters)).astype(np.float32)
 
-model = GaussianPRF(parameters=parameters, paradigm=paradigm)
-data = model.predict(paradigm=paradigm).set_index(pd.Index(paradigm, name='stimulus'))
+model = GaussianPRF()
+data = model.predict(paradigm, parameters).set_index(pd.Index(paradigm, name='stimulus'))
 data = data.stack().to_frame('strength')
 data.index.set_names('rf', level=1, inplace=True)
 
@@ -70,7 +70,7 @@ sns.despine()
 # derivative of the log-likelihood with respect to the stimulus using autodiff.
 # %
 
-fisher_information = model.get_fisher_information(stimuli=np.linspace(-5, 15, 1000).astype(np.float32), omega=omega, dof=None, n=5000).to_frame()
+fisher_information = model.get_fisher_information(stimuli=np.linspace(-5, 15, 1000).astype(np.float32), omega=omega, parameters=parameters, dof=None, n=5000).to_frame()
 
 sns.lineplot(x='stimulus', y='Fisher information', data=fisher_information.reset_index(), color='k')
 sns.despine()
@@ -94,8 +94,8 @@ sns.despine()
 
 omega_correlated = omega + .5 - .5*np.identity(len(parameters))
 
-fisher_information_uncorrelated = model.get_fisher_information(stimuli=np.linspace(-5, 15, 1000).astype(np.float32), omega=omega.astype(np.float32), dof=None, n=5000).to_frame()
-fisher_information_correlated = model.get_fisher_information(stimuli=np.linspace(-5, 15, 1000).astype(np.float32), omega=omega_correlated.astype(np.float32), dof=None, n=5000).to_frame()
+fisher_information_uncorrelated = model.get_fisher_information(stimuli=np.linspace(-5, 15, 1000).astype(np.float32), omega=omega.astype(np.float32), parameters=parameters, dof=None, n=5000).to_frame()
+fisher_information_correlated = model.get_fisher_information(stimuli=np.linspace(-5, 15, 1000).astype(np.float32), omega=omega_correlated.astype(np.float32), parameters=parameters, dof=None, n=5000).to_frame()
 
 fisher_information = pd.concat((fisher_information_uncorrelated, fisher_information_correlated), axis=0, keys=['uncorrelated', 'correlated'], names=['correlation'])
 
@@ -112,12 +112,12 @@ sns.despine()
 import matplotlib.pyplot as plt
 
 paradigm = np.repeat(np.linspace(-2, 12, 50, dtype=np.float32), 100)
-simulated_data = model.simulate(paradigm=paradigm, noise=omega)
+simulated_data = model.simulate(paradigm, parameters, noise=omega)
 omega = np.identity(len(parameters)).astype(np.float32)
 
 
 
-pdf = model.get_stimulus_pdf(simulated_data, np.linspace(-5, 15, 100), omega=omega)
+pdf = model.get_stimulus_pdf(simulated_data, np.linspace(-5, 15, 100), parameters, omega=omega)
 E = np.trapezoid(pdf*pdf.columns.values[np.newaxis, :], x=pdf.columns, axis=1)
 error = np.sqrt((paradigm - E)**2)
 error = pd.Series(error, index=pd.Index(paradigm, name='stimulus')).to_frame('error')
@@ -162,8 +162,8 @@ set_labels = ['Unequally distributed mus', 'Equally distributed mus', 'Smaller d
 # Make predictions
 preds = []
 for set, pars in parameter_sets.groupby('set'):
-    model = GaussianPRF(parameters=pars.droplevel(0), paradigm=paradigm)
-    pred = model.predict(paradigm=paradigm).set_index(pd.Index(paradigm, name='stimulus'))
+    model = GaussianPRF()
+    pred = model.predict(paradigm, pars.droplevel(0)).set_index(pd.Index(paradigm, name='stimulus'))
     preds.append(pred)
 
 preds = pd.concat(preds, keys=set_labels, axis=0, names=['set'])
@@ -173,9 +173,9 @@ fis = []
 
 stimuli = np.linspace(-5, 15, 200, dtype=np.float32)
 for set, pars in parameter_sets.groupby('set'):
-    model = GaussianPRF(parameters=pars.droplevel(0), paradigm=paradigm)
+    model = GaussianPRF()
     omega = np.identity(len(pars)).astype(np.float32)
-    fi = model.get_fisher_information(stimuli=stimuli, omega=omega, n=10000).to_frame("fisher information").set_index(pd.Index(stimuli, name='stimulus'))
+    fi = model.get_fisher_information(stimuli=stimuli, omega=omega, parameters=pars.droplevel(0), n=10000).to_frame("fisher information").set_index(pd.Index(stimuli, name='stimulus'))
     fis.append(fi)
 
 fis = pd.concat(fis, keys=set_labels, axis=0, names=['set'])
@@ -217,8 +217,8 @@ parameters = pd.DataFrame({'mu':mus, 'sd':25., 'baseline':0.0, 'amplitude':1.0})
 
 # Set up model and paradigm and plot the receptive fields
 paradigm = np.linspace(0, 100, 100, dtype=np.float32)
-model = LogGaussianPRF(parameters=parameters, paradigm=paradigm)
-y = model.predict(paradigm=paradigm)
+model = LogGaussianPRF()
+y = model.predict(paradigm, parameters)
 
 y.plot(c='k', legend=False, alpha=0.5)
 sns.despine()
@@ -226,7 +226,7 @@ plt.title('Receptive fields')
 
 # Calculate Fisher information
 omega = np.identity(len(parameters)).astype(np.float32)
-fisher_information = model.get_fisher_information(stimuli=np.linspace(5, 100, 1000).astype(np.float32), omega=omega, n=5000).to_frame()
+fisher_information = model.get_fisher_information(stimuli=np.linspace(5, 100, 1000).astype(np.float32), omega=omega, parameters=parameters, n=5000).to_frame()
 
 fisher_information['sqrt(fi)'] = np.sqrt(fisher_information['Fisher information'])
 
@@ -252,14 +252,14 @@ parameters = pd.DataFrame({'mu':mus, 'sd':25., 'baseline':0.0, 'amplitude':1.0})
 
 # Set up model and paradigm and plot the receptive fields
 paradigm = np.linspace(0, 100, 100, dtype=np.float32)
-model = LogGaussianPRF(parameters=parameters, paradigm=paradigm)
-y = model.predict(paradigm=paradigm)
+model = LogGaussianPRF()
+y = model.predict(paradigm, parameters)
 
 y.plot(c='k', legend=False)
 
 # Calculate Fisher information
 omega = np.identity(len(parameters)).astype(np.float32)
-fisher_information = model.get_fisher_information(stimuli=np.linspace(5, 100, 1000).astype(np.float32), omega=omega, n=5000).to_frame()
+fisher_information = model.get_fisher_information(stimuli=np.linspace(5, 100, 1000).astype(np.float32), omega=omega, parameters=parameters, n=5000).to_frame()
 
 fisher_information['sqrt(fi)'] = np.sqrt(fisher_information['Fisher information'])
 

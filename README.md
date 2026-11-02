@@ -20,7 +20,13 @@ single [Keras 3](https://keras.io)-based toolkit that runs on TensorFlow, JAX, o
 
 ## Installation
 
-The quickest way to get started is with conda/mamba. Clone the repo, then create the environment:
+```bash
+pip install "braincoder[tensorflow]"   # or [jax], or [torch]
+```
+
+Pin the version in your project's environment, e.g. `braincoder[tensorflow]==0.7.0`, so that its results stay reproducible.
+
+For development, use conda/mamba. Clone the repo, then create the environment:
 
 ```bash
 git clone https://github.com/Gilles86/braincoder.git
@@ -29,7 +35,7 @@ conda env create -f environment.yml
 conda activate braincoder
 ```
 
-This installs braincoder in editable mode (`pip install -e .`) along with a TensorFlow backend and dev tools. braincoder is not on PyPI; to use it in a project, pin a release with `pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" tensorflow`. See the [installation docs](https://braincoder-devs.github.io/installation.html) for other backends (JAX, PyTorch) and pip-only setups.
+This installs braincoder in editable mode (`pip install -e .`) along with a TensorFlow backend and dev tools. See the [installation docs](https://braincoder-devs.github.io/installation.html) for other backends (JAX, PyTorch) and pip-only setups.
 
 ## Quick start
 

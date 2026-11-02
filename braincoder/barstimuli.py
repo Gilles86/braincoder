@@ -14,15 +14,17 @@ class BarStimulusFitter(StimulusFitter):
     def __init__(self, data, model, grid_coordinates, omega, dof=None,
                  max_radius=None, max_width=None, bar_intensity=1.0,
                  max_intensity=None,
-                 baseline_image=None):
+                 baseline_image=None, parameters=None, weights=None):
 
         self.data = data
         self.model = model
         self.grid_coordinates = pd.DataFrame(
             grid_coordinates, columns=['x', 'y'])
-        self.model.omega = omega
-        self.model.omega_chol = tf.linalg.cholesky(omega).numpy()
-        self.model.dof = dof
+        self.omega = omega
+        self.omega_chol = tf.linalg.cholesky(omega).numpy()
+        self.dof = dof
+        self.parameters = model._get_parameters(parameters)
+        self.weights = weights
         self.bar_intensity = bar_intensity
 
         if max_intensity is None:
@@ -55,9 +57,6 @@ class BarStimulusFitter(StimulusFitter):
         self.max_radius = np.float32(self.max_radius)
         self.max_width = np.float32(self.max_width)
 
-        if self.model.weights is None:
-            self.model.weights
-
     def fit_grid(self, x, y, width, parameterization='xy', include_xy=True):
 
         if parameterization == 'xy':
@@ -86,8 +85,8 @@ class BarStimulusFitter(StimulusFitter):
 
         data = self.data.values
         model = self.model
-        parameters = self.model.parameters.values[np.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[np.newaxis, ...]
+        parameters = self.parameters.values[np.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[np.newaxis, ...]
 
         if hasattr(self.model, 'hrf_model'):
 
@@ -112,8 +111,8 @@ class BarStimulusFitter(StimulusFitter):
             ll = self.model._likelihood_timeseries(data[tf.newaxis, ...],
                                                    ts_prediction_summed_over_hrf[:,
                                                                                  tf.newaxis, :],
-                                                   self.model.omega_chol,
-                                                   self.model.dof,
+                                                   self.omega_chol,
+                                                   self.dof,
                                                    logp=True,
                                                    normalize=False)
 
@@ -124,7 +123,7 @@ class BarStimulusFitter(StimulusFitter):
             bars = bars[:, tf.newaxis, :]
 
             ll = self.model._likelihood(bars, data[tf.newaxis, ...], parameters, weights,
-                                        self.model.omega_chol, self.model.dof, logp=True)
+                                        self.omega_chol, self.dof, logp=True)
         ll = pd.DataFrame(ll.numpy().T, columns=pd.MultiIndex.from_frame(grid))
 
         best_pars = ll.columns.to_frame().iloc[ll.values.argmax(1)]
@@ -325,8 +324,8 @@ class BarStimulusFitter(StimulusFitter):
         data = self.data.values[tf.newaxis, ...]
         grid_coordinates = self.grid_coordinates
         model = self.model
-        parameters = self.model.parameters.values[tf.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[tf.newaxis, ...]
+        parameters = self.parameters.values[tf.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[tf.newaxis, ...]
 
         if self.baseline_image is None:
             @tf.function
@@ -357,7 +356,7 @@ class BarStimulusFitter(StimulusFitter):
                     bars = add_baseline(bars)
 
                     ll = self.model._likelihood(
-                        bars, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                        bars, data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
 
@@ -378,7 +377,7 @@ class BarStimulusFitter(StimulusFitter):
                     bars = add_baseline(bars)
 
                     ll = self.model._likelihood(
-                        bars, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                        bars, data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
             else:
@@ -414,7 +413,7 @@ class BarStimulusFitter(StimulusFitter):
                                              size_)
 
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                     sll = tf.reduce_sum(ll, 1)
 
@@ -445,7 +444,7 @@ class BarStimulusFitter(StimulusFitter):
                                              size_)
 
                     ll = self.model._likelihood(
-                        stimulus, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                        stimulus, data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                     sll = tf.reduce_sum(ll, 1)
 

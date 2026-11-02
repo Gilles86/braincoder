@@ -1,5 +1,5 @@
 """
-Unit tests for the subtract_baseline option in GaussianPRF.init_pseudoWWT.
+Unit tests for the subtract_baseline option in GaussianPRF.get_pseudoWWT.
 
 The covariance model used in decoding is:
     omega = rho * tau^T tau + (1-rho) * diag(tau^2) + sigma2 * WWT
@@ -53,8 +53,8 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=10)
         stim = make_1d_stimulus_range()
 
-        WWT_raw = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=False))
-        WWT_sub = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
+        WWT_raw = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=False))
+        WWT_sub = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=True))
 
         assert not np.allclose(WWT_raw, WWT_sub), (
             "WWT should differ between subtract=True and subtract=False "
@@ -72,7 +72,7 @@ class TestSubtractWtBaseline:
         W_corrected = W - baseline[np.newaxis, :]                  # broadcast subtract
         expected_WWT = W_corrected.T @ W_corrected                 # (n_voxels, n_voxels)
 
-        actual_WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
+        actual_WWT = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=True))
 
         np.testing.assert_allclose(
             actual_WWT, expected_WWT, rtol=1e-5, atol=1e-6,
@@ -115,7 +115,7 @@ class TestSubtractWtBaseline:
         W2_corrected = W2 - baseline_col[np.newaxis, :]
         expected_WWT = W2_corrected.T @ W2_corrected
 
-        actual_WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params2, subtract_baseline=True))
+        actual_WWT = ops.convert_to_numpy(model.get_pseudoWWT(stim, params2, subtract_baseline=True))
 
         np.testing.assert_allclose(
             actual_WWT, expected_WWT, rtol=1e-3, atol=1e-4,
@@ -129,8 +129,8 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=n_voxels, baseline_values=np.zeros(n_voxels))
         stim = make_1d_stimulus_range()
 
-        WWT_raw = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=False))
-        WWT_sub = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
+        WWT_raw = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=False))
+        WWT_sub = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=True))
 
         np.testing.assert_allclose(
             WWT_raw, WWT_sub, rtol=1e-5, atol=1e-6,
@@ -150,8 +150,8 @@ class TestSubtractWtBaseline:
         params_high['baseline'] = params_high['baseline'] + 5.0
         stim = make_1d_stimulus_range()
 
-        WWT_low = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_low,  subtract_baseline=True))
-        WWT_high = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_high, subtract_baseline=True))
+        WWT_low = ops.convert_to_numpy(model.get_pseudoWWT(stim, params_low,  subtract_baseline=True))
+        WWT_high = ops.convert_to_numpy(model.get_pseudoWWT(stim, params_high, subtract_baseline=True))
 
         np.testing.assert_allclose(
             WWT_low, WWT_high, rtol=1e-5, atol=1e-5,
@@ -173,32 +173,12 @@ class TestSubtractWtBaseline:
         params_high['baseline'] = params_high['baseline'] + 5.0
         stim = make_1d_stimulus_range()
 
-        WWT_low  = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_low,  subtract_baseline=False))
-        WWT_high = ops.convert_to_numpy(model.init_pseudoWWT(stim, params_high, subtract_baseline=False))
+        WWT_low  = ops.convert_to_numpy(model.get_pseudoWWT(stim, params_low,  subtract_baseline=False))
+        WWT_high = ops.convert_to_numpy(model.get_pseudoWWT(stim, params_high, subtract_baseline=False))
 
         assert not np.allclose(WWT_low, WWT_high), (
             "WWT(subtract=False) must change when baseline shifts, "
             "demonstrating the contamination."
-        )
-
-    def test_cache_overwritten_by_second_call(self):
-        """
-        init_pseudoWWT overwrites the cached _pseudoWWT.
-        get_pseudoWWT() must reflect the most recent call.
-        """
-        model = GaussianPRF()
-        params = make_gauss_params(n_voxels=6)
-        stim = make_1d_stimulus_range()
-
-        model.init_pseudoWWT(stim, params, subtract_baseline=False)
-        WWT_raw = ops.convert_to_numpy(model.get_pseudoWWT()).copy()
-
-        model.init_pseudoWWT(stim, params, subtract_baseline=True)
-        WWT_sub = ops.convert_to_numpy(model.get_pseudoWWT()).copy()
-
-        # The two cached values should differ (nonzero baseline)
-        assert not np.allclose(WWT_raw, WWT_sub), (
-            "Cached _pseudoWWT should be updated on each init_pseudoWWT call."
         )
 
     def test_WWT_is_positive_semidefinite_after_subtraction(self):
@@ -210,7 +190,7 @@ class TestSubtractWtBaseline:
         params = make_gauss_params(n_voxels=15)
         stim = make_1d_stimulus_range()
 
-        WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
+        WWT = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=True))
         eigvals = np.linalg.eigvalsh(WWT)
 
         assert np.all(eigvals >= -1e-5), (
@@ -231,7 +211,7 @@ class TestSubtractWtBaseline:
         W_corrected = W - baselines[np.newaxis, :]
         expected_WWT = W_corrected.T @ W_corrected
 
-        actual_WWT = ops.convert_to_numpy(model.init_pseudoWWT(stim, params, subtract_baseline=True))
+        actual_WWT = ops.convert_to_numpy(model.get_pseudoWWT(stim, params, subtract_baseline=True))
 
         np.testing.assert_allclose(
             actual_WWT, expected_WWT, rtol=1e-3, atol=1e-4,
@@ -251,7 +231,6 @@ def make_residual_fitter(n_voxels=5, n_trials=40, lambd=0.5, seed=0):
         rng.normal(size=(n_trials, n_voxels)).astype(np.float32),
         columns=[f'v{i}' for i in range(n_voxels)]
     )
-    model.parameters = params
     return ResidualFitter(model, data, stim_df, parameters=params, lambd=lambd)
 
 class TestOmegaLambda:

@@ -30,7 +30,7 @@ weights = np.array([[1, 0, 1],
                     [0, 0, 1],
                     [0, 0, 1]]).astype(np.float32)
 
-model = VonMisesPRF(parameters=parameters, weights=weights)
+model = VonMisesPRF()
 # %%
 
 # Plot the basis functions
@@ -45,7 +45,7 @@ _ = plt.plot(orientations, basis_responses)
 
 # Plot the predicted responses for the 3 voxels
 # Each voxel timeseries is a weighted sum of the six basis functions
-pred = model.predict(paradigm=orientations)
+pred = model.predict(orientations, parameters, weights)
 _ = plt.plot(orientations, pred)
 
 # %%
@@ -55,14 +55,14 @@ from braincoder.optimize import WeightFitter
 from braincoder.utils import get_rsq
 
 # Simulate data
-data = model.simulate(paradigm=orientations, noise=0.1)
+data = model.simulate(orientations, parameters, weights, noise=0.1)
 
 # Fit the weights
 weight_fitter = WeightFitter(model, parameters, data, orientations)
 estimated_weights = weight_fitter.fit(alpha=0.1)
 
 # Get predictions for the fitted weights
-pred = model.predict(paradigm=orientations, weights=estimated_weights)
+pred = model.predict(orientations, parameters, estimated_weights)
 r2 = get_rsq(data, pred)
 
 # Plot the data and the predictions

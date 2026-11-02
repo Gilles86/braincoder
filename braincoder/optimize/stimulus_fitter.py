@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 from tqdm.auto import tqdm
-from ..utils import format_data
+from ..utils import format_data, format_weights
 from ..stimuli import ImageStimulus
 import logging
 from tensorflow_probability import bijectors as tfb
@@ -15,19 +15,15 @@ class StimulusFitter(object):
 
         self.data = format_data(data)
         self.model = model
-        self.model.omega = omega
-        self.model.dof = dof
+        self.omega = omega
+        self.dof = dof
+        self.parameters = model._get_parameters(parameters)
+        self.weights = format_weights(weights)
 
         if stimulus is None:
             self.stimulus = self.model.stimulus
 
         self.single_bijector = not isinstance(self.stimulus.bijectors, list)
-
-        if parameters is not None:
-            self.model.parameters = parameters
-
-        if weights is not None:
-            self.model.weights = weights
 
     def fit(self, init_pars=None, fit_vars=None, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6, learning_rate=0.01, progressbar=True,
             l2_norm=None,
@@ -173,10 +169,10 @@ class StimulusFitter(object):
     def build_likelihood(self, use_batch_dimension=False, use_mask=False, mask_ix=None):
 
         data = self.data.values[tf.newaxis, ...]
-        parameters = self.model.parameters.values[tf.newaxis, ...]
-        weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
+        parameters = self.parameters.values[tf.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[tf.newaxis, ...]
         from ..utils.backend import safe_cholesky
-        omega_chol = np.array(safe_cholesky(tf.convert_to_tensor(self.model.omega, dtype=tf.float32)))
+        omega_chol = np.array(safe_cholesky(tf.convert_to_tensor(self.omega, dtype=tf.float32)))
 
         if use_mask:
             if use_batch_dimension:
@@ -194,7 +190,7 @@ class StimulusFitter(object):
 
                     stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
 
@@ -206,7 +202,7 @@ class StimulusFitter(object):
                     pars = tf.stack(pars, axis=1)
                     stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return ll
 
@@ -217,7 +213,7 @@ class StimulusFitter(object):
                     pars = tf.stack(pars, axis=1)
                     stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
 
@@ -255,14 +251,16 @@ class CustomStimulusFitter(StimulusFitter):
 
     def __init__(self, data, model, stimulus,
                  omega, dof=None,
-                 baseline_image=None):
+                 baseline_image=None, parameters=None, weights=None):
 
         self.data = data
         self.model = model
         self.stimulus = stimulus
-        self.model.omega = omega
-        self.model.omega_chol = tf.linalg.cholesky(omega).numpy()
-        self.model.dof = dof
+        self.omega = omega
+        self.omega_chol = tf.linalg.cholesky(omega).numpy()
+        self.dof = dof
+        self.parameters = model._get_parameters(parameters)
+        self.weights = format_weights(weights)
 
         if baseline_image is None:
             self.baseline_image = None
@@ -291,8 +289,8 @@ class CustomStimulusFitter(StimulusFitter):
 
         data = self.data.values
         model = self.model
-        parameters = self.model.parameters.values[np.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[np.newaxis, ...]
+        parameters = self.parameters.values[np.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[np.newaxis, ...]
 
         if hasattr(self.model, 'hrf_model'):
 
@@ -317,8 +315,8 @@ class CustomStimulusFitter(StimulusFitter):
             ll = self.model._likelihood_timeseries(data[tf.newaxis, ...],
                                                    ts_prediction_summed_over_hrf[:,
                                                                                  tf.newaxis, :],
-                                                   self.model.omega_chol,
-                                                   self.model.dof,
+                                                   self.omega_chol,
+                                                   self.dof,
                                                    logp=True,
                                                    normalize=False)
 
@@ -329,7 +327,7 @@ class CustomStimulusFitter(StimulusFitter):
             images = images[:, tf.newaxis, :]
 
             ll = self.model._likelihood(images, data[tf.newaxis, ...], parameters, weights,
-                                        self.model.omega_chol, self.model.dof, logp=True)
+                                        self.omega_chol, self.dof, logp=True)
 
         ll = pd.DataFrame(ll.numpy().T, columns=pd.MultiIndex.from_frame(grid))
 
@@ -426,8 +424,8 @@ class CustomStimulusFitter(StimulusFitter):
         data = self.data.values[tf.newaxis, ...]
         grid_coordinates = self.stimulus.grid_coordinates.values
         model = self.model
-        parameters = self.model.parameters.values[tf.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[tf.newaxis, ...]
+        parameters = self.parameters.values[tf.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[tf.newaxis, ...]
 
         if self.baseline_image is None:
             @tf.function
@@ -449,7 +447,7 @@ class CustomStimulusFitter(StimulusFitter):
                 images = self.stimulus._generate_images(*pars)
                 images = add_baseline(images)
                 ll = self.model._likelihood(
-                    images, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                    images, data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                 return tf.reduce_sum(ll, 1)
 
@@ -478,7 +476,7 @@ class CustomStimulusFitter(StimulusFitter):
                 images = add_baseline(images)
 
                 ll = self.model._likelihood(
-                    images,  data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                    images,  data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                 return tf.reduce_sum(ll, 1)
 

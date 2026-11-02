@@ -49,14 +49,12 @@ parameters = pd.DataFrame({'x':x.ravel(),
                'sd':2.5,
                'baseline':0.0,
                'amplitude':1.}).astype(np.float32)
-model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates, 
-                      paradigm=stimulus,
-                     parameters=parameters,
+model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates,
                     hrf_model=SPMHRFModel(tr=data['tr']))
 # %%
 
 # Let's plot all the RFs
-rfs = model.get_rf(as_frame=True)
+rfs = model.get_rf(parameters, as_frame=True)
 
 for i, rf in rfs.groupby(level=0):
     plt.subplot(3, 3, i+1)
@@ -68,7 +66,7 @@ for i, rf in rfs.groupby(level=0):
 
 # We simulate data for the given paradigm and parameters and plot the resulting time series
 import seaborn as sns
-data = model.simulate(noise=1.)
+data = model.simulate(stimulus, parameters, noise=1.)
 data.columns.set_names('voxel', inplace=True)
 tmp = data.stack().to_frame('activity')
 sns.relplot(x=data.index.name or 'index', y='activity', data=tmp.reset_index(), hue='voxel', kind='line', palette=sns.color_palette('tab10', n_colors=parameters.shape[0]), aspect=2.)
@@ -103,14 +101,14 @@ refined_grid_pars = par_fitter.refine_baseline_and_amplitude(grid_pars)
 
 # We get the explained variance of these parameters
 from braincoder.utils import get_rsq
-refined_grid_r2 = get_rsq(data, model.predict(parameters=refined_grid_pars))
+refined_grid_r2 = get_rsq(data, model.predict(stimulus, refined_grid_pars))
 
 # Now we use gradient descent to further optimize the parameters
 pars = par_fitter.fit(init_pars=refined_grid_pars, learning_rate=1e-2, max_n_iterations=5000,
         min_n_iterations=100,
         r2_atol=0.0001)
 
-fitted_r2 = get_rsq(data, model.predict(parameters=pars))
+fitted_r2 = get_rsq(data, model.predict(stimulus, pars))
 
 # The fitted R2s tend to be a bit better than the grid R2s
 display(refined_grid_r2.to_frame('r2').join(fitted_r2.to_frame('r2'), lsuffix='_grid', rsuffix='_fitted'))
@@ -127,7 +125,7 @@ resid_fitter = ResidualFitter(model, data, stimulus, parameters=pars)
 omega, dof = resid_fitter.fit()
 
 # Simulate new "unseen" data
-unseen_data = model.simulate(noise=1.)
+unseen_data = model.simulate(stimulus, parameters, noise=1.)
 
 # For stimulus reconstruction, we slightly downsample the stimulus space
 # otherwise the optimization takes too long on a CPU
@@ -136,13 +134,12 @@ data = load_szinte2024(resize_factor=2.5)
 grid_coordinates = data['grid_coordinates']
 stimulus = data['stimulus']
 
-model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates, 
-                     parameters=parameters,
+model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates,
                     hrf_model=SPMHRFModel(tr=data['tr']))
 
 # We set up a stimulus fitter
 from braincoder.optimize import StimulusFitter
-stim_fitter = StimulusFitter(unseen_data, model, omega)
+stim_fitter = StimulusFitter(unseen_data, model, omega, parameters=parameters)
 
 # Legacy Adam is a bit faster than the default Adam optimizer on M1
 # Learning rate of 1.0 is a bit high, but works well here

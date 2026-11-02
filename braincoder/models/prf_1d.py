@@ -16,8 +16,7 @@ class GaussianPRF(EncodingModel):
 
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
+    def __init__(self, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  model_stimulus_amplitude=False,
                  **kwargs):
         """Configure Gaussian pRF with optional stimulus amplitude modeling."""
@@ -31,8 +30,7 @@ class GaussianPRF(EncodingModel):
         self.stimulus_type = self._get_stimulus_type(model_stimulus_amplitude=model_stimulus_amplitude)
         self._basis_predictions = self._get_basis_predictions(model_stimulus_amplitude=model_stimulus_amplitude)
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
+        super().__init__(verbosity=logging.INFO, **kwargs)
 
 
     def _get_stimulus_type(self, model_stimulus_amplitude=False):
@@ -47,7 +45,7 @@ class GaussianPRF(EncodingModel):
         else:
             return self._basis_predictions_without_amplitude
 
-    def basis_predictions(self, paradigm=None, parameters=None):
+    def basis_predictions(self, paradigm, parameters):
         paradigm = self.get_paradigm(paradigm)
         parameters = self._get_parameters(parameters)
 
@@ -72,8 +70,8 @@ class GaussianPRF(EncodingModel):
         baselines = ops.min(data, axis=0)
         data_ = (data - baselines)
 
-        mus = ops.sum((data_ * self.stimulus._generate_stimulus(paradigm.values)), axis=0) / ops.sum(data_, axis=0)
-        sds = ops.sqrt(ops.sum(data_ * (self.stimulus._generate_stimulus(paradigm.values) - mus)
+        mus = ops.sum((data_ * self.stimulus._generate_stimulus(paradigm)), axis=0) / ops.sum(data_, axis=0)
+        sds = ops.sqrt(ops.sum(data_ * (self.stimulus._generate_stimulus(paradigm) - mus)
                                     ** 2, axis=0) / ops.sum(data_, axis=0))
         amplitudes = ops.max(data_, axis=0)
 
@@ -99,29 +97,16 @@ class GaussianPRF(EncodingModel):
             parameters[:, None, :, 2] * paradigm[:, :, None, 1] + parameters[:, None, :, 3]
 
 
-    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
+    def get_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
         stimulus_range = stimulus_range.astype(np.float32)
         if subtract_baseline:
             parameters = self._zero_baseline(parameters)
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = ops.tensordot(W, W, axes=[[0], [0]])
-        self._pseudoWWT = ops.where(ops.isnan(pseudoWWT), ops.zeros_like(pseudoWWT),
-                                   pseudoWWT)
-        return self._pseudoWWT
+        return ops.where(ops.isnan(pseudoWWT), ops.zeros_like(pseudoWWT), pseudoWWT)
 
-    def get_pseudoWWT(self):
-        if self.weights is not None:
-            return self.weights.T.dot(self.weights).values
 
-        if hasattr(self, '_pseudoWWT'):
-            return self._pseudoWWT
-        else:
-            raise ValueError(
-                'First initialize WWT for a specific stimulus range using init_pseudoWWT!')
-
-    def get_WWT(self):
-        return self.get_pseudoWWT()
 
 class RegressionGaussianPRF(EncodingRegressionModel, GaussianPRF):
     """Gaussian pRF whose parameters are modeled by regression covariates."""
@@ -133,13 +118,11 @@ class VonMisesPRF(GaussianPRF):
     parameter_labels = ['mu', 'kappa', 'amplitude', 'baseline']
     stimulus_type = OneDimensionalRadialStimulus
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, allow_neg_amplitudes=False,
+    def __init__(self, allow_neg_amplitudes=False,
                  model_stimulus_amplitude=False,
                  **kwargs):
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                            weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+        super().__init__(allow_neg_amplitudes=allow_neg_amplitudes,
                             model_stimulus_amplitude=model_stimulus_amplitude,
                             **kwargs)
 
@@ -166,7 +149,7 @@ class VonMisesPRF(GaussianPRF):
                     parameters[:, None, :, 1]) * \
             parameters[:, None, :, 2] * paradigm[..., None, 1] + parameters[:, None, :, 3]
 
-    def init_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
+    def get_pseudoWWT(self, stimulus_range, parameters, subtract_baseline=True):
         if stimulus_range.ndim == 2:
             stimulus_range = stimulus_range[:, [0]]
 
@@ -176,9 +159,7 @@ class VonMisesPRF(GaussianPRF):
         W = self.basis_predictions(stimulus_range, parameters)
 
         pseudoWWT = ops.tensordot(W, W, axes=[[0], [0]])
-        self._pseudoWWT = ops.where(ops.isnan(pseudoWWT), ops.zeros_like(pseudoWWT),
-                                   pseudoWWT)
-        return self._pseudoWWT
+        return ops.where(ops.isnan(pseudoWWT), ops.zeros_like(pseudoWWT), pseudoWWT)
 
 class AxialVonMisesPRF(VonMisesPRF):
     """Von Mises pRF for π-periodic (axial) stimuli such as gabor orientations.
@@ -224,8 +205,7 @@ class LogGaussianPRF(GaussianPRF):
 
     parameter_labels = ['mu', 'sd', 'amplitude', 'baseline']
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
+    def __init__(self, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  model_stimulus_amplitude=False,
                  parameterisation='mu_sd_natural',
                  **kwargs):
@@ -246,8 +226,7 @@ class LogGaussianPRF(GaussianPRF):
         else:
             self.transformations = ['softplus', 'softplus', 'softplus', 'identity']
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+        super().__init__(allow_neg_amplitudes=allow_neg_amplitudes,
                           verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
                           **kwargs)
 
@@ -282,13 +261,10 @@ class LogGaussianPRF(GaussianPRF):
 class GaussianPRFWithHRF(HRFEncodingModel, GaussianPRF):
     """Combine Gaussian pRF spatial tuning with an explicit HRF convolution."""
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, hrf_model=None,
+    def __init__(self, hrf_model=None,
                  flexible_hrf_parameters=False, allow_neg_amplitudes=False,
                  model_stimulus_amplitude=False, verbosity=logging.INFO, **kwargs):
-        GaussianPRF.__init__(self, paradigm=paradigm, data=data, parameters=parameters,
-                             weights=weights, omega=omega,
-                             allow_neg_amplitudes=allow_neg_amplitudes,
+        GaussianPRF.__init__(self, allow_neg_amplitudes=allow_neg_amplitudes,
                              model_stimulus_amplitude=model_stimulus_amplitude,
                              verbosity=verbosity, **kwargs)
         HRFEncodingModel.__init__(self, hrf_model=hrf_model,
@@ -298,14 +274,11 @@ class GaussianPRFWithHRF(HRFEncodingModel, GaussianPRF):
 class LogGaussianPRFWithHRF(HRFEncodingModel, LogGaussianPRF):
     """Log-Gaussian tuning plus HRF parameters."""
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, hrf_model=None,
+    def __init__(self, hrf_model=None,
                  flexible_hrf_parameters=False, allow_neg_amplitudes=False,
                  model_stimulus_amplitude=False, parameterisation='mu_sd_natural',
                  verbosity=logging.INFO, **kwargs):
-        LogGaussianPRF.__init__(self, paradigm=paradigm, data=data, parameters=parameters,
-                                weights=weights, omega=omega,
-                                allow_neg_amplitudes=allow_neg_amplitudes,
+        LogGaussianPRF.__init__(self, allow_neg_amplitudes=allow_neg_amplitudes,
                                 model_stimulus_amplitude=model_stimulus_amplitude,
                                 parameterisation=parameterisation,
                                 verbosity=verbosity, **kwargs)
@@ -318,8 +291,7 @@ class AlphaGaussianPRF(GaussianPRF):
 
     parameter_labels = ['mu', 'sd', 'alpha', 'amplitude', 'baseline']
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, allow_neg_amplitudes=False, verbosity=logging.INFO,
+    def __init__(self, allow_neg_amplitudes=False, verbosity=logging.INFO,
                  model_stimulus_amplitude=False,
                  **kwargs):
 
@@ -331,8 +303,7 @@ class AlphaGaussianPRF(GaussianPRF):
         else:
             self.transformations = ['softplus', 'softplus', 'identity', 'softplus', 'identity']
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+        super().__init__(allow_neg_amplitudes=allow_neg_amplitudes,
                           verbosity=verbosity, model_stimulus_amplitude=model_stimulus_amplitude,
                           **kwargs)
 
@@ -365,25 +336,25 @@ class GaussianPRFOnGaussianSignal(GaussianPRF):
 
     stimulus_type = OneDimensionalGaussianStimulus
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, allow_neg_amplitudes=False,
+    def __init__(self, allow_neg_amplitudes=False,
                   stimulus_grid=None, verbosity=logging.INFO,
                  **kwargs):
 
         if stimulus_grid is None:
             raise Exception('Need stimulus_grid!')
 
-        if paradigm is not None:
-            assert('mu' in paradigm.columns), 'Need mean of Gaussian in paradigm'
-            assert('sd' in paradigm.columns), 'Need sd of Gaussian in paradigm'
-
-            paradigm = paradigm[['mu', 'sd']]
-
         self.stimulus_grid = stimulus_grid.astype(np.float32)
 
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, omega=omega, allow_neg_amplitudes=allow_neg_amplitudes,
+        super().__init__(allow_neg_amplitudes=allow_neg_amplitudes,
                          verbosity=logging.INFO, **kwargs)
+
+    def get_paradigm(self, paradigm):
+        if isinstance(paradigm, pd.DataFrame):
+            for column in ('mu', 'sd'):
+                if column not in paradigm.columns:
+                    raise ValueError(f'Need {column} of the Gaussian stimulus in the paradigm.')
+            paradigm = paradigm[['mu', 'sd']]
+        return super().get_paradigm(paradigm)
 
     def _basis_predictions(self, paradigm, parameters):
         """Convolve receptive-field Gaussians with Gaussian stimulus inputs."""

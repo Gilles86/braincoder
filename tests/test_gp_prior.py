@@ -7,6 +7,7 @@ Three layers of coverage:
   * BayesianParameterFitter recovers smooth-spatial-structure parameters
     better than classical at high noise (a mini version of paper Fig. 2)
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -205,7 +206,7 @@ def test_no_prior_ml_runs_and_recovers_params():
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.3
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -234,7 +235,7 @@ def test_map_beats_classical_at_high_noise(noise_sd):
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * noise_sd
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -282,7 +283,7 @@ def test_joint_hyperparams_updates_kernel_params():
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.5
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -335,7 +336,7 @@ def test_shared_lengthscale_ties_priors():
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.4
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)

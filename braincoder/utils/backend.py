@@ -7,6 +7,8 @@ to ``tf.GradientTape``.
 """
 
 import numpy as np
+import contextlib
+
 import keras
 from keras import ops
 
@@ -14,6 +16,23 @@ from keras import ops
 # ---------------------------------------------------------------------------
 # Robust Cholesky
 # ---------------------------------------------------------------------------
+
+def _torch_on_mps():
+    if keras.backend.backend() != 'torch':
+        return False
+    import torch
+    return torch.backends.mps.is_available() and ops.convert_to_tensor(0.).device.type == 'mps'
+
+
+def float64_device():
+    """Scope for float64 linear algebra: Apple GPUs (MPS) have no float64, so use the CPU there."""
+    return keras.device('cpu') if _torch_on_mps() else contextlib.nullcontext()
+
+
+def to_float64(x):
+    """Cast to float64 inside :func:`float64_device`, moving the tensor there first."""
+    return ops.cast(ops.convert_to_tensor(x), 'float64')
+
 
 def safe_cholesky(M, jitter=1e-4, max_attempts=6):
     """Cholesky factor of ``M`` with adaptive diagonal jitter + retries.
@@ -76,6 +95,10 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
     # holds even on backends that silently downcast (e.g. JAX default
     # mode coerces float64 → float32 inside ``ops.convert_to_tensor``).
     in_dtype = getattr(M, 'dtype', None)
+
+    if str(in_dtype) == 'float64' and _torch_on_mps():
+        with float64_device():
+            return safe_cholesky(M, jitter=jitter, max_attempts=max_attempts)
 
     M_t = ops.convert_to_tensor(M)
     M_sym = 0.5 * (M_t + ops.transpose(M_t))

@@ -388,7 +388,7 @@ class LowRankNoise(object):
         paradigm : DataFrame or array (n_trials, n_stim_dims)
             True stimulus of every training trial.
         parameters : DataFrame, optional
-            Encoding parameters (default ``model.parameters``).
+            Encoding parameters (``None`` only for models without parameters).
         stimulus_range : array (n_stimuli,) or (n_stimuli, n_dims)
             The decoding grid — use the same grid as for
             ``get_stimulus_pdf``. Required when ``k`` or ``temperature`` is
@@ -440,8 +440,6 @@ class LowRankNoise(object):
         Ω(k) and ν are refitted on the inner-training residuals; all ``T``
         are evaluated on the same likelihood table at no extra cost.
         """
-        if parameters is None:
-            parameters = model.parameters
         voxels = data.columns if isinstance(data, pd.DataFrame) else None
         Y = _as_2d_array(data)
         n, V = Y.shape

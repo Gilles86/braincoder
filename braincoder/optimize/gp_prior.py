@@ -15,7 +15,7 @@ import keras
 from keras import ops
 from tqdm.auto import tqdm
 
-from ..utils.backend import softplus_inverse, compute_gradients
+from ..utils.backend import float64_device, to_float64, softplus_inverse, compute_gradients
 
 _LOG_2PI = float(np.log(2.0 * np.pi))
 
@@ -134,13 +134,14 @@ class GeodesicGPPrior(object):
         Call this once before starting the MAP loop with hyperparams
         held fixed. ``unfreeze_cholesky()`` clears the cache.
         """
-        K = ops.cast(self._build_covariance(self._log_lengthscale,
-                                             self._log_variance,
-                                             self._log_nugget), 'float64')
-        L = ops.cholesky(K)
-        self._cached_L = ops.stop_gradient(L)
-        self._cached_log_det = ops.stop_gradient(
-            2.0 * ops.sum(ops.log(ops.diag(L))))
+        K = self._build_covariance(self._log_lengthscale,
+                                   self._log_variance,
+                                   self._log_nugget)
+        with float64_device():
+            L = ops.cholesky(to_float64(K))
+            self._cached_L = ops.stop_gradient(L)
+            self._cached_log_det = ops.stop_gradient(
+                2.0 * ops.sum(ops.log(ops.diag(L))))
         return self._cached_L
 
     def unfreeze_cholesky(self):
@@ -250,27 +251,30 @@ class GeodesicGPPrior(object):
         # float64 — RBF kernels on ~hundreds of vertices are inherently
         # ill-conditioned and float32 Cholesky bottoms out at NaN.
         # Standard practice in TFP / GPyTorch / GPflow.
-        K = ops.cast(
-            self._build_covariance(log_l, log_v, log_n), 'float64')
-        L = ops.cholesky(K)
-        v64 = ops.cast(ops.reshape(values, (-1, 1)), 'float64')
-        y = ops.solve_triangular(L, v64, lower=True)
-        mahal = ops.sum(y * y)
-        log_det = 2.0 * ops.sum(ops.log(ops.diag(L)))
-        n_float = ops.cast(self.n_vx, 'float64')
-        lp = -0.5 * (mahal + log_det + n_float * _LOG_2PI)
-        return ops.cast(lp, 'float32')
+        K = self._build_covariance(log_l, log_v, log_n)
+        with float64_device():
+            L = ops.cholesky(to_float64(K))
+            v64 = to_float64(ops.reshape(values, (-1, 1)))
+            y = ops.solve_triangular(L, v64, lower=True)
+            mahal = ops.sum(y * y)
+            log_det = 2.0 * ops.sum(ops.log(ops.diag(L)))
+            n_float = ops.cast(self.n_vx, 'float64')
+            lp = -0.5 * (mahal + log_det + n_float * _LOG_2PI)
+            lp = ops.cast(lp, 'float32')
+        return ops.convert_to_tensor(lp)
 
     def _log_prob_tensor_cached(self, values):
         # Uses self._cached_L (already stop_gradient'd).
         # Gradient w.r.t. `values` flows only through solve_triangular,
         # which is stable; Cholesky is not in the backward graph.
-        v64 = ops.cast(ops.reshape(values, (-1, 1)), 'float64')
-        y = ops.solve_triangular(self._cached_L, v64, lower=True)
-        mahal = ops.sum(y * y)
-        n_float = ops.cast(self.n_vx, 'float64')
-        lp = -0.5 * (mahal + self._cached_log_det + n_float * _LOG_2PI)
-        return ops.cast(lp, 'float32')
+        with float64_device():
+            v64 = to_float64(ops.reshape(values, (-1, 1)))
+            y = ops.solve_triangular(self._cached_L, v64, lower=True)
+            mahal = ops.sum(y * y)
+            n_float = ops.cast(self.n_vx, 'float64')
+            lp = -0.5 * (mahal + self._cached_log_det + n_float * _LOG_2PI)
+            lp = ops.cast(lp, 'float32')
+        return ops.convert_to_tensor(lp)
 
 
 def _to_unconstrained(x):

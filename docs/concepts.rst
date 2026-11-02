@@ -38,7 +38,7 @@ automatically routes through the matching ``Stimulus`` subclass to:
 
 - ensure required columns/dimensions are present,
 - optionally clean and normalize user input, and
-- generate tensors that the TensorFlow models expect.
+- generate the tensors that the models expect.
 
 Encoding models
 ===============
@@ -48,7 +48,12 @@ which provides:
 
 - ``predict`` and ``simulate`` helpers that work with numpy/pandas inputs,
 - automatic broadcasting to batches/voxels, and
-- convenience methods to fetch paradigms, parameters, and gradients.
+- convenience methods to clean paradigms and compute gradients.
+
+Models hold only their configuration, such as ``grid_coordinates`` or
+``hrf_model``. The paradigm, parameters, weights and noise model are passed to each
+method (``model.predict(paradigm, parameters)``), and the fitters never change a
+model, so one instance can be reused across cross-validation folds.
 
 Common subclasses include ``LinearModel``,
 ``LinearModelWithBaseline``, and HRF-aware versions such as
@@ -72,8 +77,8 @@ Optimization, fitting, and decoding
 
 Use :class:`braincoder.optimize.WeightFitter` for fast linear weight solves or
 :class:`braincoder.optimize.ParameterFitter` when you need to estimate model
-parameters themselves.  Both accept pandas inputs, work with TensorFlow
-accelerators, and expose diagnostics such as R² traces and intermediate
+parameters themselves.  Both accept pandas inputs, run on GPUs through their
+backend, and expose diagnostics such as R² traces and intermediate
 parameter snapshots.
 
 Where to go next

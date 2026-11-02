@@ -1,4 +1,5 @@
 """Tests for braincoder HRF models and convolution utilities."""
+from helpers import Bound, grid_for
 import numpy as np
 from keras import ops
 import pytest
@@ -90,11 +91,9 @@ class TestHRFConvolution:
             'mu': [0.0], 'sd': [1.0], 'amplitude': [1.0], 'baseline': [0.0]
         }, dtype=np.float32)
 
-        plain = GaussianPRF(paradigm=paradigm, parameters=parameters)
+        plain = Bound(GaussianPRF(), paradigm, parameters)
         hrf_model = SPMHRFModel(tr=TR)
-        with_hrf = GaussianPRFWithHRF(
-            paradigm=paradigm, parameters=parameters, hrf_model=hrf_model
-        )
+        with_hrf = Bound(GaussianPRFWithHRF(hrf_model=hrf_model), paradigm, parameters)
 
         pred_plain = plain.predict().values
         pred_hrf = with_hrf.predict().values
@@ -113,8 +112,6 @@ class TestHRFConvolution:
         }, dtype=np.float32)
 
         hrf_model = SPMHRFModel(tr=TR)
-        model = GaussianPRFWithHRF(
-            paradigm=paradigm, parameters=parameters, hrf_model=hrf_model
-        )
+        model = Bound(GaussianPRFWithHRF(hrf_model=hrf_model), paradigm, parameters)
         pred = model.predict()
         assert np.all(np.isfinite(pred.values))

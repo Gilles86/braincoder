@@ -26,8 +26,7 @@ data = data['v1_timeseries']
 from braincoder.models import GaussianPRF2DWithHRF
 from braincoder.hrf import SPMHRFModel
 
-model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates, 
-                      paradigm=stimulus,
+model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates,
                     hrf_model=SPMHRFModel(tr=tr))
 # %%
 
@@ -67,7 +66,7 @@ pars = par_fitter.fit(init_pars=refined_grid_pars, learning_rate=1e-2, max_n_ite
         r2_atol=0.0001)
 
 from braincoder.utils import get_rsq
-fitted_r2 = get_rsq(data, model.predict(parameters=pars))
+fitted_r2 = get_rsq(data, model.predict(stimulus, pars))
 
 # %%
 
@@ -109,13 +108,12 @@ stimulus = data['stimulus']
 tr = data['tr']
 data = data['v1_timeseries']
 
-model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates, 
-                     parameters=pars.loc[best_voxels],
+model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates,
                     hrf_model=SPMHRFModel(tr=tr))
 
 # We set up a stimulus fitter
 from braincoder.optimize import StimulusFitter
-stim_fitter = StimulusFitter(data.loc[:, best_voxels], model, omega)
+stim_fitter = StimulusFitter(data.loc[:, best_voxels], model, omega, parameters=pars.loc[best_voxels])
 
 # Legacy Adam is a bit faster than the default Adam optimizer on M1
 # Learning rate of 1.0 is a bit high, but works well here

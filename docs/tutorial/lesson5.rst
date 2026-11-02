@@ -42,8 +42,8 @@ we need to add a **noise model**. More specifically, a
 Gaussian noise model. This requires us to estimate 
 the covariance matrix :math:`\Sigma` of the noise.
 
-Note how we use ``init_pseudoWWT`` and a plausible ``stimulus_range``
-to approximate the ``WWT`` matrix.
+Note how we pass a plausible ``stimulus_range`` to ``fit`` to approximate the
+``WWT`` matrix from the fitted parameters.
 
 .. literalinclude:: /../examples/00_encodingdecoding/decode.py
     :start-after: # Now we fit the covariance matrix

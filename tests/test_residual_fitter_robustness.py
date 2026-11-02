@@ -17,6 +17,9 @@ The tests below check that the lgamma value and gradient are correct on
 every backend, that a realistic Student-t fit moves and recovers dof, and
 that ResidualFitter no longer swallows errors.
 """
+from functools import partial
+
+from helpers import Bound, grid_for
 import warnings
 
 import numpy as np
@@ -147,8 +150,7 @@ def _make_model(n_vox=12, seed=0):
         'amplitude': np.ones(n_vox, dtype=np.float32),
         'baseline':  np.zeros(n_vox, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=pars)
-    model.init_pseudoWWT(paradigm, pars)
+    model = Bound(GaussianPRF(), paradigm, pars)
     return model, paradigm, pars
 
 
@@ -156,7 +158,7 @@ def _student_t_residuals(model, n_t, rho, sigma2, dof, seed=0):
     """Draw residuals ~ MVT(dof, 0, Ω) with Ω built exactly as
     ResidualFitter._get_omega builds it (normalised pseudo-WWT)."""
     rng = np.random.default_rng(seed)
-    WWT = np.asarray(ops.convert_to_numpy(model.get_pseudoWWT()), dtype=np.float64)
+    WWT = np.asarray(ops.convert_to_numpy(model.get_pseudoWWT(model.paradigm, model.parameters)), dtype=np.float64)
     WWT = WWT / WWT.mean()
     n_vox = WWT.shape[0]
     tau = rng.uniform(0.8, 1.2, n_vox)
@@ -174,6 +176,7 @@ def test_residual_fitter_student_t_recovers_dof():
                                              true_sigma2, true_dof)
     data = pd.DataFrame(resid[:60])  # only used for shapes
     fitter = ResidualFitter(model, data, paradigm=paradigm, parameters=pars)
+    fitter.fit = partial(fitter.fit, stimulus_range=paradigm)
     init_rho, init_sigma2, init_dof = 0.1, 1e-3, 1.0
     omega, dof = fitter.fit(method='t', residuals=resid,
                             init_rho=init_rho, init_sigma2=init_sigma2,
@@ -206,7 +209,9 @@ def small_fitter():
     model, paradigm, pars = _make_model(n_vox=5)
     resid, _ = _student_t_residuals(model, 200, 0.3, 0.2, 6.0, seed=3)
     data = pd.DataFrame(resid[:60])
-    return ResidualFitter(model, data, paradigm=paradigm, parameters=pars), resid
+    fitter = ResidualFitter(model, data, paradigm=paradigm, parameters=pars)
+    fitter.fit = partial(fitter.fit, stimulus_range=paradigm)
+    return fitter, resid
 
 
 def test_residual_fitter_reraises_programming_error(small_fitter, monkeypatch):

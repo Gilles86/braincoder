@@ -198,7 +198,7 @@ On 7T single-trial numerosity betas (19 participants; see the
 * **``lambd`` shrinkage is unsafe when voxels > trials.** Mixing in the
   sample covariance of n < V trials leaves near-null directions in which
   held-out residuals explode (coverage ≈ 0.04 at ``lambd=0.5``).
-* **The pseudo-WWᵀ is uncentred.** ``init_pseudoWWT`` builds WWᵀ from raw
+* **The pseudo-WWᵀ is uncentred.** ``get_pseudoWWT`` builds WWᵀ from raw
   (uncentred, mean-normalised) predicted responses, so it is dominated by
   the common-mode response rather than by the directions that
   discriminate stimuli.
@@ -220,8 +220,8 @@ Code that passes dense ``omega=`` / ``dof=`` can use:
 
     from braincoder.noise import fit_lowrank_omega
     omega, dof = fit_lowrank_omega(residuals, k=40)
-    pdf = model.get_stimulus_pdf(test_data, grid, omega=omega, dof=dof,
-                                 temperature=T)
+    pdf = model.get_stimulus_pdf(test_data, grid, parameters=parameters,
+                                 omega=omega, dof=dof, temperature=T)
 
 or ``noise.to_dense()``. ``ResidualFitter`` and the default behaviour of
 ``get_stimulus_pdf`` are unchanged.

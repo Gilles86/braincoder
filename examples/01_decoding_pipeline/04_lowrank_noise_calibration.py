@@ -27,7 +27,7 @@ Usage is three lines::
 
     noise = LowRankNoise.fit(model, train_data, train_paradigm, parameters,
                              stimulus_range=grid, groups=train_runs)
-    pdf = model.get_stimulus_pdf(test_data, grid, noise_model=noise)
+    pdf = model.get_stimulus_pdf(test_data, grid, parameters=pars, noise_model=noise)
     print(noise.summary())
 
 Here we simulate a population with 4 shared noise factors and a slightly
@@ -64,7 +64,7 @@ L = rng.normal(size=(V, k_true))
 L *= np.sqrt(.6 / (L ** 2).sum(1, keepdims=True))
 psi = 1 - (L ** 2).sum(1)
 scale = rng.uniform(.5, 1.5, V)
-model = GaussianPRF(parameters=true_pars)
+model = GaussianPRF()
 
 
 def simulate(n_runs):
@@ -90,9 +90,9 @@ pars['sd'] *= .7
 # 2. ``LowRankNoise`` with k and T chosen by nested CV (the recommended path).
 # 3. The same Ω at T = 1 (no tempering), to show what the temperature does.
 
-model.init_pseudoWWT(grid, pars)
 omega, dof = ResidualFitter(model, train_data, train_paradigm,
                             parameters=pars).fit(method='t', init_dof=10.,
+                                                 stimulus_range=grid,
                                                  max_n_iterations=500,
                                                  progressbar=False)
 

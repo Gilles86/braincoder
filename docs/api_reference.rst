@@ -3,14 +3,15 @@ API Reference
 =============
 
 This section documents the most frequently used modules.  All classes operate
-on numpy arrays or pandas ``DataFrame`` inputs and run TensorFlow under the
-hood.
+on numpy arrays or pandas ``DataFrame`` inputs and run on TensorFlow, JAX or
+PyTorch through Keras 3. Models hold only their configuration: pass the paradigm,
+parameters, weights and noise model to each method.
 
 Encoding models
 ===============
 
 .. autoclass:: braincoder.models.EncodingModel
-   :members: predict, simulate, get_paradigm, get_parameter_labels, to_discrete_model, get_stimulus_pdf, predict_stimulus_grid
+   :members: predict, simulate, get_paradigm, get_parameter_labels, get_stimulus_pdf, predict_stimulus_grid
    :show-inheritance:
 
 .. autoclass:: braincoder.models.LinearModelWithBaseline

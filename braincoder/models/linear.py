@@ -12,16 +12,21 @@ from patsy import dmatrix, build_design_matrices
 from .base import EncodingModel, HRFEncodingModel
 
 class DiscreteModel(EncodingModel):
+    """One response per discrete stimulus value.
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, verbosity=logging.INFO):
+    ``stimulus_values`` lists the values; each becomes one parameter. Use
+    :meth:`get_parameters` for the matching parameter table.
+    """
 
-        self.parameter_labels = ['stim=={}'.format(
-            p) for p in np.diag(parameters)]
-        _parameters = np.zeros_like(parameters) * np.nan
-        _parameters[np.diag_indices(len(parameters))] = np.diag(parameters)
+    def __init__(self, stimulus_values, verbosity=logging.INFO, **kwargs):
+        self.stimulus_values = np.asarray(stimulus_values, dtype=np.float32)
+        self.parameter_labels = ['stim=={}'.format(p) for p in self.stimulus_values]
+        super().__init__(verbosity=verbosity, **kwargs)
 
-        super().__init__(paradigm, data, _parameters, weights, verbosity)
+    def get_parameters(self):
+        parameters = np.full((len(self.stimulus_values),) * 2, np.nan, dtype=np.float32)
+        parameters[np.diag_indices_from(parameters)] = self.stimulus_values
+        return pd.DataFrame(parameters, columns=self.parameter_labels)
 
     def _basis_predictions(self, paradigm, parameters):
 
@@ -35,24 +40,7 @@ class LinearModel(EncodingModel):
 
     parameter_labels = []
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, verbosity=logging.INFO, **kwargs):
-
-        if parameters is not None:
-            raise ValueError('LinearModel does not use any parameters!')
-
-        super().__init__(paradigm=paradigm, data=data, parameters=parameters,
-                         weights=weights, verbosity=logging.INFO, **kwargs)
-
-        if paradigm is not None:
-            self.stimulus = self._get_stimulus(n_dimensions=paradigm.shape[1])
-            self.paradigm = self.stimulus.clean_paradigm(paradigm)
-        else:
-            self.stimulus = self._get_stimulus()
-            self.paradigm = None
-
-
-    def predict(self, paradigm=None, parameters=None, weights=None):
+    def predict(self, paradigm, parameters=None, weights=None):
 
         if parameters is not None:
             raise ValueError('LinearModel does not use any parameters!')
@@ -67,6 +55,7 @@ class LinearModelWithBaseline(EncodingModel):
     """Linear encoding model that adds a voxel-specific baseline parameter."""
 
     parameter_labels = ['baseline']
+    transformations = ['identity']
 
     def _predict(self, paradigm, parameters, weights=None):
 
@@ -85,16 +74,13 @@ class LinearModelWithBaseline(EncodingModel):
 class LinearModelWithBaselineHRF(LinearModelWithBaseline, HRFEncodingModel):
     """LinearModelWithBaseline variant that automatically applies an HRF convolution."""
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, hrf_model=None, verbosity=logging.INFO,
+    def __init__(self, hrf_model=None, verbosity=logging.INFO,
                  **kwargs):
 
         if hrf_model is None:
             raise ValueError('Please provide HRFModel!')
 
-        LinearModelWithBaseline.__init__(self, paradigm=paradigm, data=data,
-                                         parameters=parameters, weights=weights,
-                                         verbosity=verbosity, **kwargs)
+        LinearModelWithBaseline.__init__(self, verbosity=verbosity, **kwargs)
         self.hrf_model = hrf_model
         self.flexible_hrf_parameters = False
 

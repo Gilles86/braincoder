@@ -9,8 +9,8 @@
 project = 'Braincoder'
 copyright = '2023-2026, Gilles de Hollander'
 author = 'Gilles de Hollander'
-version = '0.6'
-release = '0.6.2'
+version = '0.7'
+release = '0.7.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -51,10 +51,6 @@ sphinx_gallery_conf = {
     # "show_memory": not sys.platform.startswith("win"),
     "remove_config_comments": True,
     "nested_sections": True,
-    # fit_prf needs load_szinte2024 (real fMRI download); skip in docs.
-    "expected_failing_examples": [
-        "../examples/00_encodingdecoding/fit_prf.py",
-    ],
 }
 
 templates_path = ['_templates']

@@ -43,19 +43,16 @@ Each backend must be installed separately. The ``environment.yml`` includes all 
 pip-only install
 ----------------
 
-braincoder is not on PyPI, so install a tagged release from GitHub, together with a
-backend:
-
 .. code-block:: bash
 
-    pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" tensorflow   # TensorFlow
+    pip install "braincoder[tensorflow]"   # TensorFlow backend
     # or
-    pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" "jax[cpu]"   # JAX
+    pip install "braincoder[jax]"          # JAX backend
     # or
-    pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" torch        # PyTorch
+    pip install "braincoder[torch]"        # PyTorch backend
 
-Pin a tag like this in your project's environment, so that its results stay
-reproducible.
+Pin the version in your project's environment, e.g. ``braincoder[tensorflow]==0.7.0``, so that
+its results stay reproducible.
 
 For a development install from source:
 

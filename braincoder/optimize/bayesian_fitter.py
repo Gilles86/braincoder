@@ -326,7 +326,7 @@ class BayesianParameterFitter(object):
         # Per-vertex Gaussian noise variance, parameterized via softplus.
         # Initial sigma^2 from classical residuals.
         with_initial_pred = self.model.predict(
-            self.paradigm, self.classical_estimates, self.model.weights)
+            self.paradigm, self.classical_estimates)
         residual = self.data.values - with_initial_pred.values
         init_sigma2 = np.maximum(np.var(residual, axis=0).astype(np.float32),
                                  1e-4)

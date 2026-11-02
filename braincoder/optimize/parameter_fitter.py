@@ -94,9 +94,9 @@ class ParameterFitter:
             optimizer=None,
             fixed_pars=None,
             shared_pars=None,
-            noise_model='ssq',
+            noise_model='gaussian',
             store_intermediate_parameters=False,
-            r2_atol=1e-6,
+            r2_atol=1e-4,
             lag=100,
             learning_rate=0.01,
             progressbar=True,
@@ -105,7 +105,7 @@ class ParameterFitter:
 
         Parameters
         ----------
-        noise_model : {'ssq', 'gaussian'}, default ``'ssq'``
+        noise_model : {'ssq', 'gaussian'}, default ``'gaussian'``
             Loss function. ``'ssq'`` minimizes the unweighted
             sum-of-squared-residuals (MLE under homoscedastic Gaussian
             noise). ``'gaussian'`` minimizes a per-voxel Gaussian
@@ -121,8 +121,10 @@ class ParameterFitter:
             or to tie to a single shared value across voxels
             (``shared_pars``).
         r2_atol, lag, min_n_iterations : float, int, int
-            Early-stop: stop when R² has improved by less than ``r2_atol``
-            over the last ``lag`` steps, after ``min_n_iterations``.
+            Early-stop: stop when mean R² has improved by less than ``r2_atol``
+            over the last ``lag`` steps, after ``min_n_iterations``. Use a
+            smaller ``r2_atol`` (the default was 1e-6 before 0.7) when you
+            need a fully converged fit.
         **kwargs
             Forwarded to ``keras.optimizers.Adam`` when ``optimizer is
             None``.
@@ -277,12 +279,12 @@ class ParameterFitter:
 
         labels = self.model.parameter_labels
         logger.info('Fitting: %s',
-                     ', '.join(labels[ix] for ix in parameter_ix))
+                     ', '.join(str(labels[ix]) for ix in parameter_ix))
         if fixed_pars:
             logger.info('Fixed: %s', ', '.join(fixed_pars))
         if shared_parameter_ixs:
             logger.info('Shared: %s',
-                         ', '.join(labels[ix] for ix in shared_parameter_ixs))
+                         ', '.join(str(labels[ix]) for ix in shared_parameter_ixs))
 
         for step in pbar:
             loss, gradients = compute_gradients(loss_fn, trainable_variables)
@@ -375,7 +377,7 @@ class ParameterFitter:
                                 name='step'))
 
         self.predictions = self.model.predict(
-            self.paradigm, self.estimated_parameters, self.model.weights)
+            self.paradigm, self.estimated_parameters)
         best_r2 = np.array(ops.convert_to_numpy(best_r2))
         best_r2[~meaningful_ts] = np.nan
         self.r2 = pd.Series(best_r2, index=self.data.columns)

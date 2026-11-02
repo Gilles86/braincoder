@@ -80,7 +80,11 @@ class Stimulus(object):
                 if paradigm.ndim == 1:
                     paradigm = paradigm[:, np.newaxis]
 
-                paradigm = pd.DataFrame(paradigm, columns=pd.Index(self.dimension_labels, name='stimulus dimensions'),
+                labels = self.dimension_labels
+                if paradigm.shape[1] != len(labels):
+                    labels = [f'dim_{ix}' for ix in range(paradigm.shape[1])]
+
+                paradigm = pd.DataFrame(paradigm, columns=pd.Index(labels, name='stimulus dimensions'),
                 index=pd.Index(np.arange(len(paradigm)), name='frame')).astype(np.float32)
 
         if isinstance(paradigm, pd.DataFrame):

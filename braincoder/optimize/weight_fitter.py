@@ -44,10 +44,12 @@ class WeightFitter(object):
         constructing the fitter if you want ``fit_intercept`` to estimate
         the baseline itself instead of supplying one.
         """
-        parameters = self.model._get_parameters(self.parameters)
-        parameters_ = parameters.values[np.newaxis, ...] if parameters is not None else None
+        parameters = self.model._get_parameters(self.parameters) if self.parameters is not None else None
+        parameters_ = (ops.convert_to_tensor(parameters.values[np.newaxis, ...], dtype='float32')
+                       if parameters is not None else None)
 
-        basis_predictions = self.model._basis_predictions(self.paradigm.values[np.newaxis, ...], parameters_)
+        basis_predictions = self.model._basis_predictions(
+            ops.convert_to_tensor(self.paradigm.values[np.newaxis, ...], dtype='float32'), parameters_)
 
         A = basis_predictions[0]  # (n_timepoints, n_basis)
         b = self.data.values       # (n_timepoints, n_voxels)

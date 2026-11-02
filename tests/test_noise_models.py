@@ -4,6 +4,7 @@ Run once per backend (the CI matrix sets ``KERAS_BACKEND``). The fitting and
 the grid likelihood are numpy (float64); the backend enters through the model
 predictions and through ``LowRankNoise.log_prob_backend``.
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -40,7 +41,7 @@ def _simulate(seed=0, V=60, k_true=3, n_runs=10, n_per=40, n_test_runs=5,
     L = L / np.sqrt((L ** 2).sum(1, keepdims=True)) * np.sqrt(shared)
     psi = 1 - (L ** 2).sum(1)
     sds = rng.uniform(0.5, 1.5, V)
-    model = GaussianPRF(parameters=pars)
+    model = Bound(GaussianPRF(), None, pars)
 
     def sim(nr):
         n = nr * n_per
@@ -265,14 +266,14 @@ def test_get_stimulus_pdf_2d_grid_noise_model():
                          'amplitude': np.ones(V), 'baseline': np.zeros(V)}).astype(np.float32)
     xs = np.linspace(-1, 1, 5)
     grid2 = np.array([(a, b) for a in xs for b in xs], dtype=np.float32)
-    model = GaussianPointPRF2D(parameters=pars)
+    model = GaussianPointPRF2D()
     Y = pd.DataFrame(rng.normal(size=(8, V)).astype(np.float32))
     noise = LowRankNoise(np.ones(V), rng.normal(size=(V, 2)) * .3, np.full(V, .5))
-    pdf = model.get_stimulus_pdf(Y, grid2, noise_model=noise,
+    pdf = model.get_stimulus_pdf(Y, grid2, parameters=pars, noise_model=noise,
                                  include_multidimensional_stimulus_index=True)
     assert pdf.shape == (8, len(grid2))
     omega, _ = noise.to_dense()
-    pdf_dense = model.get_stimulus_pdf(Y, grid2, omega=omega,
+    pdf_dense = model.get_stimulus_pdf(Y, grid2, parameters=pars, omega=omega,
                                        include_multidimensional_stimulus_index=True)
     np.testing.assert_allclose(pdf.values, pdf_dense.values, rtol=5e-3, atol=1e-5)
     m = marginalize(pdf, 0)

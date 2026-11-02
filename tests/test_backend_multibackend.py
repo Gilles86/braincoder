@@ -32,6 +32,7 @@ Bugs covered:
      via ``StatelessScope`` inside the closure; no tracer ever lands
      in the Variable's backing store.
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pytest
 import keras
@@ -313,7 +314,7 @@ class TestBug4ComputeGradientsJaxMemory:
             'amplitude': np.ones(n_vox, dtype=np.float32),
             'baseline':  np.zeros(n_vox, dtype=np.float32),
         })
-        model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+        model = Bound(GaussianPRF(), paradigm, true_pars)
         data = model.simulate(noise=0.1)
 
         fitter = ParameterFitter(model, data, paradigm)
@@ -363,11 +364,11 @@ class TestResidualFitterStudentT:
             'amplitude': np.ones(n_vox, dtype=np.float32),
             'baseline':  np.zeros(n_vox, dtype=np.float32),
         })
-        model = GaussianPRF(paradigm=paradigm, parameters=params)
+        model = Bound(GaussianPRF(), paradigm, params)
         data = model.simulate(noise=0.3)
         fitter = ResidualFitter(model, data, paradigm=paradigm,
                                 parameters=params)
-        omega, dof = fitter.fit(method='t', max_n_iterations=30,
+        omega, dof = fitter.fit(stimulus_range=paradigm, method='t', max_n_iterations=30,
                                 min_n_iterations=10,
                                 use_wwt=False,
                                 progressbar=False)

@@ -1,4 +1,5 @@
 """Inputs that used to give plausible-looking wrong results must now be right or raise."""
+from helpers import Bound, grid_for
 import warnings
 
 import numpy as np
@@ -25,7 +26,7 @@ def sim():
                         index=pd.Index([f'v{i}' for i in range(V)], name='voxel')).astype(np.float32)
     paradigm = pd.DataFrame({'x': rng.uniform(5, 35, n).astype(np.float32)},
                             index=pd.Index(np.arange(n), name='trial'))
-    data = GaussianPRF(parameters=pars).simulate(paradigm=paradigm, parameters=pars, noise=.3)
+    data = Bound(GaussianPRF(), None, pars).simulate(paradigm=paradigm, parameters=pars, noise=.3)
     data.index = paradigm.index
     return data, paradigm, pars
 
@@ -56,7 +57,7 @@ def test_numpy_paradigm_takes_the_index_of_the_data(sim):
     data, paradigm, _ = sim
     shifted = data.set_axis(np.arange(1, len(data) + 1), axis=0)
     x = paradigm.values
-    fitter = ParameterFitter(GaussianPRF(paradigm=x), shifted, x)
+    fitter = ParameterFitter(Bound(GaussianPRF(), x, None), shifted, x)
     init = fitter.refine_baseline_and_amplitude(fitter.fit_grid(**SEARCH, use_correlation_cost=True))
     assert fitter.get_rsq(init).mean() > .3
     assert init['amplitude'].nunique() > 1
@@ -66,7 +67,7 @@ def test_labelled_paradigm_mismatch_warns_and_pairs_by_position(sim):
     data, paradigm, _ = sim
     shifted = data.set_axis(np.arange(1000, 1000 + len(data)), axis=0)
     with pytest.warns(RuntimeWarning, match='index of the paradigm'):
-        fitter = ParameterFitter(GaussianPRF(paradigm=paradigm), shifted, paradigm)
+        fitter = ParameterFitter(Bound(GaussianPRF(), paradigm, None), shifted, paradigm)
     init = fitter.refine_baseline_and_amplitude(fitter.fit_grid(**SEARCH, use_correlation_cost=True))
     assert fitter.get_rsq(init).mean() > .3
 
@@ -74,7 +75,7 @@ def test_labelled_paradigm_mismatch_warns_and_pairs_by_position(sim):
 def test_paradigm_length_mismatch_raises(sim):
     data, paradigm, _ = sim
     with pytest.raises(ValueError, match='rows'):
-        ParameterFitter(GaussianPRF(paradigm=paradigm), data, paradigm.iloc[:-1])
+        ParameterFitter(Bound(GaussianPRF(), paradigm, None), data, paradigm.iloc[:-1])
 
 
 @pytest.mark.parametrize('noise_model', ['ssq', 'gaussian'])
@@ -83,7 +84,7 @@ def test_masked_voxels_are_nan_and_leave_others_alone(sim, noise_model):
     dirty = data.copy()
     dirty.iloc[3, 1] = np.nan
     dirty.iloc[:, 2] = 0.
-    fitter = ParameterFitter(GaussianPRF(paradigm=paradigm), dirty, paradigm)
+    fitter = ParameterFitter(Bound(GaussianPRF(), paradigm, None), dirty, paradigm)
     with pytest.warns(RuntimeWarning, match='2 of 20 voxels'):
         fit = fitter.fit(init_pars=pars, max_n_iterations=20, min_n_iterations=20,
                          noise_model=noise_model, progressbar=False)
@@ -100,7 +101,7 @@ def test_masked_voxels_do_not_poison_shared_parameters(sim):
     data, paradigm, pars = sim
     dirty = data.copy()
     dirty.iloc[:, 0] = np.nan
-    fitter = ParameterFitter(GaussianPRF(paradigm=paradigm), dirty, paradigm)
+    fitter = ParameterFitter(Bound(GaussianPRF(), paradigm, None), dirty, paradigm)
     with pytest.warns(RuntimeWarning):
         fit = fitter.fit(init_pars=pars, shared_pars=['sd'], max_n_iterations=10,
                          min_n_iterations=10, progressbar=False)
@@ -109,7 +110,7 @@ def test_masked_voxels_do_not_poison_shared_parameters(sim):
 
 def test_refine_explains_zero_amplitude(sim):
     data, paradigm, pars = sim
-    fitter = ParameterFitter(GaussianPRF(paradigm=paradigm), data, paradigm)
+    fitter = ParameterFitter(Bound(GaussianPRF(), paradigm, None), data, paradigm)
     with pytest.raises(ValueError, match='nonzero'):
         fitter.refine_baseline_and_amplitude(pars.assign(amplitude=0.))
 
@@ -123,31 +124,11 @@ def test_decoding_refuses_nonfinite_parameters(sim):
         GaussianPRF().get_stimulus_pdf(data, GRID, parameters=bad, omega=omega)
 
 
-def test_dof_comes_from_the_model_with_omega(sim):
-    data, _, pars = sim
-    omega = np.eye(len(pars), dtype=np.float32) * .09
-    model = GaussianPRF(parameters=pars)
-    gaussian = model.get_stimulus_pdf(data, GRID, omega=omega)
-    student = model.get_stimulus_pdf(data, GRID, omega=omega, dof=3.)
-    assert not np.allclose(gaussian.values, student.values)
-    model.omega, model.dof = omega, 3.
-    assert np.allclose(model.get_stimulus_pdf(data, GRID).values, student.values)
-    assert np.allclose(model.get_stimulus_pdf(data, GRID, omega=omega).values, gaussian.values)
-
-
-def test_constructor_accepts_slightly_non_psd_omega(sim):
-    _, _, pars = sim
-    omega = np.eye(len(pars))
-    omega[0, 0] = -1e-4
-    model = GaussianPRF(parameters=pars, omega=omega)
-    assert np.isfinite(model.omega_chol).all()
-
-
 def test_hrf_model_decodes_like_its_plain_twin(sim):
     data, _, pars = sim
     omega = np.eye(len(pars), dtype=np.float32) * .09
-    plain = GaussianPRF(parameters=pars)
-    hrf = GaussianPRFWithHRF(hrf_model=SPMHRFModel(tr=1.6), parameters=pars)
+    plain = Bound(GaussianPRF(), None, pars)
+    hrf = Bound(GaussianPRFWithHRF(hrf_model=SPMHRFModel(tr=1.6)), None, pars)
     with pytest.warns(UserWarning, match='ignores the HRF'):
         decoded = hrf.get_stimulus_pdf(data, GRID, parameters=pars, omega=omega)
     assert np.allclose(decoded.values, plain.get_stimulus_pdf(data, GRID, parameters=pars, omega=omega).values)
@@ -160,18 +141,18 @@ def test_hrf_decoding_with_flexible_hrf_columns(sim):
     data, _, pars = sim
     omega = np.eye(len(pars), dtype=np.float32) * .09
     flexible = pars.assign(hrf_delay=5., hrf_dispersion=1.).astype(np.float32)
-    hrf = GaussianPRFWithHRF(hrf_model=SPMHRFModel(tr=1.6), flexible_hrf_parameters=True, parameters=flexible)
+    hrf = Bound(GaussianPRFWithHRF(hrf_model=SPMHRFModel(tr=1.6), flexible_hrf_parameters=True), None, flexible)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         decoded = hrf.get_stimulus_pdf(data, GRID, parameters=flexible, omega=omega)
-    plain = GaussianPRF(parameters=pars).get_stimulus_pdf(data, GRID, parameters=pars, omega=omega)
+    plain = Bound(GaussianPRF(), None, pars).get_stimulus_pdf(data, GRID, parameters=pars, omega=omega)
     assert np.allclose(decoded.values, plain.values)
 
 
 @pytest.mark.parametrize('method', ['get_fisher_information', 'get_expected_uncertainty'])
 def test_hrf_models_refuse_stimulus_wise_analyses(sim, method):
     _, _, pars = sim
-    hrf = GaussianPRFWithHRF(hrf_model=SPMHRFModel(tr=1.6), parameters=pars)
+    hrf = Bound(GaussianPRFWithHRF(hrf_model=SPMHRFModel(tr=1.6)), None, pars)
     with pytest.raises(NotImplementedError, match='without HRF'):
         getattr(hrf, method)(GRID, omega=np.eye(len(pars), dtype=np.float32))
 
@@ -183,19 +164,18 @@ def test_to_linear_model_on_hrf_model_matches_the_prediction():
     image = (rng.random((80, len(coords))) < .1).astype(np.float32)
     pars = pd.DataFrame({'x': rng.uniform(-3, 3, 6), 'y': rng.uniform(-3, 3, 6), 'sd': rng.uniform(1, 2, 6),
                          'baseline': rng.normal(0, 1, 6), 'amplitude': rng.uniform(1, 2, 6)}).astype(np.float32)
-    model = GaussianPRF2DWithHRF(grid_coordinates=coords, paradigm=image, hrf_model=SPMHRFModel(tr=1.6), parameters=pars)
-    linear = model.to_linear_model()
+    model = GaussianPRF2DWithHRF(grid_coordinates=coords, hrf_model=SPMHRFModel(tr=1.6))
+    linear, baseline, weights = model.to_linear_model(pars)
     assert isinstance(linear, LinearModelWithBaselineHRF)
-    assert np.allclose(linear.predict().values, model.predict().values, atol=1e-3)
+    assert np.allclose(linear.predict(image, baseline, weights).values, model.predict(image, pars).values, atol=1e-3)
 
 
 def test_get_rf_uses_the_parameters_it_is_given():
     g = np.linspace(-5, 5, 15)
     coords = np.stack(np.meshgrid(g, g), -1).reshape(-1, 2).astype(np.float32)
     pars = pd.DataFrame({'x': [0.], 'y': [0.], 'sd': [1.], 'baseline': [0.], 'amplitude': [1.]}).astype(np.float32)
-    model = GaussianPRF2D(grid_coordinates=coords, parameters=pars,
-                          paradigm=np.zeros((2, len(coords)), dtype=np.float32))
-    assert not np.allclose(model.get_rf(parameters=pars.assign(x=3.)), model.get_rf())
+    model = GaussianPRF2D(grid_coordinates=coords)
+    assert not np.allclose(model.get_rf(pars.assign(x=3.)), model.get_rf(pars))
 
 
 def test_dn_hrf_model_decodes_without_the_hrf():
@@ -205,8 +185,7 @@ def test_dn_hrf_model_decodes_without_the_hrf():
                          'srf_amplitude': [.1, .1], 'srf_size': [2., 2.], 'neural_baseline': [1., 1.],
                          'surround_baseline': [1., 1.], 'bold_baseline': [.5, .5]}).astype(np.float32)
     images = (np.random.default_rng(5).random((4, len(coords))) < .3).astype(np.float32)
-    model = DivisiveNormalizationGaussianPRF2DWithHRF(grid_coordinates=coords, paradigm=images,
-                                                      hrf_model=SPMHRFModel(tr=1.6), parameters=pars)
+    model = Bound(DivisiveNormalizationGaussianPRF2DWithHRF(grid_coordinates=coords, hrf_model=SPMHRFModel(tr=1.6)), images, pars)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
         pred = model.predict_stimulus_grid(images, parameters=pars)
@@ -218,7 +197,7 @@ def test_dn_denominator_uses_absolute_amplitude():
     coords = np.stack(np.meshgrid(g, g), -1).reshape(-1, 2).astype(np.float32)
     images = np.ones((1, len(coords)), dtype=np.float32)
     base = dict(x=0., y=0., sd=2., srf_amplitude=5., srf_size=2., neural_baseline=0., surround_baseline=1.)
-    model = DivisiveNormalizationGaussianPRF2D(grid_coordinates=coords, paradigm=images)
+    model = Bound(DivisiveNormalizationGaussianPRF2D(grid_coordinates=coords), images, None)
     positive = model.predict(paradigm=images, parameters=pd.DataFrame([{**base, 'rf_amplitude': 1.}]).astype(np.float32))
     negative = model.predict(paradigm=images, parameters=pd.DataFrame([{**base, 'rf_amplitude': -1.}]).astype(np.float32))
     assert np.allclose(negative.values, -positive.values, atol=1e-5)
@@ -228,20 +207,19 @@ def test_linear_model_simulate_without_parameters():
     rng = np.random.default_rng(2)
     X = pd.DataFrame(rng.normal(size=(50, 2)).astype(np.float32), columns=['a', 'b'])
     weights = pd.DataFrame(rng.normal(size=(2, 5)).astype(np.float32))
-    assert LinearModel(paradigm=X, weights=weights).simulate(noise=.1).shape == (50, 5)
+    assert Bound(LinearModel(), X, None, weights).simulate(noise=.1).shape == (50, 5)
 
 
 def test_residual_fitter_pairs_by_position_and_finds_bad_input(sim):
     data, paradigm, pars = sim
-    model = GaussianPRF(paradigm=paradigm)
-    model.init_pseudoWWT(GRID, pars)
+    model = GaussianPRF()
     shifted = data.set_axis(np.arange(1000, 1000 + len(data)), axis=0)
-    omega, _ = ResidualFitter(model, shifted, paradigm, parameters=pars).fit(max_n_iterations=5, progressbar=False)
+    omega, _ = ResidualFitter(model, shifted, paradigm, parameters=pars).fit(stimulus_range=GRID, max_n_iterations=5, progressbar=False)
     assert np.isfinite(omega).all()
     dirty = data.copy()
     dirty.iloc[0, 0] = np.nan
     with pytest.raises(ValueError, match='NaN or inf'):
-        ResidualFitter(model, dirty, paradigm, parameters=pars).fit(max_n_iterations=5, progressbar=False)
+        ResidualFitter(model, dirty, paradigm, parameters=pars).fit(stimulus_range=GRID, max_n_iterations=5, progressbar=False)
     with pytest.raises(ValueError, match='no voxels'):
         ResidualFitter(model, data.iloc[:, :0], paradigm, parameters=pars).fit(max_n_iterations=5, progressbar=False)
 
@@ -252,7 +230,7 @@ def test_weight_fitter_intercept_recovers_slope():
     slopes = rng.normal(0, 1, 4)
     offsets = rng.uniform(5, 20, 4)
     y = pd.DataFrame(x @ slopes[None] + offsets + rng.normal(0, .1, (200, 4))).astype(np.float32)
-    model = LinearModel(paradigm=x)
+    model = Bound(LinearModel(), x, None)
     through_origin = WeightFitter(model, None, y, x).fit()
     weights, intercept = WeightFitter(model, None, y, x).fit(fit_intercept=True)
     assert np.allclose(weights.values[0], slopes, atol=.03)
@@ -265,5 +243,5 @@ def test_weight_fitter_subtracts_known_baseline():
     x = rng.uniform(2, 8, (200, 1)).astype(np.float32)
     baseline = pd.DataFrame({'baseline': [10., 20.]}).astype(np.float32)
     y = pd.DataFrame(x @ np.array([[1., -2.]]) + baseline['baseline'].values + rng.normal(0, .1, (200, 2))).astype(np.float32)
-    weights = WeightFitter(LinearModelWithBaseline(paradigm=x), baseline, y, x).fit()
+    weights = WeightFitter(LinearModelWithBaseline(), baseline, y, x).fit()
     assert np.allclose(weights.values[0], [1., -2.], atol=.03)
