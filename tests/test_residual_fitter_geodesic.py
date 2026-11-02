@@ -62,10 +62,8 @@ def make_fitter(n_voxels, n_trials=10):
     paradigm = pd.DataFrame({'x': np.linspace(1, 10, n_trials)}, dtype=np.float32)
     pars = pd.DataFrame({'mu': np.linspace(2, 9, n_voxels), 'sd': 3., 'amplitude': 1.,
                          'baseline': 0.}, dtype=np.float32)
-    model = GaussianPRF(paradigm=paradigm, parameters=pars)
     data = pd.DataFrame(np.zeros((n_trials, n_voxels), dtype=np.float32))
-    model.init_pseudoWWT(np.linspace(1, 10, 20)[:, None].astype(np.float32), pars)
-    return ResidualFitter(model, data, paradigm, parameters=pars)
+    return ResidualFitter(GaussianPRF(), data, paradigm, parameters=pars)
 
 
 def simulate_residuals(omega, n_trials, seed=1):
@@ -213,21 +211,21 @@ def test_nonpositive_init_beta_is_refused(bad):
     f = make_fitter(5)
     with pytest.raises(ValueError, match='init_beta'):
         f.fit(D=k32_distances(), init_beta=bad, residuals=np.zeros((10, 5)) + np.eye(10, 5),
-              max_n_iterations=2, progressbar=False)
+              use_wwt=False, max_n_iterations=2, progressbar=False)
 
 
 def test_distance_options_that_would_be_ignored_are_refused():
     r = np.random.default_rng(0).standard_normal((10, 5)).astype(np.float32)
     with pytest.raises(ValueError, match='spherical'):
-        make_fitter(5).fit(D=k32_distances(), spherical=True, residuals=r, progressbar=False)
+        make_fitter(5).fit(D=k32_distances(), spherical=True, residuals=r, use_wwt=False, progressbar=False)
     f = make_fitter(5)
     f.lambd = .5
     with pytest.raises(ValueError, match='lambd'):
-        f.fit(D=k32_distances(), residuals=r, progressbar=False)
+        f.fit(D=k32_distances(), residuals=r, use_wwt=False, progressbar=False)
     with pytest.raises(ValueError, match='shape'):
-        make_fitter(5).fit(D=np.zeros((4, 4)), residuals=r, progressbar=False)
+        make_fitter(5).fit(D=np.zeros((4, 4)), residuals=r, use_wwt=False, progressbar=False)
     with pytest.raises(ValueError, match='psd_correction'):
-        make_fitter(5).fit(D=k32_distances(), psd_correction='jitter', residuals=r, progressbar=False)
+        make_fitter(5).fit(D=k32_distances(), psd_correction='jitter', residuals=r, use_wwt=False, progressbar=False)
 
 
 def test_beta_stays_positive_when_the_data_want_it_negative():
