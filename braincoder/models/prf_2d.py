@@ -782,7 +782,7 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
         surround_baseline = parameters[:, :, 7][:, None, :]
 
         neural_activation = rf_amplitude * ops.tensordot(paradigm, rf, axes=[[2], [2]])[:, :, 0, :] + neural_baseline
-        normalization = (srf_amplitude * rf_amplitude) * ops.tensordot(paradigm, srf, axes=[[2], [2]])[:, :, 0, :] + surround_baseline
+        normalization = (srf_amplitude * ops.abs(rf_amplitude)) * ops.tensordot(paradigm, srf, axes=[[2], [2]])[:, :, 0, :] + surround_baseline
 
         normalized_activation = (neural_activation / normalization)
 

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from braincoder.hrf import SPMHRFModel
-from braincoder.models import (DivisiveNormalizationGaussianPRF2DWithHRF, GaussianPRF, GaussianPRF2D,
+from braincoder.models import (DivisiveNormalizationGaussianPRF2D, DivisiveNormalizationGaussianPRF2DWithHRF, GaussianPRF, GaussianPRF2D,
                                GaussianPRF2DWithHRF, GaussianPRFWithHRF, LinearModel,
                                LinearModelWithBaseline, LinearModelWithBaselineHRF)
 from braincoder.optimize import ParameterFitter, ResidualFitter, WeightFitter
@@ -211,6 +211,17 @@ def test_dn_hrf_model_decodes_without_the_hrf():
         warnings.simplefilter('ignore')
         pred = model.predict_stimulus_grid(images, parameters=pars)
     assert pred.shape == (4, 2) and np.isfinite(pred).all() and pred.std() > 1e-3
+
+
+def test_dn_denominator_uses_absolute_amplitude():
+    g = np.linspace(-5, 5, 15)
+    coords = np.stack(np.meshgrid(g, g), -1).reshape(-1, 2).astype(np.float32)
+    images = np.ones((1, len(coords)), dtype=np.float32)
+    base = dict(x=0., y=0., sd=2., srf_amplitude=5., srf_size=2., neural_baseline=0., surround_baseline=1.)
+    model = DivisiveNormalizationGaussianPRF2D(grid_coordinates=coords, paradigm=images)
+    positive = model.predict(paradigm=images, parameters=pd.DataFrame([{**base, 'rf_amplitude': 1.}]).astype(np.float32))
+    negative = model.predict(paradigm=images, parameters=pd.DataFrame([{**base, 'rf_amplitude': -1.}]).astype(np.float32))
+    assert np.allclose(negative.values, -positive.values, atol=1e-5)
 
 
 def test_linear_model_simulate_without_parameters():

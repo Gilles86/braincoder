@@ -35,6 +35,10 @@ heads-up below.
   `(weights, intercept)`. `WeightFitter` with `LinearModelWithBaseline` now subtracts the
   known baseline first: an all-positive feature otherwise absorbed the offset, and decoding
   could fall to r≈0.
+- **DN with a negative `rf_amplitude`:** the denominator used the signed amplitude, so it
+  shrank and could cross zero, giving poles in the prediction. It now uses `|rf_amplitude|`, as the
+  TensorFlow-era line did and as Aqil et al. (2021) define it. Positive amplitudes are unchanged.
+  **Refit DN models where negative amplitudes occurred.**
 - `refine_baseline_and_amplitude`: clear error for zero amplitudes (TF raised
   "not invertible", JAX returned junk); `n_iterations > 1` keeps `positive_amplitude` and
   `l2_alpha`.
