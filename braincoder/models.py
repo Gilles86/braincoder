@@ -1755,17 +1755,35 @@ class GaussianPRF2D(EncodingModel):
     σ enforced by ``σ = sd_min + softplus(raw)``. Positive ``sd_min``
     (≥ 1 grid-pixel) eliminates the σ → 0 collapse failure mode that
     otherwise produces NaN predictions and phantom R²=1 voxels.
+
+    ``rf_normalization`` (ctor kwarg) sets the scale of the Gaussian
+    before ``amplitude`` multiplies it, and so what the amplitude means:
+
+    - ``'legacy'`` (default): divided by ``σ·√(2π) / pixel_area``.
+    - ``'peak'``: peak 1 (prfpy's ``normalize_RFs=False``); amplitude is
+      the drive per stimulated pixel at the pRF centre.
+    - ``'area'``: integral 1 over the visual field (``pixel_area /
+      (2π σ²)``); ``<stimulus, G>`` is the stimulated fraction of the pRF.
+
+    The three are reparameterisations of each other: with σ fixed,
+    amplitudes convert exactly by the ratio of the scale factors.
     """
+
+    RF_NORMALIZATIONS = ('legacy', 'peak', 'area')
 
     parameter_labels = ['x', 'y', 'sd', 'baseline', 'amplitude']
     stimulus_type = ImageStimulus
 
     def __init__(self, grid_coordinates=None, paradigm=None, data=None, parameters=None,
                  weights=None, omega=None, positive_image_values_only=True, verbosity=logging.INFO,
-                 sd_min=0.0, **kwargs):
+                 sd_min=0.0, rf_normalization='legacy', **kwargs):
 
         # Lower bound for σ-like parameters; see EncodingModel docstring.
         self.sd_min = float(sd_min)
+        if rf_normalization not in self.RF_NORMALIZATIONS:
+            raise ValueError(f'rf_normalization must be one of {self.RF_NORMALIZATIONS}, '
+                             f'got {rf_normalization!r}')
+        self.rf_normalization = rf_normalization
 
         self.data = data
         self.parameters = format_parameters(parameters)
@@ -1848,10 +1866,17 @@ class GaussianPRF2D(EncodingModel):
         gauss = (tf.exp(-((x-mu_x)**2 + (y-mu_y)**2)/(2*sd**2))) * amplitude
 
         if normalize:
-            norm = sd * tf.sqrt(2 * np.pi) / self.pixel_area
-            gauss = gauss / norm
-        
+            gauss = gauss * self._rf_scale(sd)
+
         return gauss
+
+    def _rf_scale(self, sd):
+        """Factor applied to a peak-1 Gaussian of width ``sd`` (see ``rf_normalization``)."""
+        if self.rf_normalization == 'peak':
+            return tf.ones_like(sd)
+        if self.rf_normalization == 'area':
+            return float(self.pixel_area) / (2 * np.pi * sd ** 2)
+        return float(self.pixel_area) / (sd * np.sqrt(2 * np.pi))
 
     @tf.function
     def _transform_parameters_forward(self, parameters):
