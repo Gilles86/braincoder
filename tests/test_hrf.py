@@ -22,9 +22,9 @@ class TestSPMHRFModel:
         assert hasattr(hrf, 'shape'), "get_hrf() should return an array-like with shape"
 
     def test_hrf_length(self, hrf_model):
-        """HRF length should span time_length / TR timepoints."""
+        """One sample per TR, from 0 up to time_length."""
         hrf = ops.convert_to_numpy(hrf_model.get_hrf())
-        expected_len = int(round(hrf_model.time_length / TR))
+        expected_len = len(np.arange(0., hrf_model.time_length, TR))
         assert hrf.shape[0] == expected_len
 
     def test_hrf_is_finite(self, hrf_model):
@@ -36,6 +36,24 @@ class TestSPMHRFModel:
         hrf = ops.convert_to_numpy(hrf_model.get_hrf())
         peak_time = hrf_model.time_stamps[np.argmax(hrf[:, 0])]
         assert 4.0 <= peak_time <= 9.0, f"HRF peak at {peak_time:.1f}s, expected 4–9s"
+
+    @pytest.mark.parametrize('tr', [0.9, 1.0, 1.2, 1.5, 2.0])
+    def test_matches_spm_canonical_hrf(self, tr):
+        """Default parameters give SPM's double gamma: shapes 6 and 16, ratio 1/6, sampled every TR."""
+        from braincoder.hrf import SPMHRFModel
+        from scipy.stats import gamma
+        model = SPMHRFModel(tr=tr)
+        assert np.allclose(np.diff(model.time_stamps), tr, atol=1e-5)
+        t = model.time_stamps.astype(np.float64)
+        expected = gamma.pdf(t, 6.) - gamma.pdf(t, 16.) / 6.
+        hrf = ops.convert_to_numpy(model.get_hrf()).ravel()
+        assert np.corrcoef(hrf, expected)[0, 1] > 0.9999
+
+    def test_default_hrf_peaks_near_5s(self):
+        from braincoder.hrf import SPMHRFModel
+        model = SPMHRFModel(tr=1.)
+        hrf = ops.convert_to_numpy(model.get_hrf()).ravel()
+        assert model.time_stamps[np.argmax(hrf)] == 5.
 
     def test_custom_delay_shifts_peak(self, hrf_model):
         """Larger delay parameter should shift the HRF peak later."""

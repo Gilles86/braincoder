@@ -149,16 +149,26 @@ def spm_hrf(t, a1=6., d1=1., a2=16., d2=1., c=1./6, highres_dt=0.1):
     t_hr = t_min + ops.arange(n_steps, dtype='float32') * highres_dt
     t_hr_2d = ops.expand_dims(t_hr, 1)
 
-    hrf1_hr = gamma_pdf_with_loc(t_hr_2d, a1, d1, highres_dt, loc=highres_dt)
-    hrf2_hr = gamma_pdf_with_loc(t_hr_2d, a2, d2, highres_dt, loc=highres_dt)
+    hrf1_hr = gamma_pdf_with_loc(t_hr_2d, a1, d1, highres_dt)
+    hrf2_hr = gamma_pdf_with_loc(t_hr_2d, a2, d2, highres_dt)
     hrf_hr = hrf1_hr - c * hrf2_hr
     hrf_hr /= ops.sum(hrf_hr, axis=0, keepdims=True)
 
     x_ref_max = t_min + highres_dt * ops.cast(n_steps - 1, 'float32')
     return interp_regular_1d_grid(t, t_min, x_ref_max, hrf_hr)
 
+def _tr_time_stamps(tr, time_length, onset=0.):
+    """HRF sample times, exactly one TR apart, because convolution assumes that spacing."""
+    return (np.arange(0., time_length, tr) - onset).astype(np.float32)
+
+
 class SPMHRFModel(HRFModel):
-    """Canonical SPM-style HRF parameterized by delay/dispersion bounds."""
+    """SPM's canonical double-gamma HRF, sampled every TR.
+
+    The response is a gamma with shape ``delay / dispersion`` and scale ``dispersion``, as in
+    SPM's ``spm_hrf``. So ``delay=6`` and ``dispersion=1`` give the canonical HRF, which peaks at
+    ``delay - dispersion`` = 5 s.
+    """
 
     parameter_labels = ['hrf_delay', 'hrf_dispersion']
     n_parameters = 2
@@ -166,7 +176,7 @@ class SPMHRFModel(HRFModel):
     def __init__(self, tr, highres_dt=0.1, time_length=32., onset=0.,
                  delay=6., undershoot=16., dispersion=1.,
                  u_dispersion=1., ratio=0.167,
-                 min_hrf_delay=3., max_hrf_delay=7.0,
+                 min_hrf_delay=4., max_hrf_delay=8.,
                  min_dispersion=0.3, max_dispersion=2.0):
         self.tr = tr
         self.highres_dt = highres_dt
@@ -182,9 +192,7 @@ class SPMHRFModel(HRFModel):
         self.min_dispersion = min_dispersion
         self.max_dispersion = max_dispersion
         self.dt = self.tr
-        self.time_stamps = np.linspace(1e-4, self.time_length,
-                                      np.rint(float(self.time_length) / self.dt).astype(np.int32)).astype(np.float32)
-        self.time_stamps -= self.onset
+        self.time_stamps = _tr_time_stamps(self.tr, self.time_length, self.onset)
 
         self.transformations = [
             bounded_sigmoid_transform(self.min_hrf_delay, self.max_hrf_delay),
@@ -200,7 +208,7 @@ class SPMHRFModel(HRFModel):
         if hrf_dispersion is None:
             hrf_dispersion = self.hrf_dispersion
 
-        peak_shape = hrf_delay / hrf_dispersion + 1.
+        peak_shape = hrf_delay / hrf_dispersion
         undershoot_shape = self.undershoot / self.u_dispersion
         hrf = spm_hrf(self.time_stamps,
                       a1=peak_shape, d1=hrf_dispersion,
@@ -227,10 +235,7 @@ class SPMHRFDerivativeModel(HRFModel):
         self.u_dispersion = u_dispersion
         self.ratio = ratio
         self.max_weight = max_weight
-        self.time_stamps = np.linspace(1e-4, self.time_length,
-                                       np.rint(float(self.time_length) / self.tr).astype(np.int32)).astype(np.float32)
-        self.time_stamps -= self.onset
-        self.time_stamps = self.time_stamps[:, np.newaxis]
+        self.time_stamps = _tr_time_stamps(self.tr, self.time_length, self.onset)[:, np.newaxis]
         self.transformations = [
             bounded_sigmoid_transform(-self.max_weight, self.max_weight),
             bounded_sigmoid_transform(-self.max_weight, self.max_weight)
@@ -238,7 +243,7 @@ class SPMHRFDerivativeModel(HRFModel):
 
     def get_hrf(self, delay_weight=0., dispersion_weight=0.):
         base_hrf = spm_hrf(self.time_stamps,
-                           a1=self.delay / self.dispersion + 1., d1=self.dispersion,
+                           a1=self.delay / self.dispersion, d1=self.dispersion,
                            a2=self.undershoot / self.u_dispersion, d2=self.u_dispersion,
                            c=self.ratio,
                            highres_dt=self.highres_dt)
@@ -246,14 +251,14 @@ class SPMHRFDerivativeModel(HRFModel):
         eps = 1e-2
 
         d_delay = spm_hrf(self.time_stamps,
-                          a1=(self.delay + eps) / self.dispersion + 1., d1=self.dispersion,
+                          a1=(self.delay + eps) / self.dispersion, d1=self.dispersion,
                           a2=self.undershoot / self.u_dispersion, d2=self.u_dispersion,
                           c=self.ratio,
                           highres_dt=self.highres_dt)
         derivative_delay = (d_delay - base_hrf) / eps
 
         d_disp = spm_hrf(self.time_stamps,
-                         a1=self.delay / (self.dispersion + eps) + 1., d1=self.dispersion + eps,
+                         a1=self.delay / (self.dispersion + eps), d1=self.dispersion + eps,
                          a2=self.undershoot / self.u_dispersion, d2=self.u_dispersion,
                          c=self.ratio,
                          highres_dt=self.highres_dt)
