@@ -162,6 +162,21 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
     return L
 
 
+def strict_cholesky(M):
+    """Cholesky factor of the symmetrised ``M``, with no jitter.
+
+    For matrices that are positive definite by construction. A numerical
+    failure is not papered over: it raises (TF, torch, eager JAX) or returns
+    NaN (JAX under tracing), which ``ResidualFitter.fit`` counts as a failed
+    step and rolls back, so what is reported in ``n_failed_steps`` is what
+    happened. Contrast :func:`safe_cholesky`, which always adds at least
+    ``1e-4 * mean(diag(M))`` to the diagonal, so the likelihood it gives is
+    that of a different matrix from the one returned to the caller.
+    """
+    M_t = ops.convert_to_tensor(M)
+    return ops.cholesky(0.5 * (M_t + ops.transpose(M_t)))
+
+
 # ---------------------------------------------------------------------------
 # Inverse transforms
 # ---------------------------------------------------------------------------

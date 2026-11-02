@@ -64,7 +64,7 @@ class GeodesicGPPrior(object):
                 f"distance_matrix must be square 2-D, got shape {d.shape}")
 
         if psd_correction == 'mds':
-            d = _mds_embed_distances(d)
+            d = mds_embed_distances(d)
         elif psd_correction != 'none':
             raise ValueError(
                 f"psd_correction must be 'mds' or 'none', got {psd_correction!r}")
@@ -284,36 +284,78 @@ def _to_unconstrained(x):
         softplus_inverse(ops.convert_to_tensor(x_arr, dtype='float32')))
 
 
-def _mds_embed_distances(d):
-    """Replace a (possibly non-Euclidean) distance matrix with its closest
-    Euclidean approximation via classical multi-dimensional scaling.
+def mds_embed_distances(d, return_info=False):
+    """Closest Euclidean approximation of a distance matrix, by classical MDS.
 
     Classical MDS works on the double-centered squared-distance matrix
     ``B = -0.5 * J D² J``. Its positive eigenvalues' coordinates give a
     Euclidean embedding; negative eigenvalues correspond to the
-    non-Euclidean part of the input metric, which we drop. The output
-    matrix is the matrix of Euclidean distances among the embedded
-    coordinates.
+    non-Euclidean part of the input metric, which is dropped. The output
+    is the matrix of Euclidean distances among the embedded coordinates.
 
-    For graph distances (mesh-edge Dijkstra, heat-method geodesics,
-    etc.) this is the standard trick to make ``exp(-d²/2l²)`` a valid
-    PSD kernel without further numerical tricks at run time.
+    Consequences that callers rely on:
+
+    * ``exp(-d²/2l²)`` and ``exp(-beta d)`` are positive semi-definite for
+      every ``l, beta > 0`` on the output (Schoenberg 1938), which they need
+      not be on the input: mesh-edge Dijkstra and other geodesic distances
+      are generally not Euclidean.
+    * Discarding negative eigenvalues can only lengthen distances
+      (``output >= input`` up to rounding), so the output is not the input:
+      report ``info['negative_eigenvalue_fraction']`` and compare the two.
+    * Two points at distance 0 with identical distance rows (e.g. voxels
+      that share a mesh vertex) stay at distance 0, so a kernel on the output
+      is singular on that pair. It is PSD, not strictly PD, there.
+
+    Memory is ``O(n²)``: the distances come from the Gram matrix
+    ``C Cᵀ = V_+ diag(w_+) V_+ᵀ``, not from an ``n × n × r`` difference tensor.
+
+    Parameters
+    ----------
+    d : array (n, n)
+        Symmetric, finite, non-negative distances.
+    return_info : bool
+        Also return a dict with ``n_components``,
+        ``negative_eigenvalue_fraction`` (Σ|negative eigenvalues| / Σ|all
+        eigenvalues|; 0 for a Euclidean input).
+
+    Returns
+    -------
+    d_euclidean : float32 array (n, n)
+    info : dict, only if ``return_info``
     """
     d = np.asarray(d, dtype=np.float64)
+    if d.ndim != 2 or d.shape[0] != d.shape[1]:
+        raise ValueError(f'distance matrix must be square 2-D, got shape {d.shape}')
+    if not np.isfinite(d).all():
+        raise ValueError(
+            f'distance matrix has {int((~np.isfinite(d)).sum())} non-finite '
+            'entries (unreachable vertices on a disconnected mesh or patch?); '
+            'it cannot be embedded.')
+    if (d < 0).any():
+        raise ValueError('distance matrix has negative entries')
     n = d.shape[0]
     D2 = d ** 2
-    # Double-centering: J D² J where J = I - 11ᵀ/n
-    J = np.eye(n) - 1.0 / n
-    B = -0.5 * (J @ D2 @ J)
+    # Double-centering without forming J = I - 11ᵀ/n
+    row_mean = D2.mean(axis=1, keepdims=True)
+    B = -0.5 * (D2 - row_mean - row_mean.T + D2.mean())
     # Symmetrize before eigendecomposition (numerical drift)
     B = 0.5 * (B + B.T)
     w, V = np.linalg.eigh(B)
-    # Keep positive eigenvalues only — the negative ones are exactly the
+    # Keep positive eigenvalues only: the negative ones are exactly the
     # non-Euclidean component we want to discard.
-    pos = w > 1e-10 * np.abs(w).max()
-    coords = V[:, pos] * np.sqrt(w[pos])               # (n, k)
-    # Pairwise Euclidean distances on the embedded coords.
-    diff = coords[:, None, :] - coords[None, :, :]
-    d_euc = np.sqrt((diff ** 2).sum(axis=-1)).astype(np.float32)
+    pos = w > 1e-10 * max(np.abs(w).max(), np.finfo(np.float64).tiny)
+    # Pairwise Euclidean distances from the Gram matrix of the embedding.
+    G = (V[:, pos] * w[pos]) @ V[:, pos].T
+    g = np.diag(G)
+    d_euc = np.sqrt(np.clip(g[:, None] + g[None, :] - 2.0 * G, 0.0, None)).astype(np.float32)
     np.fill_diagonal(d_euc, 0.0)
+    if return_info:
+        total = np.abs(w).sum()
+        neg = np.abs(w[w < 0]).sum()
+        return d_euc, dict(n_components=int(pos.sum()),
+                           negative_eigenvalue_fraction=float(neg / total) if total > 0 else 0.0)
     return d_euc
+
+
+# Backwards-compatible private name.
+_mds_embed_distances = mds_embed_distances

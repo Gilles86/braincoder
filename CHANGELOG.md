@@ -16,6 +16,37 @@ The bounds on a fitted `hrf_delay` move from 3-7 to 4-8, so the range of fitted 
 same. To reproduce an older fit, use `SPMHRFModel(tr=tr, delay=7.)` for about the old peak time; the
 sampling change can't be undone.
 
+### Distance-dependent noise model
+
+Fixes to the distance-dependent noise model, `ResidualFitter.fit(D=...)`:
+Ω = ρ[α(e^{−βD̃} ∘ ττᵀ) + (1−α)ττᵀ] + (1−ρ)diag(τ²) + σ²WWᵀ. **Refit anything fitted with `D=`
+before this.**
+
+- **β is constrained positive** (softplus). It was an unconstrained variable, so a step to
+  β < 0 made the kernel grow with distance. The default `init_beta` changes from 0, which is
+  no longer in the domain, to 1 / median(off-diagonal D̃); an `init_beta` ≤ 0 raises. Without
+  `D`, nothing changes.
+- **Ω is positive definite by construction.** The kernel is now computed on D̃, the
+  classical-MDS Euclidean embedding of `D` (the embedding `GeodesicGPPrior` already used), not
+  on raw graph distances, where an exponential kernel need not be PSD. `psd_correction='none'`
+  keeps `D` as given, for distances known to be Euclidean. MDS lengthens non-Euclidean
+  distances, so β is on the scale of D̃: compare `fitter.distance_matrix_embedded_` with `D`,
+  and see `fitter.mds_info_['negative_eigenvalue_fraction']`.
+- **No jitter with `D`.** New `cholesky='strict'|'safe'` argument, default `'strict'` with `D`
+  and `'safe'` (unchanged) without it. `safe_cholesky` always adds at least
+  1e-4 · mean(diag Ω), so the fitted likelihood was that of a different matrix from the one
+  returned. A numerical failure is now a rolled-back step, counted in `n_failed_steps`, and
+  `fitter.omega_min_eigenvalue_` reports the returned Ω. Pass `cholesky='strict'` to a fit without
+  `D` as well when comparing the two, so that the kernel is the only difference.
+- **`D` combined with `lambd > 0` or `spherical=True` now raises.** `lambd > 0` silently dropped
+  `D`; `spherical=True` crashed with an unrelated error. A non-finite `D` (unreachable vertices
+  on a disconnected patch) raises as well.
+- `fitted_omega_parameters['beta']` is now the constrained value.
+- `mds_embed_distances` (`braincoder.optimize.gp_prior`) is public, can return diagnostics, and
+  uses O(n²) memory instead of an n × n × r difference tensor, which needed about 4 GB at
+  n = 800 and about 64 GB at n = 2000. `GeodesicGPPrior` output is unchanged.
+- `init_tau` is cast to float32, so float64 residuals work on torch with MPS.
+
 ## 0.7.0 (2026-11-02)
 
 **Breaking.** Models no longer hold data or fitted values. See the

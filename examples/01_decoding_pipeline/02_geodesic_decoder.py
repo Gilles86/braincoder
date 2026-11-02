@@ -19,12 +19,15 @@ adds a distance-modulated component:
 .. math::
 
     \\Omega = \\rho\\,\\bigl[\\alpha \\cdot
-    (e^{-\\beta D} \\odot \\tau\\tau^T) + (1 - \\alpha) \\cdot \\tau\\tau^T \\bigr]
+    (e^{-\\beta \\tilde D} \\odot \\tau\\tau^T) + (1 - \\alpha) \\cdot \\tau\\tau^T \\bigr]
     + (1 - \\rho)\\,\\mathrm{diag}(\\tau^2)
     + \\sigma^2 W W^T
 
-where :math:`D` is voxel-to-voxel distance, and :math:`\\alpha,\\beta`
-are learned from data. Plug in **geodesic** distance on the cortical
+where :math:`\\tilde D` is the classical-MDS Euclidean embedding of the
+voxel-to-voxel distance matrix :math:`D`, which makes :math:`\\Omega` positive
+definite by construction, and :math:`\\alpha \\in (0, 1), \\beta > 0` are learned
+from data. At :math:`\\alpha = 0` this is the model of van Bergen et al. (2015).
+Plug in **geodesic** distance on the cortical
 mesh (rather than Euclidean) and you respect the fact that two voxels
 sitting on opposite banks of a sulcus are close in 3D but functionally
 far apart.
