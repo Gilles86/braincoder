@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.6.2 (2026-11-02)
+
+Bug-fix release: inputs that gave plausible-looking wrong results now give the right
+result or a clear error. Some of these change what existing scripts do, so read the
+heads-up below.
+
+- **`get_rsq` raises `ValueError` when row or column labels differ.** Without overlapping
+  rows, it returned R² = 1.0 for every voxel, because a sum skips the NaN that pandas
+  filled in. **If your cvR² came from frames with different indices, recompute it.** A
+  residual that is entirely NaN now gives NaN.
+- **`ParameterFitter` pairs `data` and `paradigm` by position throughout.** `fit` always
+  did, but `refine_baseline_and_amplitude` and `get_rsq` paired by label, so an off-by-one
+  index compared shifted timeseries: refined amplitudes were wrong, with no error. The
+  paradigm now takes the index of the data, with a warning if a labelled index differed.
+  **Refit if this applied to you.** A different number of rows raises `ValueError`.
+- **Voxels with any NaN, or zero variance, now return NaN** (parameters and `fitter.r2`),
+  with a warning, instead of all-zero parameters and `r2 == -1000`. `fitter.r2.mean()`
+  therefore stays meaningful. Such voxels also no longer poison `shared_pars`.
+- **`get_stimulus_pdf` and `predict_stimulus_grid` raise `ValueError` on non-finite
+  parameters.** A single such row used to make every posterior NaN.
+- **Decoding with `*WithHRF` models now ignores the HRF, with a warning.** Each candidate
+  stimulus was treated as a one-sample timeseries, which scaled the tuning curve by the first
+  HRF samples: about 1/17 at a TR of 1.6 s, making posteriors about 5× too wide in a test.
+  **Re-decode if you decoded with a `*WithHRF` model.**
+- `get_fisher_information` and `get_expected_uncertainty` raise `NotImplementedError` on
+  `*WithHRF` models, which would convolve the stimuli as one timeseries.
+- **`get_stimulus_pdf` uses `model.dof` when it also uses `model.omega`.** It previously
+  fell back to a Gaussian likelihood. With an explicit `omega=`, `dof=None` still means
+  Gaussian.
+- **`ResidualFitter`** pairs residuals by position, reorders voxels if needed, and gives
+  clear errors for NaN residuals, an empty voxel selection or different voxels.
+- **`WeightFitter.fit(fit_intercept=True)`** fits a per-voxel intercept and returns
+  `(weights, intercept)`. `WeightFitter` with `LinearModelWithBaseline` now subtracts the
+  known baseline first: an all-positive feature otherwise absorbed the offset, and decoding
+  could fall to r≈0.
+- `refine_baseline_and_amplitude`: clear error for zero amplitudes (TF raised
+  "not invertible", JAX returned junk); `n_iterations > 1` keeps `positive_amplitude` and
+  `l2_alpha`.
+- `get_rf(parameters=...)` no longer ignores its argument.
+- `to_linear_model()` on `*WithHRF` models raised `TypeError`. It now works, and
+  `LinearModelWithBaselineHRF` adds the baseline after convolution, so it matches the PRF model.
+- A flexible-HRF model given `parameters=` in its constructor raised `KeyError`.
+- `LinearModel.simulate()` without parameters raised `AttributeError`.
+- Passing `omega=` to a constructor uses `safe_cholesky`, as decoding does, instead of raising
+  `LinAlgError` on a slightly non-PSD matrix.
+- A missing TensorFlow or TFP now gives an explanatory `ImportError` for `StimulusFitter`, and
+  `from braincoder.optimize import *` no longer fails.
+- Torch on MPS: fixed device errors in `get_rf` and the DN `*WithHRF` model.
+- Docs: braincoder is not on PyPI, so the install page now uses tagged git URLs. Added citation,
+  license, related software (prfmodel) and the Claude Code skill. `.zenodo.json`: corrected
+  ORCIDs and no longer describes the package as TensorFlow-based.
+
 ## 0.6.1 (2026-11-02)
 
 Bug-fix release.

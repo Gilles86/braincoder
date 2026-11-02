@@ -85,9 +85,31 @@ class ResidualFitter(object):
         """
 
         n_voxels = self.data.shape[1]
+        if n_voxels == 0:
+            raise ValueError('ResidualFitter: data has no voxels; a noise model '
+                             'cannot be fitted to an empty selection.')
 
         if residuals is None:
-            residuals = (self.data - self.model.predict(paradigm=self.paradigm)).values
+            predictions = self.model.predict(paradigm=self.paradigm)
+            if len(predictions) != len(self.data):
+                raise ValueError(f'paradigm has {len(predictions)} rows but data '
+                                 f'has {len(self.data)}.')
+            if not predictions.columns.equals(self.data.columns):
+                if set(predictions.columns) != set(self.data.columns):
+                    raise ValueError(
+                        'The voxels of the model and of the data differ: pass '
+                        'parameters and weights for exactly the columns of data.')
+                predictions = predictions[self.data.columns]
+            # By position, like the fitters: labels may differ between the
+            # index of the data and the index of the paradigm.
+            residuals = self.data.values - predictions.values
+
+        if not np.isfinite(residuals).all():
+            raise ValueError(
+                f'ResidualFitter: residuals of '
+                f'{int((~np.isfinite(residuals)).any(axis=0).sum())} of {n_voxels} '
+                'voxels contain NaN or inf. Check the data and parameters of these '
+                'voxels, and drop them before fitting the noise model.')
 
         sample_cov = np.cov(residuals.T)
 

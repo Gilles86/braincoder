@@ -3,6 +3,7 @@ import datetime
 import logging
 import os
 import os.path as op
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -47,7 +48,7 @@ class ParameterFitter:
                  memory_limit=666666666, log_dir=False):
         self.model = model
         self.data = data.astype(np.float32)
-        self.paradigm = model.get_paradigm(paradigm)
+        self.paradigm = self._align_paradigm(model.get_paradigm(paradigm), paradigm)
         self.memory_limit = memory_limit
         self.log_dir = log_dir
 
@@ -61,6 +62,29 @@ class ParameterFitter:
                 self.summary_writer = tf.summary.create_file_writer(
                     op.join(log_dir,
                              datetime.datetime.now().strftime("%Y%m%d-%H%M%S")))
+
+    def _align_paradigm(self, paradigm, original):
+        """Give the paradigm the index of the data.
+
+        ``fit`` pairs rows by position, but pandas arithmetic in ``get_rsq``
+        and ``refine_baseline_and_amplitude`` pairs them by label, so a
+        mismatch would silently compare the wrong rows.
+        """
+        if len(paradigm) != len(self.data):
+            raise ValueError(f'paradigm has {len(paradigm)} rows but data has '
+                             f'{len(self.data)}.')
+        if paradigm.index.equals(self.data.index):
+            return paradigm
+        if isinstance(original, (pd.DataFrame, pd.Series)):
+            name = paradigm.index.name
+            same_level = (name in self.data.index.names and paradigm.index.equals(
+                self.data.index.get_level_values(name)))
+            if not same_level:
+                warnings.warn(
+                    'The index of the paradigm differs from the index of the data. '
+                    'Pairing their rows by position and using the index of the data.',
+                    RuntimeWarning, stacklevel=3)
+        return paradigm.set_axis(self.data.index, axis=0)
 
     # ------------------------------------------------------------ fit
     def fit(self, max_n_iterations=1000,
@@ -106,7 +130,9 @@ class ParameterFitter:
         Returns
         -------
         pd.DataFrame
-            Per-voxel parameter estimates, indexed by voxel.
+            Per-voxel parameter estimates, indexed by voxel. Voxels that
+            contain any NaN or have zero variance cannot be fitted: they get
+            a warning, and NaN in both the parameters and ``self.r2``.
         """
         if noise_model not in _VALID_NOISE_MODELS:
             raise ValueError(
@@ -120,8 +146,17 @@ class ParameterFitter:
         ssq_data = ops.sum((y - ops.mean(y, axis=0)[None, :]) ** 2, axis=0)
         meaningful_ts = ops.convert_to_numpy(ssq_data > 0.0)
         meaningful_ixs = np.where(meaningful_ts)[0]
-        logger.info('Voxels masked out (zero-variance): %d; remaining: %d',
-                     int((~meaningful_ts).sum()), int(meaningful_ts.sum()))
+        n_masked = int((~meaningful_ts).sum())
+        if n_masked:
+            warnings.warn(
+                f'{n_masked} of {n_voxels} voxels contain NaN or have zero variance '
+                'and cannot be fitted. Their parameters and R² will be NaN; '
+                'drop them first to save compute.', RuntimeWarning, stacklevel=2)
+        # Masked voxels must not reach the loss: a NaN would poison any
+        # shared parameter through its gradient.
+        meaningful_t = ops.convert_to_tensor(meaningful_ts)
+        y_fit = ops.where(meaningful_t[None, :], y, ops.zeros_like(y))
+        meaningful_f = ops.cast(meaningful_t, 'float32')
 
         # ---- init parameters in unconstrained space ----------------
         if init_pars is None:
@@ -132,6 +167,9 @@ class ParameterFitter:
         init_pars = ops.convert_to_numpy(
             self.model._transform_parameters_backward(
                 init_pars.values.astype(np.float32)))
+        # The result of an earlier fit has NaN for masked voxels.
+        init_pars = init_pars.copy()
+        init_pars[~meaningful_ts] = 0.0
         init_pars_t = ops.convert_to_tensor(init_pars)
 
         # ---- which parameters are trainable, shared, fixed ----------
@@ -166,7 +204,7 @@ class ParameterFitter:
                 ops.convert_to_tensor(self.paradigm.values, dtype='float32')[None, ...],
                 self.model._transform_parameters_forward(init_pars_t)[None, ...],
                 None)[0]
-            init_resid = y - with_init_pred
+            init_resid = y_fit - with_init_pred
             init_sigma2 = ops.convert_to_numpy(
                 ops.mean(init_resid ** 2, axis=0))
             # NaN columns (all-NaN voxels, or model predictions that
@@ -194,7 +232,7 @@ class ParameterFitter:
         def get_ssq(parameters):
             predictions = self.model._predict(
                 paradigm_clean[None, ...], parameters[None, ...], None)
-            return ops.sum((y - predictions[0]) ** 2, axis=0)
+            return ops.sum((y_fit - predictions[0]) ** 2, axis=0) * meaningful_f
 
         # ---- optimizer ---------------------------------------------
         if optimizer is None:
@@ -214,8 +252,7 @@ class ParameterFitter:
                 return ops.sum(get_ssq(native))
         else:  # 'gaussian'
             _LOG_2PI = float(np.log(2.0 * np.pi))
-            meaningful_mask = ops.convert_to_tensor(
-                meaningful_ts.astype(np.float32))
+            meaningful_mask = meaningful_f
             n_t_f = ops.cast(n_timepoints, 'float32')
 
             def loss_fn():
@@ -232,7 +269,7 @@ class ParameterFitter:
         if progressbar:
             pbar = tqdm(pbar)
 
-        best_r2 = ops.ones(y.shape[1]) * -1e3
+        best_r2 = ops.ones(y.shape[1]) * float('-inf')
         best_parameters = ops.zeros(init_pars.shape)
         intermediate_parameters = [] if store_intermediate_parameters else None
         mean_best_r2s = []
@@ -255,7 +292,8 @@ class ParameterFitter:
             pars = build_parameters()
             untransformed = self.model._transform_parameters_forward(pars)
             ssq = get_ssq(untransformed)
-            r2 = 1 - ssq / ssq_data
+            r2 = ops.where(meaningful_t, 1 - ssq / ssq_data,
+                           ops.full_like(ssq, float('nan')))
 
             # When no parameter is shared, track the best per-voxel
             # state seen so far. With shared params the "best" needs
@@ -312,9 +350,10 @@ class ParameterFitter:
         # convergence comparisons.
         self.loss_history_ = np.asarray(loss_history, dtype=np.float64)
 
+        best_parameters = np.array(ops.convert_to_numpy(best_parameters))
+        best_parameters[~meaningful_ts] = np.nan
         self.estimated_parameters = format_parameters(
-            ops.convert_to_numpy(best_parameters),
-            self.model.parameter_labels)
+            best_parameters, self.model.parameter_labels)
         self.estimated_parameters.index = self.data.columns
         if not self.estimated_parameters.index.name:
             self.estimated_parameters.index.name = 'source'
@@ -337,8 +376,9 @@ class ParameterFitter:
 
         self.predictions = self.model.predict(
             self.paradigm, self.estimated_parameters, self.model.weights)
-        self.r2 = pd.Series(ops.convert_to_numpy(best_r2),
-                             index=self.data.columns)
+        best_r2 = np.array(ops.convert_to_numpy(best_r2))
+        best_r2[~meaningful_ts] = np.nan
+        self.r2 = pd.Series(best_r2, index=self.data.columns)
 
         return self.estimated_parameters
 
@@ -544,6 +584,12 @@ class ParameterFitter:
             amplitude_ix = 'amplitude'
             baseline_ix = 'baseline'
 
+        if (parameters[amplitude_ix] == 0).any():
+            raise ValueError(
+                'refine_baseline_and_amplitude needs nonzero amplitudes to recover '
+                'the shape of the prediction. Use a nonzero placeholder in the '
+                'grid, e.g. amplitude=[1.].')
+
         orig_r2 = get_rsq(data, predictions)
         demeaned = ((predictions - parameters.loc[:, baseline_ix].T)
                     / parameters.loc[:, amplitude_ix])
@@ -576,7 +622,8 @@ class ParameterFitter:
         if n_iterations == 1:
             return parameters
         return self.refine_baseline_and_amplitude(
-            parameters, n_iterations - 1)
+            parameters, n_iterations - 1,
+            positive_amplitude=positive_amplitude, l2_alpha=l2_alpha)
 
     # ------------------------------------------------------------ misc API
     def get_predictions(self, parameters=None):

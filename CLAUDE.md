@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Braincoder is a TensorFlow-based neuroimaging package for fitting encoding models to fMRI data and decoding stimuli from neural responses. It models how neurons respond to stimuli via Population Receptive Fields (PRFs) and supports HRF (hemodynamic response function) convolution for fMRI.
+Braincoder is a Keras 3 neuroimaging package (TensorFlow, JAX or PyTorch backend) for fitting encoding models to fMRI data and decoding stimuli from neural responses. It models how neurons respond to stimuli via Population Receptive Fields (PRFs) and supports HRF (hemodynamic response function) convolution for fMRI.
 
 ## Commands
 

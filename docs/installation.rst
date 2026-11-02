@@ -43,15 +43,19 @@ Each backend must be installed separately. The ``environment.yml`` includes all 
 pip-only install
 ----------------
 
-If you do not use conda, install braincoder and a backend with pip:
+braincoder is not on PyPI, so install a tagged release from GitHub, together with a
+backend:
 
 .. code-block:: bash
 
-    pip install braincoder tensorflow   # TensorFlow backend
+    pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" tensorflow   # TensorFlow
     # or
-    pip install braincoder jax[cpu]     # JAX backend
+    pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" "jax[cpu]"   # JAX
     # or
-    pip install braincoder torch        # PyTorch backend
+    pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" torch        # PyTorch
+
+Pin a tag like this in your project's environment, so that its results stay
+reproducible.
 
 For a development install from source:
 
@@ -68,7 +72,7 @@ Some features require optional packages:
 
 - **MCMC sampling**: ``blackjax`` (JAX backend recommended)
 - **Notebooks / tutorials**: ``jupyter``, ``ipykernel``
-- **Tests**: ``pytest`` (or ``pip install braincoder[test]``)
+- **Tests**: ``pytest`` (or ``pip install -e ".[test]"`` from a clone)
 
 Verifying the install
 ---------------------

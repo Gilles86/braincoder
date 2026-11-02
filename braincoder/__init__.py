@@ -2,7 +2,7 @@
 
 __author__ = """Gilles de Hollander"""
 __email__ = 'giles.de.hollander@gmail.com'
-__version__ = '0.6.1'
+__version__ = '0.6.2'
 
 from .models import (
     EncodingModel, EncodingRegressionModel, HRFEncodingModel,

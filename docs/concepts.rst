@@ -22,8 +22,8 @@ Core pipeline
    canonical or voxel-specific HRF.
 4. **Fit parameters or weights.** :class:`braincoder.optimize.WeightFitter`
    solves linear weights via least squares, whereas
-   :class:`braincoder.optimize.ParameterFitter` runs iterative TensorFlow
-   optimizers with support for constraints, shared parameters, and progress
+   :class:`braincoder.optimize.ParameterFitter` runs iterative Adam
+   optimization with support for constraints, shared parameters, and progress
    logging.
 5. **Decode or visualize.** Use the fitted encoding model to simulate
    responses, compute gradients, or invert the model (see the tutorials and

@@ -1,5 +1,13 @@
 # What's new
 
+## 0.6.2 highlights (2026-11-02)
+
+Bug-fix release. Inputs that gave plausible-looking wrong results now give the right result
+or a clear error. **Recompute** cvR² from frames with different indices (R² could be exactly
+1), **refit** if `data` and `paradigm` had different indices, and **re-decode** anything
+decoded with a `*WithHRF` model. Voxels that cannot be fitted now return NaN rather than
+zeros and `r2 == -1000`. Details are in the changelog below.
+
 ## 0.6.0 highlights (2026-10-25)
 
 - **Calibrated decoding.** {class}`braincoder.noise.LowRankNoise` models the

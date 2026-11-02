@@ -456,14 +456,14 @@ class GaussianPRF2D(EncodingModel):
         self.pixel_area = x_diff * y_diff
 
         if omega is not None:
-            self.omega_chol = np.linalg.cholesky(omega)
+            from .base import _cholesky_numpy
+            self.omega_chol = _cholesky_numpy(omega)
 
     def get_rf(self, as_frame=False, unpack=False, parameters=None):
 
         grid_coordinates = self.grid_coordinates.values
 
-        parameters = self._get_parameters(parameters)
-        parameters = self.parameters.values[np.newaxis, ...]
+        parameters = self._get_parameters(parameters).values[np.newaxis, ...]
 
         rf = self._get_rf(grid_coordinates, parameters)
         rf = ops.convert_to_numpy(rf)[0]
@@ -494,6 +494,7 @@ class GaussianPRF2D(EncodingModel):
 
         x = ops.convert_to_tensor(grid_coordinates[:, 0][None, None, :], dtype='float32')
         y = ops.convert_to_tensor(grid_coordinates[:, 1][None, None, :], dtype='float32')
+        parameters = ops.convert_to_tensor(parameters, dtype='float32')
 
         mu_x = parameters[:, :, 0, None]
         mu_y = parameters[:, :, 1, None]
@@ -833,8 +834,14 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
             bold_baseline = parameters[:, -1:]
             return ops.concatenate([encoding_pars1, bold_baseline], axis=1)
 
+    def _predict_no_hrf(self, paradigm, parameters, weights):
+        parameters = ops.convert_to_tensor(parameters, dtype='float32')
+        pre_convolve = DivisiveNormalizationGaussianPRF2D._predict(self, paradigm, parameters[..., :8], weights)
+        return pre_convolve - parameters[None, :, :, 6] / parameters[None, :, :, 7] + parameters[None, :, :, 8]
+
     def _predict(self, paradigm, parameters, weights):
 
+        parameters = ops.convert_to_tensor(parameters, dtype='float32')
         pre_convolve_parameters = parameters[..., :8]
         pre_convolve = DivisiveNormalizationGaussianPRF2D._predict(self, paradigm, pre_convolve_parameters, weights)
 

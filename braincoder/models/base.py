@@ -1,4 +1,5 @@
 import logging
+import warnings
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -22,6 +23,20 @@ def _apply_temperature(ll, temperature):
     if np.isinf(temperature):
         return np.zeros_like(ll)
     return ll / temperature
+
+
+def _cholesky_numpy(omega):
+    """Cholesky factor with adaptive jitter for a slightly non-PSD Ω."""
+    return ops.convert_to_numpy(safe_cholesky(ops.convert_to_tensor(omega, dtype='float32')))
+
+
+def _check_finite_parameters(parameters):
+    if parameters is not None and not np.isfinite(parameters).all():
+        n_bad = int((~np.isfinite(parameters)).any(axis=1).sum())
+        raise ValueError(
+            f'{n_bad} of {len(parameters)} rows of the parameters contain NaN or inf, '
+            'which would make every posterior NaN. Drop those voxels (with their '
+            'data and Ω) before decoding.')
 
 
 class EncodingModel(object):
@@ -87,13 +102,18 @@ class EncodingModel(object):
         self.parameters = format_parameters(parameters, parameter_labels=self.parameter_labels)
 
         if (self.parameter_labels is not None) and (self.parameters is not None):
-            self.parameters = self.parameters[self.parameter_labels]
+            # HRFEncodingModel appends its labels after this constructor runs,
+            # and selects the final columns itself.
+            hrf_columns = [c for c in self.parameters.columns
+                           if c in ('hrf_delay', 'hrf_dispersion', 'delay_weight', 'dispersion_weight')
+                           and c not in self.parameter_labels]
+            self.parameters = self.parameters[list(self.parameter_labels) + hrf_columns]
 
         self.weights = weights
         self.omega = omega
 
         if omega is not None:
-            self.omega_chol = np.linalg.cholesky(omega)
+            self.omega_chol = _cholesky_numpy(omega)
 
     def get_parameter_labels(self):
         """Return the ordered list of parameter labels used by the model."""
@@ -179,7 +199,7 @@ class EncodingModel(object):
 
         simulated_data = self._simulate(
             stimulus,
-            parameters.values[np.newaxis, ...],
+            parameters.values[np.newaxis, ...] if parameters is not None else None,
             weights_, noise, dof)
 
         simulated_data = ops.convert_to_numpy(simulated_data)
@@ -302,7 +322,7 @@ class EncodingModel(object):
             if value is None:
                 raise Exception('Please set {}'.format(name))
 
-        omega_chol = np.linalg.cholesky(omega)
+        omega_chol = _cholesky_numpy(omega)
 
         likelihood = self._likelihood(stimuli.values[np.newaxis, ...],
                                       data.values[np.newaxis, ...],
@@ -334,6 +354,10 @@ class EncodingModel(object):
             raise Exception('Stimulus range needs to be either 1D or 2D')
         return stimulus_range
 
+    def _predict_grid(self, stimulus_range, parameters, weights):
+        """Predictions for decoding: one batch per candidate stimulus."""
+        return self._predict(stimulus_range, parameters, weights)
+
     def predict_stimulus_grid(self, stimulus_range, parameters=None, weights=None):
         """Predicted response to every stimulus of a decoding grid.
 
@@ -343,11 +367,12 @@ class EncodingModel(object):
         parameters = self._get_parameters(parameters)
         if hasattr(parameters, 'values'):
             parameters = parameters.values
+        _check_finite_parameters(parameters)
         weights, weights_ = self._get_weights(weights)
         stimulus_range = self._prepare_stimulus_range(stimulus_range)
-        pred = self._predict(stimulus_range,
-                             parameters[np.newaxis, :, :] if parameters is not None else None,
-                             weights_)
+        pred = self._predict_grid(stimulus_range,
+                                  parameters[np.newaxis, :, :] if parameters is not None else None,
+                                  weights_)
         return np.asarray(ops.convert_to_numpy(pred), dtype=np.float64)[:, 0, :]
 
     def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
@@ -360,9 +385,10 @@ class EncodingModel(object):
         stimulus_range : array (n_stimuli,) or (n_stimuli, n_dims)
             Grid of candidate stimuli (flat prior over the grid).
         omega, dof : array, float, optional
-            Dense noise covariance and Student-t degrees of freedom (``dof=None``
-            = Gaussian), e.g. from ``ResidualFitter.fit``. Ignored when
-            ``noise_model`` is given.
+            Dense noise covariance and Student-t degrees of freedom, e.g. from
+            ``ResidualFitter.fit``. Without ``omega``, both come from the model
+            (``model.omega``, ``model.dof``). With ``omega``, ``dof=None`` means
+            Gaussian. Ignored when ``noise_model`` is given.
         noise_model : braincoder.noise.LowRankNoise, optional
             Factored noise model (low-rank + diagonal Ω, Gaussian or
             Student-t). The likelihood is evaluated with the Woodbury identity
@@ -396,8 +422,12 @@ class EncodingModel(object):
             if hasattr(parameters, 'values'):
                 parameters = parameters.values
 
+            _check_finite_parameters(parameters)
+
             if omega is None:
                 omega = self.omega
+                if dof is None:
+                    dof = getattr(self, 'dof', None)
 
             # Compute Cholesky factor here so callers never need to do it themselves.
             # ``safe_cholesky`` symmetrises and adds adaptive diagonal jitter so a
@@ -414,10 +444,11 @@ class EncodingModel(object):
             # ``TypeError: unsupported operand type(s) for -``).
             data_t = ops.convert_to_tensor(data, dtype='float32')
 
-            ll = self._likelihood(stimulus_range,
-                                  data_t[None, :, :],
-                                  parameters[np.newaxis, :, :] if parameters is not None else None,
-                                  weights_,
+            prediction = self._predict_grid(stimulus_range,
+                                            parameters[np.newaxis, :, :] if parameters is not None else None,
+                                            weights_)
+            ll = self._likelihood_timeseries(data_t[None, :, :],
+                                  prediction,
                                   omega_chol,
                                   dof,
                                   logp=True,
@@ -966,7 +997,7 @@ class EncodingRegressionModel(EncodingModel):
 
         residuals = data.values[np.newaxis, :, :] - pred.values[:, np.newaxis, :]
 
-        omega_chol = np.linalg.cholesky(omega)
+        omega_chol = _cholesky_numpy(omega)
         n_units = data.shape[1]
 
         n_batches, n_timepoints, n_voxels = residuals.shape
@@ -1052,6 +1083,31 @@ class HRFEncodingModel(object):
             pred_convolved += parameters[:, :, baseline_idx][:, None, :]
 
         return pred_convolved
+
+    def _predict_grid(self, stimulus_range, parameters, weights):
+        """Decode without the HRF.
+
+        A candidate stimulus has no time course to convolve: treating it as a
+        one-sample timeseries scales the tuning curve by the HRF's first
+        samples (about 1/17 at a TR of 1.6 s) and inflates the posterior.
+        """
+        warnings.warn(
+            'Decoding with a *WithHRF model ignores the HRF. The data should be '
+            'single-trial responses (e.g. betas) on the scale of the amplitude '
+            'parameter, not BOLD timepoints.', UserWarning, stacklevel=3)
+        return self._predict_no_hrf(stimulus_range, parameters, weights)
+
+    def _not_for_timeseries(self, method):
+        raise NotImplementedError(
+            f'{method} treats stimuli as independent, but a *WithHRF model would '
+            'convolve them as one timeseries. Use the same parameters, without '
+            'HRF columns, on the model class without HRF.')
+
+    def get_fisher_information(self, *args, **kwargs):
+        self._not_for_timeseries('get_fisher_information')
+
+    def get_expected_uncertainty(self, *args, **kwargs):
+        self._not_for_timeseries('get_expected_uncertainty')
 
     def _predict_no_hrf(self, paradigm, parameters, weights):
         """Bypass HRF convolution; useful for diagnostics/debugging."""

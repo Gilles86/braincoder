@@ -175,7 +175,8 @@ class StimulusFitter(object):
         data = self.data.values[tf.newaxis, ...]
         parameters = self.model.parameters.values[tf.newaxis, ...]
         weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
-        omega_chol = np.linalg.cholesky(self.model.omega)
+        from ..utils.backend import safe_cholesky
+        omega_chol = np.array(safe_cholesky(tf.convert_to_tensor(self.model.omega, dtype=tf.float32)))
 
         if use_mask:
             if use_batch_dimension:

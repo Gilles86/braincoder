@@ -89,19 +89,26 @@ class LinearModelWithBaselineHRF(LinearModelWithBaseline, HRFEncodingModel):
                  weights=None, hrf_model=None, verbosity=logging.INFO,
                  **kwargs):
 
-        super().__init__(paradigm=paradigm,
-                         data=data,
-                         parameters=parameters,
-                         weights=weights,
-                         verbosity=verbosity,
-                         hrf_model=hrf_model,
-                         **kwargs)
+        if hrf_model is None:
+            raise ValueError('Please provide HRFModel!')
+
+        LinearModelWithBaseline.__init__(self, paradigm=paradigm, data=data,
+                                         parameters=parameters, weights=weights,
+                                         verbosity=verbosity, **kwargs)
+        self.hrf_model = hrf_model
+        self.flexible_hrf_parameters = False
 
     def _predict(self, paradigm, parameters, weights):
+        paradigm = ops.convert_to_tensor(paradigm, dtype='float32')
+        parameters = ops.convert_to_tensor(parameters, dtype='float32')
+        # The baseline is a BOLD offset: convolve the signal, then add it.
         pre_convolve = LinearModelWithBaseline._predict(
-            self, paradigm, parameters, weights)
+            self, paradigm, ops.zeros_like(parameters), weights)
 
-        return self.hrf_model.convolve(pre_convolve)
+        return self.hrf_model.convolve(pre_convolve) + ops.transpose(parameters, axes=[0, 2, 1])
+
+    def _predict_grid(self, stimulus_range, parameters, weights):
+        return self._predict_no_hrf(stimulus_range, parameters, weights)
 
     def _predict_no_hrf(self, paradigm, parameters, weights):
         return LinearModelWithBaseline._predict(self, paradigm, parameters, weights)

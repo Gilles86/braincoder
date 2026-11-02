@@ -29,7 +29,7 @@ conda env create -f environment.yml
 conda activate braincoder
 ```
 
-This installs braincoder in editable mode (`pip install -e .`) along with a TensorFlow backend and dev tools. See the [installation docs](https://braincoder-devs.github.io/installation.html) for other backends (JAX, PyTorch) and pip-only setups.
+This installs braincoder in editable mode (`pip install -e .`) along with a TensorFlow backend and dev tools. braincoder is not on PyPI; to use it in a project, pin a release with `pip install "braincoder @ git+https://github.com/Gilles86/braincoder.git@v0.6.2" tensorflow`. See the [installation docs](https://braincoder-devs.github.io/installation.html) for other backends (JAX, PyTorch) and pip-only setups.
 
 ## Quick start
 
@@ -48,6 +48,19 @@ predicted = model.predict(paradigm=paradigm, parameters=parameters)
 ```
 
 See the [tutorials](https://braincoder-devs.github.io/tutorial/index.html) for full fitting and decoding pipelines.
+
+## Using an AI coding assistant
+
+The [braincoder skill for Claude Code](https://github.com/Gilles86/gilles-claude-skills/tree/main/skills/braincoder) gives an assistant a step-by-step manual for new projects, the common silent errors, and measured runtimes. It is also readable on its own. Install it with:
+
+```bash
+git clone https://github.com/Gilles86/gilles-claude-skills.git
+ln -s "$PWD/gilles-claude-skills/skills/braincoder" ~/.claude/skills/braincoder
+```
+
+## Related software
+
+[prfmodel](https://popylar-org.github.io/prfmodel/) is a Python package for population receptive field modelling, also built on Keras 3. It covers further pRF models, such as CSS, delayed normalization and connective fields.
 
 ## How to cite
 

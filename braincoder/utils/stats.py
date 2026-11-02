@@ -224,15 +224,27 @@ def get_map(p):
     return stimuli.groupby(level=0).apply(lambda d: (p * d.values).sum(1) / p.sum(1)).T
 
 def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
+    """Per-voxel R² of ``predictions`` for ``data`` (DataFrames, aligned by label).
+
+    Raises ``ValueError`` if the labels of the two frames do not line up:
+    pandas would otherwise fill the gaps with NaN, and because a sum skips NaN,
+    R² would come out as exactly 1 when no rows overlap.
+    """
+    aligned_data, _ = data.align(predictions, join='outer')
+    if aligned_data.shape != data.shape:
+        raise ValueError(
+            f'get_rsq: data {data.shape} and predictions {predictions.shape} have '
+            f'different row or column labels (together {aligned_data.shape}). Give '
+            'them the same index and columns, e.g. predict with a paradigm that '
+            'has the index of the data.')
 
     resid = data - predictions
 
-    # ssq_data = np.clip(((data - data.mean(0))**2).sum(0), 1e-5, None)
-    ssq_data = ((data - data.mean(0))**2).sum(0)
+    ssq_data = ((data - data.mean(axis=0))**2).sum(axis=0)
     if allow_biased_residuals:
-        ssq_resid = ((resid - resid.mean(0))**2).sum(0)
+        ssq_resid = ((resid - resid.mean(axis=0))**2).sum(axis=0, min_count=1)
     else:
-        ssq_resid = (resid**2).sum(0)
+        ssq_resid = (resid**2).sum(axis=0, min_count=1)
 
     r2 = (1 - (ssq_resid / ssq_data))
 
@@ -246,7 +258,7 @@ def get_rsq(data, predictions, zerovartonan=True, allow_biased_residuals=False):
 
 def get_r(data, predictions):
 
-    data_ = data - data.mean(0)
+    data_ = data - data.mean(axis=0)
     predictions_ = predictions - predictions.mean(0)
 
     r = (data_*predictions_ ).sum(0)
