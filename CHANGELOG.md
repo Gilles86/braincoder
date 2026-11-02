@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.1 (unreleased)
+
+**Changes fitted values for anyone using `SPMHRFModel`, `SPMHRFDerivativeModel` or `spm_hrf`.**
+
+`SPMHRFModel` now gives SPM's canonical HRF. Two things were different:
+
+- **It peaked at 6 s instead of 5 s.** The response gamma had shape `delay / dispersion + 1`, not
+  `delay / dispersion`. `delay=6` still means what it does in SPM, so the default now peaks at 5 s.
+- **Samples weren't one TR apart.** They came from `linspace(1e-4, 32, n)`, so the spacing was
+  `32 / (n - 1)`: 1.6 s at a TR of 1.5 s, for example. Convolution assumes one TR, which
+  compressed the HRF by a few percent. Samples are now exactly one TR apart, from 0.
+
+The bounds on a fitted `hrf_delay` move from 3-7 to 4-8, so the range of fitted peak times stays the
+same. To reproduce an older fit, use `SPMHRFModel(tr=tr, delay=7.)` for about the old peak time; the
+sampling change can't be undone.
+
 ## 0.7.0 (2026-11-02)
 
 **Breaking.** Models no longer hold data or fitted values. See the

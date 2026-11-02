@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "braincoder"
-version = "0.7.0"
+version = "0.7.1"
 description = "Fit encoding models to fMRI data and invert them for Bayesian decoding"
 authors = [
     {name = "Gilles de Hollander", email = "gilles.de.hollander@gmail.com"},
