@@ -61,12 +61,11 @@ In short
 are unchanged. ``ResidualFitter`` and ``StimulusFitter`` keep the same arguments, but ``parameters``
 is now required for any model that has parameters.
 
-New fitting defaults
-====================
+New fitting default
+===================
 
-``ParameterFitter.fit`` now defaults to ``noise_model='gaussian'`` and ``r2_atol=1e-4``. Fits converge
-faster and stop earlier. To reproduce a fit from an earlier version, pass
-``noise_model='ssq', r2_atol=1e-6``.
+``ParameterFitter.fit`` now defaults to ``r2_atol=1e-4``, so fits stop earlier. To reproduce a fit from an
+earlier version, pass ``r2_atol=1e-6``.
 
 Custom models
 =============

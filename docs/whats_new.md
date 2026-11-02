@@ -4,7 +4,8 @@
 
 - **Models no longer hold data or fitted values.** Pass `paradigm`, `parameters`, `weights`,
   `omega` and `dof` to each method. See the [migration guide](migration.rst).
-- **New `ParameterFitter.fit` defaults:** `noise_model='gaussian'` and `r2_atol=1e-4`.
+- **New `ParameterFitter.fit` default:** `r2_atol=1e-4`. `noise_model` stays `'ssq'`, contrary to what 0.6
+  announced: see the changelog below.
 - **On PyPI:** `pip install "braincoder[tensorflow]"`.
 - **Torch on Apple GPUs** now runs the whole library.
 

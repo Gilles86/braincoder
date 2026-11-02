@@ -94,7 +94,7 @@ class ParameterFitter:
             optimizer=None,
             fixed_pars=None,
             shared_pars=None,
-            noise_model='gaussian',
+            noise_model='ssq',
             store_intermediate_parameters=False,
             r2_atol=1e-4,
             lag=100,
@@ -105,17 +105,15 @@ class ParameterFitter:
 
         Parameters
         ----------
-        noise_model : {'ssq', 'gaussian'}, default ``'gaussian'``
-            Loss function. ``'ssq'`` minimizes the unweighted
-            sum-of-squared-residuals (MLE under homoscedastic Gaussian
-            noise). ``'gaussian'`` minimizes a per-voxel Gaussian
-            negative log-likelihood with a *free* per-voxel σ²ᵥ; the
-            θ-gradient is auto-rescaled by per-voxel noise, which under
-            a shared Adam optimizer gives every voxel comparable
-            per-iteration progress. Same fixed points as ``'ssq'``,
-            but much faster convergence in practice on real fMRI
-            (heteroskedastic noise). When set, ``self.estimated_sigma2``
-            holds the fitted per-voxel σ² after ``fit()`` returns.
+        noise_model : {'ssq', 'gaussian'}, default ``'ssq'``
+            Loss function. ``'ssq'`` minimizes the sum of squared residuals.
+            ``'gaussian'`` minimizes a per-voxel Gaussian negative
+            log-likelihood with a free σ²ᵥ per voxel, stored in
+            ``self.estimated_sigma2``. Both have the same per-voxel optimum
+            (without ``shared_pars``). From a good grid start they follow
+            nearly the same path, and ``'gaussian'`` costs about 25% more per
+            iteration. From a poor start it can get there in fewer iterations,
+            with equal or unequal noise across voxels.
         fixed_pars, shared_pars : list[str] | None
             Parameter names to hold at their init value (``fixed_pars``)
             or to tie to a single shared value across voxels
@@ -243,10 +241,9 @@ class ParameterFitter:
             opt = optimizer
 
         # ---- loss --------------------------------------------------
-        # Both losses produce the same per-voxel fixed point. They
-        # differ only in the gradient magnitudes (and SSQ has no σ²
-        # state); see CHANGELOG 0.6 / classical_vs_ml_convergence
-        # report for why Gaussian converges much faster on real data.
+        # Both losses have the same per-voxel optimum. Adam is invariant to
+        # a constant per-voxel scale, so the paths only differ because σ²
+        # changes during the fit.
         if noise_model == 'ssq':
             def loss_fn():
                 pars = build_parameters()

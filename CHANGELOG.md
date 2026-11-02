@@ -32,13 +32,18 @@ a few mechanical edits, and old constructor arguments raise an error that points
 Fitters keep their results as attributes (`fitter.r2`, `fitter.estimated_parameters`,
 `fitter.r2_history_`). A fitter represents one fit; a model is reusable.
 
-### New defaults for `ParameterFitter.fit`
+### `ParameterFitter.fit`
 
-- **`r2_atol=1e-4`** (was 1e-6). On large real data, 1e-6 was unreachable within 10,000
+- **New default `r2_atol=1e-4`** (was 1e-6). On large real data, 1e-6 was unreachable within 10,000
   iterations, and 1e-4 was about 3x faster for under 0.001 of R² in the paper benchmark. Pass
   `r2_atol=1e-6` for a tighter fit.
-- **`noise_model='gaussian'`** (was `'ssq'`), as announced in 0.6. Same optimum, faster
-  convergence with heteroskedastic noise. Pass `noise_model='ssq'` to reproduce older fits.
+- **`noise_model` stays `'ssq'` by default, contrary to what 0.6 announced.** New tests do not support
+  the stated reason for switching. Adam scales each parameter's steps by its own gradient history, so
+  a constant per-voxel rescaling of the loss changes almost nothing: a sum-of-R² loss follows the SSQ
+  path. From a good grid start `'gaussian'` gave the same fit at about 25% more time per iteration.
+  From a poor start it did reach the optimum in fewer iterations (about 2-5x smaller remaining R² gap
+  at 3,000 iterations), but as much with equal noise across voxels as with unequal noise. The
+  explanation in the 0.6 notes, that it balances noisy voxels, is not correct.
 
 ### Other changes
 
