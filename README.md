@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Gilles86/braincoder/main/docs/_static/logo.png" alt="BrainCoder: neural encoding/decoding models" width="360">
+</p>
+
 # Braincoder
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10778413.svg)](https://doi.org/10.5281/zenodo.10778413)

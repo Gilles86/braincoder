@@ -29,7 +29,7 @@ parameters, for each parameter seperately.
 
 .. include:: ../auto_examples/00_encodingdecoding/decode.rst
     :start-after: .. GENERATED FROM PYTHON SOURCE LINES 34-53
-    :end-before: .. GENERATED FROM PYTHON SOURCE LINES 54-62
+    :end-before: .. GENERATED FROM PYTHON SOURCE LINES 54-61
 
 Note how some parameters (e.g., ``mu`` and ``amplitude``) are easier
 to recover than others (e.g., ``sd``).

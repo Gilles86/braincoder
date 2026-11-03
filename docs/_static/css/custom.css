@@ -2,3 +2,10 @@ div.sphx-glr-download-link-note {
     height: 0px;
     visibility: hidden;
   }
+
+/* The logo has a white background: give it a card in dark mode. */
+.sidebar-logo {
+    background: #fff;
+    border-radius: 8px;
+    padding: 6px;
+}
