@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Gilles86/braincoder/main/docs/_static/logo.png" alt="BrainCoder: neural encoding/decoding models" width="360">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Gilles86/braincoder/main/docs/_static/logo_dark.png">
+    <img src="https://raw.githubusercontent.com/Gilles86/braincoder/main/docs/_static/logo.png" alt="BrainCoder: neural encoding/decoding models" width="360">
+  </picture>
 </p>
 
 # Braincoder

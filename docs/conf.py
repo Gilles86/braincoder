@@ -71,8 +71,11 @@ html_css_files += [
     f"{font_awesome}brands.min.css",
 ]
 html_theme = 'furo'
-html_logo = '_static/logo.png'
 html_favicon = '_static/favicon.png'
 # The logo already carries the name.
-html_theme_options = {'sidebar_hide_name': True}
+html_theme_options = {
+    'sidebar_hide_name': True,
+    'light_logo': 'logo.png',
+    'dark_logo': 'logo_dark.png',
+}
 html_static_path = ['_static']
