@@ -85,9 +85,9 @@ def gamma_pdf(t, a, d, eps=1e-6):
         Tensor of shape [T, M] with gamma pdf values
     """
     t = tf.maximum(t, eps)  # Ensure t > 0 for numerical stability
-    coef = tf.pow(t, a - 1) * tf.exp(-t / d)
-    denom = tf.pow(d, a) * tf.exp(tf.math.lgamma(a))
-    return coef / denom
+    # In log space: t**(a-1) and d**a * Gamma(a) overflow float32 for shape a > ~35 (narrow HRFs).
+    log_pdf = (a - 1.) * tf.math.log(t) - t / d - a * tf.math.log(d) - tf.math.lgamma(a)
+    return tf.exp(log_pdf)
 
 
 def gamma_pdf_with_loc(t, a, d, dt, loc=0.0):
