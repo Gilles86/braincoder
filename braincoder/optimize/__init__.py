@@ -1,6 +1,7 @@
 from .weight_fitter import WeightFitter
 from .parameter_fitter import ParameterFitter
 from .residual_fitter import ResidualFitter
+from .parametric_fitter import ParametricStimulusFitter
 try:
     from .stimulus_fitter import (StimulusFitter, CustomStimulusFitter,
                                    SzinteStimulus, SzinteStimulus2,
@@ -19,4 +20,4 @@ except ImportError as _error:
                 f'({_stimulus_fitter_error}).')
         raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
 
-__all__ = ['WeightFitter', 'ParameterFitter', 'ResidualFitter'] + _STIMULUS_FITTERS
+__all__ = ['WeightFitter', 'ParameterFitter', 'ResidualFitter', 'ParametricStimulusFitter'] + _STIMULUS_FITTERS
