@@ -105,9 +105,10 @@ def gamma_pdf(t, a, d, eps=1e-6):
     """Numerically stable gamma PDF."""
     from .utils.backend import lgamma
     t = ops.maximum(t, eps)
-    coef = ops.power(t, a - 1) * ops.exp(-t / d)
-    denom = ops.power(d, a) * ops.exp(lgamma(a))
-    return coef / denom
+    # In log space: t**(a-1) and d**a * Gamma(a) overflow float32 for shape
+    # a > ~35 (narrow HRFs), which gave inf / inf = NaN.
+    log_pdf = (a - 1.) * ops.log(t) - t / d - a * ops.log(d) - lgamma(a)
+    return ops.exp(log_pdf)
 
 
 def gamma_pdf_with_loc(t, a, d, dt, loc=0.0):

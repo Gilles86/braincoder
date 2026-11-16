@@ -171,6 +171,17 @@ class TestGammaPdf:
         assert abs(peak_t - expected_mode) < 0.5, \
             f"Peak at {peak_t:.2f}, expected ~{expected_mode:.1f}"
 
+    @pytest.mark.parametrize('a, d', [(6.0, 1.0), (16.0, 1.0), (60.0, 0.1), (200.0, 0.03)])
+    def test_matches_scipy_for_large_shapes(self, a, d):
+        """Narrow HRFs have shape a > ~35, where t**(a-1) and Gamma(a) overflow float32."""
+        from braincoder.hrf import gamma_pdf
+        from scipy.stats import gamma
+        t = np.linspace(0.1, 20.0, 400, dtype=np.float32)[:, np.newaxis]
+        result = ops.convert_to_numpy(gamma_pdf(t, a=a, d=d))
+        assert np.all(np.isfinite(result))
+        expected = gamma.pdf(t.astype(np.float64), a, scale=d)
+        np.testing.assert_allclose(result, expected, rtol=1e-3, atol=1e-6 * expected.max())
+
 
 # ---------------------------------------------------------------------------
 # R² mixture posterior / p_signal threshold
