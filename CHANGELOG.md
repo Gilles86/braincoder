@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.7.1 (unreleased)
+## 0.7.1 (2026-11-16)
+
+Bug-fix release. Two of the fixes change fitted values: **refit** anything fitted with
+`SPMHRFModel` / `SPMHRFDerivativeModel` (the usual `hrf_model` of the `*WithHRF` models), and anything
+fitted with `ResidualFitter.fit(D=...)`.
+
+### Behaviour change: `SPMHRFModel` is SPM's canonical HRF
 
 **Changes fitted values for anyone using `SPMHRFModel`, `SPMHRFDerivativeModel` or `spm_hrf`.**
 
@@ -46,6 +52,17 @@ before this.**
   uses O(n²) memory instead of an n × n × r difference tensor, which needed about 4 GB at
   n = 800 and about 64 GB at n = 2000. `GeodesicGPPrior` output is unchanged.
 - `init_tau` is cast to float32, so float64 residuals work on torch with MPS.
+
+### Other fixes
+
+- **Torch: `ParameterFitter.fit` no longer leaks memory.** The forward pass that tracks R²
+  between gradient steps ran with autograd on, and the best-so-far R² and parameters kept that
+  graph alive, so voxels × pixels tensors piled up every iteration until the GPU ran out of
+  memory (on CPU, 3,000 voxels × 961 pixels: about 2.2 GB of live tensors after 40 iterations,
+  0 MB now, same loss). Results are unchanged; TensorFlow and JAX were not affected.
+- **`gamma_pdf` is computed in log space.** `t**(a-1)` and `d**a · Γ(a)` overflowed float32 for
+  shapes above about 35, so very narrow gamma HRFs gave NaN. Values for ordinary shapes are
+  unchanged up to float32 rounding.
 
 ## 0.7.0 (2026-11-02)
 

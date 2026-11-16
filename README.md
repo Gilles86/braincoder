@@ -31,7 +31,7 @@ single [Keras 3](https://keras.io)-based toolkit that runs on TensorFlow, JAX, o
 pip install "braincoder[tensorflow]"   # or [jax], or [torch]
 ```
 
-Pin the version in your project's environment, e.g. `braincoder[tensorflow]==0.7.0`, so that its results stay reproducible.
+Pin the version in your project's environment, e.g. `braincoder[tensorflow]==0.7.1`, so that its results stay reproducible.
 
 For development, use conda/mamba. Clone the repo, then create the environment:
 

@@ -1,5 +1,20 @@
 # What's new
 
+## 0.7.1 highlights (2026-11-16)
+
+Bug-fix release. **Refit** if you used either of the first two:
+
+- **`SPMHRFModel` is now SPM's canonical HRF**, peaking at 5 s (it peaked at 6 s) and sampled
+  exactly one TR apart (samples were `32 / (n - 1)` s apart). This changes the fitted values of
+  any `*WithHRF` model built with `hrf_model=SPMHRFModel(...)`. Bounds on a fitted `hrf_delay` move to 4-8 so
+  the range of peak times is unchanged.
+- **`ResidualFitter.fit(D=...)`**: β is constrained positive and Ω is positive definite by
+  construction (the kernel uses the classical-MDS Euclidean embedding of `D`, and no jitter).
+  `D` with `lambd > 0` or `spherical=True` now raises.
+- **Torch:** `ParameterFitter.fit` no longer accumulates an autograd graph every iteration,
+  which ran large fits out of GPU memory.
+- **`gamma_pdf`** no longer returns NaN for gamma shapes above about 35.
+
 ## 0.7.0 highlights (2026-11-02)
 
 - **Models no longer hold data or fitted values.** Pass `paradigm`, `parameters`, `weights`,

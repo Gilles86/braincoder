@@ -51,7 +51,7 @@ pip-only install
     # or
     pip install "braincoder[torch]"        # PyTorch backend
 
-Pin the version in your project's environment, e.g. ``braincoder[tensorflow]==0.7.0``, so that
+Pin the version in your project's environment, e.g. ``braincoder[tensorflow]==0.7.1``, so that
 its results stay reproducible.
 
 For a development install from source:
