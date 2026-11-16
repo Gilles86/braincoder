@@ -287,8 +287,11 @@ class ParameterFitter:
             loss, gradients = compute_gradients(loss_fn, trainable_variables)
             loss_history.append(float(ops.convert_to_numpy(loss)))
 
-            # Re-compute outside the gradient tape for tracking.
-            pars = build_parameters()
+            # Re-compute outside the gradient tape for tracking. Torch has no
+            # tape: without stop_gradient this forward pass builds a graph that
+            # best_r2 and best_parameters keep alive, so voxels x pixels
+            # tensors pile up at every iteration.
+            pars = ops.stop_gradient(build_parameters())
             untransformed = self.model._transform_parameters_forward(pars)
             ssq = get_ssq(untransformed)
             r2 = ops.where(meaningful_t, 1 - ssq / ssq_data,
