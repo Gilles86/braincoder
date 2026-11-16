@@ -26,8 +26,8 @@ The second part is what sets it apart from most PRF packages, which stop at the 
 maps. The trial-by-trial uncertainty is what lets you link neural precision to behaviour.
 
 It runs on TensorFlow, JAX or PyTorch through Keras 3, so one fit can use a GPU and
-handle a whole cortical surface: the 93,534 vertices of the public van Es 2019 surface
-dataset take roughly 6–13 minutes on a recent data-centre GPU (details in
+handle a whole cortical surface: a whole cortical surface fits in minutes on a recent
+data-centre GPU (details in
 [`references/performance.md`](./references/performance.md)).
 
 | Use it for | Look elsewhere for |

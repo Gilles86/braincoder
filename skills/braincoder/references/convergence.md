@@ -1,8 +1,7 @@
 # Convergence: is it the model, or the optimizer?
 
-The advice below comes from fitting nested ladders of attention-field (modulation-field)
-models, with shared terms on top of per-voxel pRFs, to a multi-subject 7T dataset. The
-patterns generalise; check them on your own data.
+The advice below comes from fitting nested ladders of models with shared terms on top of
+per-voxel pRFs. Check it on your own data.
 
 ## Check monotonicity on pooled SSE, never on mean per-voxel R²
 

@@ -35,9 +35,9 @@ Why `ResidualFitter` is no longer the default:
 
 On simulated data `ResidualFitter` can look fine: in a clean simulation with independent
 noise it reaches nominal coverage. Good simulation results do not transfer here; check on
-the real data. Cost also differs: `ResidualFitter` took about 21 s at 200 voxels, 3 min at
-1,000, 12 min at 2,000 and is extrapolated at about 23 h (10 GB RAM) at 10,000, plus about
-7 inner fits if you tune `T`; low rank takes 0.5 to 4 s over the same range.
+the real data. Cost also differs: `ResidualFitter` scales steeply with the number of voxels (minutes at a
+few thousand voxels, impractical at tens of thousands, more again if you tune `T`), while the
+low-rank model takes seconds over the same range.
 
 **T ≫ 1 means there is little calibrated stimulus information**; report it rather than
 hiding it. Always report `noise.summary()`.
