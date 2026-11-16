@@ -4,20 +4,19 @@ Installation
 Braincoder requires Python 3.10+ and `Keras 3 <https://keras.io>`_ with at least one
 backend (TensorFlow, JAX, or PyTorch).
 
-Recommended: conda + editable install
---------------------------------------
-
-This approach gives you a full development environment with TensorFlow as the backend:
+Install with pip (recommended)
+------------------------------
 
 .. code-block:: bash
 
-    git clone https://github.com/Gilles86/braincoder.git
-    cd braincoder
-    conda env create -f environment.yml
-    conda activate braincoder
+    pip install "braincoder[tensorflow]"   # TensorFlow backend
+    # or
+    pip install "braincoder[jax]"          # JAX backend
+    # or
+    pip install "braincoder[torch]"        # PyTorch backend
 
-The ``environment.yml`` installs TensorFlow, Keras, and braincoder itself in editable
-mode (``pip install -e .``), so local changes to the source are reflected immediately.
+Pin the version in your project's environment, e.g. ``braincoder[tensorflow]==0.7.1``, so that
+its results stay reproducible.
 
 Choosing a backend
 ------------------
@@ -40,21 +39,22 @@ Or set it permanently in ``~/.keras/keras.json``:
 Each backend must be installed separately. The ``environment.yml`` includes all three
 (``tensorflow``, ``jax[cpu]``, ``torch``), but you can install only the one you need.
 
-pip-only install
-----------------
+Development install (conda + editable)
+--------------------------------------
+
+For working on braincoder itself, this gives a full development environment with TensorFlow as the backend:
 
 .. code-block:: bash
 
-    pip install "braincoder[tensorflow]"   # TensorFlow backend
-    # or
-    pip install "braincoder[jax]"          # JAX backend
-    # or
-    pip install "braincoder[torch]"        # PyTorch backend
+    git clone https://github.com/Gilles86/braincoder.git
+    cd braincoder
+    conda env create -f environment.yml
+    conda activate braincoder
 
-Pin the version in your project's environment, e.g. ``braincoder[tensorflow]==0.7.1``, so that
-its results stay reproducible.
+The ``environment.yml`` installs TensorFlow, Keras, and braincoder itself in editable
+mode (``pip install -e .``), so local changes to the source are reflected immediately.
 
-For a development install from source:
+Or, with pip only:
 
 .. code-block:: bash
 

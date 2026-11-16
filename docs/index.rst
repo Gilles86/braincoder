@@ -8,6 +8,14 @@ hemodynamic response functions, and decode stimuli from neural data.
 Quick start
 ===========
 
+Install braincoder with one of the three backends:
+
+.. code-block:: bash
+
+    pip install "braincoder[tensorflow]"   # or [jax], or [torch]
+
+See :doc:`installation` for choosing a backend, GPUs and a development install.
+
 The example below mirrors the steps you will take in most analyses: prepare a
 paradigm, instantiate a model, simulate data, and fit parameters.
 
@@ -46,8 +54,7 @@ model are passed to each method.
 More resources
 ==============
 
-- :doc:`whats_new` — release notes; **0.6.0** adds calibrated decoding
-  (:doc:`noise_models`).
+- :doc:`whats_new` — release notes (latest: **0.7.1**).
 - :doc:`concepts` — architectural overview and workflow tips.
 - :doc:`noise_models` — calibrated decoding: low-rank Ω with
   cross-validated rank and temperature.
@@ -59,14 +66,18 @@ More resources
 Using an AI coding assistant?
 =============================
 
-The `braincoder skill for Claude Code <https://github.com/Gilles86/gilles-claude-skills/tree/main/skills/braincoder>`_ gives an assistant a step-by-step
-manual for new projects, the common silent errors, and measured runtimes. It is also
-readable on its own. Install it with:
+The `braincoder skill <https://github.com/Gilles86/braincoder/tree/main/skills/braincoder>`_
+gives an AI coding assistant a step-by-step manual for new projects, the common silent
+errors, and measured runtimes. It is also readable on its own. In Claude Code, install it
+with:
 
-.. code-block:: bash
+.. code-block:: text
 
-    git clone https://github.com/Gilles86/gilles-claude-skills.git
-    ln -s "$PWD/gilles-claude-skills/skills/braincoder" ~/.claude/skills/braincoder
+    /plugin install braincoder --marketplace Gilles86/braincoder
+
+Other assistants (Codex, Cursor, Gemini CLI, …) can read
+`skills/braincoder/SKILL.md <https://github.com/Gilles86/braincoder/blob/main/skills/braincoder/SKILL.md>`_
+directly, e.g. by pointing to it from your project's ``AGENTS.md``.
 
 Citing braincoder
 =================
