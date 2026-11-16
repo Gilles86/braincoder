@@ -1,15 +1,15 @@
 # Performance: hardware, backends, iterations
 
-Measured in the benchmark for the braincoder paper ([Gilles86/paper_braincoder](https://github.com/Gilles86/paper_braincoder),
-`notes/data/final/numbers_runtime.tsv`, regenerated 2026-11-16, Keras 3 with TF 2.20,
-braincoder 0.7.1). Values are medians of 3 seeds (n noted where it is smaller), in **seconds
-of internal fit time**. Each run is 2D Gaussian PRF + SPM HRF, with the fixed SPM kernel
-(0.7.1; the 0.7.0 kernel was wrong, see `version_history.md`).
+Rough guidance measured by the maintainers (Keras 3 with TF 2.20, braincoder 0.7.1). Values
+are medians of 3 seeds (n noted where it is smaller), in **seconds of internal fit time**.
+Each run is 2D Gaussian PRF + SPM HRF, with the fixed SPM kernel (0.7.1; the 0.7.0 kernel
+was wrong, see `version_history.md`). Your hardware and data will differ; time your own
+setup before sizing a large job (below).
 
-Datasets: synthetic grids of 490 / 4,900 / 49,000 voxels with T=200, and van Es 2019
-(118,584 surface vertices, 93,534 non-NaN, which are the ones fitted, T=120). All final cells
-share one protocol: NaN voxels dropped, `noise_model='ssq'`, `r2_atol=1e-4`, sigma grid from
-1 degree, at most 10,000 iterations, fit to convergence on the synthetic grids too.
+Datasets: synthetic grids of 490 / 4,900 / 49,000 voxels with T=200, and the public van Es
+2019 surface dataset (118,584 vertices, 93,534 non-NaN, which are the ones fitted, T=120).
+All cells share one protocol: NaN voxels dropped, `noise_model='ssq'`, `r2_atol=1e-4`, sigma
+grid from 1 degree, at most 10,000 iterations, fit to convergence on the synthetic grids too.
 
 ## Is a GPU worth it?
 
@@ -43,13 +43,12 @@ Real dataset, TF backend:
   and nodes is 10 to 30%).
 - **The memory limit still matters for other models and backends.** For a static PRF, cost
   scales with voxels × timepoints × pixels, so smaller jobs fit more easily.
-- The cluster's GPU inventory changes; see **sciencecluster**. V100s failed on TF 2.20
-  (cuDNN) and have since been removed.
+- Which GPUs your cluster offers changes over time; see your cluster's documentation. V100s
+  failed on TF 2.20 (cuDNN) in our tests.
 - For dynamic RF models (the RF moves every TR), the forward builds a per-TR Gaussian
   buffer and can reach about 20 GB at V=500, T≈3096, 2500 pixels. For an isotropic
   Gaussian on a rectangular grid, separating it into x and y factors with `einsum` is
-  exact. In one project this took peak VRAM from over 24 GB to 642 MB and made it 13×
-  faster. It helps little for static models.
+  exact, and it cut peak memory and runtime dramatically. It helps little for static models.
 
 ## Which backend
 
@@ -98,67 +97,49 @@ So about 0.3 s/iteration here, and the gains are nearly exhausted by 1,000–3,0
     The gain is there with equal noise across voxels too, and it comes with log-SSQ alone.
   - A sum-of-R² loss follows the SSQ path: Adam scales each parameter by its own gradient history, so a
     constant per-voxel rescaling changes almost nothing. It does not balance noisy voxels.
-  - Earlier notes claimed about 5× fewer iterations (50 voxels, moment-matched start). Don't quote that
-    as a general speedup.
+  - Don't quote any of this as a general speedup.
 
 ## Extras and their cost
 
-- **Flexible HRF can matter, and its cost depends on the stop rule.** `r2_atol` stops when
-  the mean R² improves by less than `r2_atol` over 100 iterations, so models differ in
-  **iteration count**, not in cost per iteration (real data, A100: Gauss + GD 3,154
-  iterations, free HRF 2,632, DN 4,287; about 0.23 s per iteration for all three, the same on
-  every seed and backend). The free HRF therefore ran *faster* than Gauss (608 vs 752 s)
-  because it stopped earlier; quote time per iteration with the count and do not call a
-  variant cheaper because it stopped sooner. At a fixed 100 iterations it is still about 5×
-  more expensive per iteration on 49k voxels (an earlier measurement, 303 vs 58 s on A100).
-  Real data R² 0.314 vs 0.218 (in-sample), and one participant-level HRF recovers most of it
-  (SKILL.md, Timeseries PRFs).
+- **Flexible HRF: its cost depends on the stop rule.** `r2_atol` stops when the mean R²
+  improves by less than `r2_atol` over 100 iterations, so models differ in **iteration
+  count**, not in cost per iteration (real data, A100: Gauss + GD 3,154 iterations, free HRF
+  2,632, DN 4,287; about 0.23 s per iteration for all three, the same on every seed and
+  backend). The free HRF therefore ran *faster* than Gauss (608 vs 752 s) because it stopped
+  earlier; quote time per iteration with the count and do not call a variant cheaper because
+  it stopped sooner. At a fixed 100 iterations it is still about 5× more expensive per
+  iteration on 49k voxels (an earlier measurement, 303 vs 58 s on A100). Whether the free HRF
+  is worth its parameters is a question for cross-validation; try one participant-level HRF
+  first (SKILL.md, Timeseries PRFs).
 - **DN** costs about 2.2× a Gaussian on the same GPU (1,689 vs 752 s on an A100, mostly more
   iterations).
-- **Dense grid alone** (real data, A100) takes 145 s and already reaches an R² comparable to
-  other packages' final fits (see Comparing packages); most of braincoder's time is Adam
+- **Dense grid alone** (real data, A100) takes 145 s; most of braincoder's time is Adam
   gradient descent under a tight `r2_atol`. A looser `r2_atol` trades a little R² for much time.
 - **Grid search** barely scales with CPU threads: 49k voxels took 550 / 458 / 376 s on
   8 / 16 / 32 cores. For chunking, `ParameterFitter(memory_limit=…)` sets the chunk size;
   lower it on OOM.
-- **Parameter recovery on synthetic data** (49k voxels): x, y recover about equally well for
-  every package (median position error 0.64 to 0.86 degrees); `sd` is the weak one. With the
-  corrected SPM kernel braincoder's `sd` Spearman ρ is 0.728 and bias −1.27 under the SPM
-  HRF, 0.789 and −0.13 under the HRF that generated the data (popeye 0.720, mrVista 0.774).
-  It is the HRF, not the package: see "Comparing packages". Do not read much into
-  single-voxel `sd` with a mismatched HRF.
+- **Parameter recovery on synthetic data:** position (x, y) recovers well; `sd` is the weak
+  parameter, and much of its error comes from a mismatch between the HRF that generated the
+  data and the HRF used in the fit. Do not read much into single-voxel `sd` with a mismatched
+  HRF.
 
 ## Comparing packages
 
-From the paper benchmark (`notes/analyses/competitor_verification.md` and the speed section
-of `paper/draft.md` in paper_braincoder). Speed on the real data (93,534 vertices, A100
-unless stated): GEM-pRF 57 s, prfmodel 202 to 293 s (JAX / TF), braincoder 752 s (TF), prfpy
-491 s on 32 CPUs (one run), popeye 12,832 s on 32 CPUs. The gap is the optimizer and its stop
-rule, not the stimulus or the grid (all read the same design matrix; braincoder's grid of
-12,500 points equals prfpy's): braincoder runs Adam on all vertices until mean R² improves by
-less than 1e-4 (3,154 iterations), prfmodel takes a fixed 1,000 steps, prfpy runs L-BFGS-B
-per voxel, GEM-pRF refines without iterating. On a fixed set of 32,108 well-fitted vertices
-the dense grid alone (145 s) reached in-sample R² 0.399, against 0.395 prfpy, 0.393 popeye,
-0.369 GEM-pRF, 0.358 prfmodel; gradient descent raised braincoder to 0.411. Do not claim
-braincoder is the fastest pRF fitter. GEM-pRF fits only the isotropic Gaussian with a fixed
-HRF and has no decoding.
+If you benchmark braincoder against another PRF package:
 
-- **Compare on one fixed voxel set** and state it. popeye constrains amplitude to be positive
-  and braincoder does not, so whole-brain mean R² is not comparable.
-- **R² cannot detect a failed fit.** analyzePRF had the highest real-data R² (0.412) while 11%
-  of its vertices had sigma > 30 degrees, and on synthetic data its sigma collapsed to
-  0.07 degrees (ρ = −0.01). Always show sigma recovery.
-- **Check the coordinate frame** by r(y, y0) against r(y, −y0): `prfanalyze-popeye:1.0.1`
-  reverses y; prfpy and analyzePRF need a `flipud` of the aperture; prfmodel and GEM-pRF need
-  none.
-- **Sigma conventions differ**: GEM-pRF sigma can be negative (use |sigma|); analyzePRF sigma
-  = rfsize × sqrt(expt) in pixels; 5.9% of prfmodel's sigmas sat at its 0.05 grid floor.
-- **The HRF differs** (prfpy SPM + derivative; prfmodel two-gamma + derivative; AFNI and
-  popeye canonical), and a wrong HRF shrinks sigma at large true sigma in every package. Match
-  the HRF to the generator before ranking optimisers: mrVista's top R² came from data
-  generated with its own HRF.
-- **State HRF, stop rule, hardware and date with every timing**: real-data and synthetic
-  timings come from different dates, nodes and stop rules, so do not quote speed-up multiples
+- **Compare on one fixed voxel set** and state it. Packages differ in constraints (for
+  example, whether amplitude must be positive), so whole-brain mean R² is not comparable.
+- **R² cannot detect a failed fit.** A package can reach a high R² while many of its sigmas
+  sit at absurd values or at a grid floor. Always show sigma recovery on synthetic data.
+- **Check the coordinate frame** by r(y, y0) against r(y, −y0): packages differ in whether
+  the aperture needs a vertical flip.
+- **Sigma conventions differ** between packages (sign, units, pixel versus degree); convert
+  before comparing.
+- **The HRF differs** between packages, and a wrong HRF shrinks sigma at large true sigma
+  in every package. Match the HRF to the generator before ranking optimisers, and be wary
+  of synthetic data generated with one package's own HRF.
+- **The optimizer and its stop rule dominate speed**, not the stimulus or the grid. State
+  HRF, stop rule, hardware and date with every timing, and do not quote speed-up multiples
   without them.
 
 ## Scaling a CPU job
@@ -174,15 +155,15 @@ export TF_NUM_INTRAOP_THREADS=$SLURM_CPUS_PER_TASK TF_NUM_INTEROP_THREADS=2
 ## Measuring your own env
 
 ```bash
-PYTHON=$HOME/data/conda/envs/<env>/bin/python sbatch --account=<acct> --partition=<cpu-partition> \
-    --cpus-per-task=16 scripts/bench_fit.sh
-PYTHON=… sbatch --account=<acct> --partition=<gpu-partition> --gres=gpu:1 --constraint=<gpu> scripts/bench_fit.sh
+PYTHON=/path/to/env/bin/python BENCH_PY=/path/to/scripts/bench_fit.py \
+    sbatch --account=<acct> --partition=<cpu-partition> --cpus-per-task=16 scripts/bench_fit.sh
+PYTHON=… BENCH_PY=… sbatch --account=<acct> --partition=<gpu-partition> --gres=gpu:1 --constraint=<gpu> scripts/bench_fit.sh
 ```
 
-`bench_fit.sh` requests `--mem=64G`, which is too little at 50,000 voxels (the paper's
-benchmark jobs on it ran out of memory): pass `--mem=128G` for those rows. `bench_fit.py`
-imports `tensorflow` directly, so it cannot time JAX or torch. `bench_fit.sh` does not set
-the backend, so export `KERAS_BACKEND` yourself in a Keras 3 env, and record `braincoder.__version__` next to the results. **Only compare rows from the
+`bench_fit.sh` requests `--mem=64G`, which is too little at 50,000 voxels: pass `--mem=128G`
+for those rows. `bench_fit.py` imports `tensorflow` directly, so it cannot time JAX or torch.
+`bench_fit.sh` does not set the backend, so export `KERAS_BACKEND` yourself in a Keras 3 env,
+and record `braincoder.__version__` next to the results. **Only compare rows from the
 same braincoder code path.** A pre-Keras TF fork compiles with `tf.function`, while the
 Keras 3 port runs eagerly, so timings from one say little about the other. Timing also
 varies by node, so run a few repeats before concluding that more CPUs made a job slower.
@@ -214,8 +195,8 @@ Seconds per Adam iteration, Gaussian with fixed HRF:
 - **Memory:** DoG with V=50,000 × T=3,096 was killed at `--mem=64G` on both CPU jobs that
   reached it; the same size Gaussian passed. Split voxels into chunks well below that.
 
-A fit on real data, per fold, 8 CPUs: **400 voxels × 2300 TRs of a modulation-field model
-took 28 min of Adam (90th percentile 58 min) for the per-voxel pRF stage, then 1.5–2 min of
-L-BFGS per shared-term model.** Dynamic-field forwards cost far more per voxel than the
-static rows above. Loading the BOLD adds 4 min per subject (about 270k mask voxels × 12 runs)
-if you mask after loading the full brain, so cache ROI data when you loop over ROIs.
+On real data, dynamic-field (modulation-field) forwards cost far more per voxel than the
+static rows above: budget tens of minutes of Adam per fold for a few hundred voxels and a
+few thousand TRs on a handful of CPUs, and time a small subset first. Loading the BOLD can
+add minutes per subject if you mask after loading the full brain, so cache ROI data when you
+loop over ROIs.

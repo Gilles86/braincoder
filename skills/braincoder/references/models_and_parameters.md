@@ -62,7 +62,7 @@ With σ's, pRFs and HRF fixed, a modulation-field model is linear in its gains, 
 - `X = (pred(g + h) − pred(g − h)) / (2h)` gives a regressor, and gains can be re-estimated with OLS in seconds rather than a nonlinear fit (per-run, per-condition, trial-wise).
 - Multiply the paradigm by a per-TR modulator to get TR-resolved ramps (e.g. a learning curve within a block).
 - Adding an offset δ changes the SSE by `ΔSSE(δ) = δ²·ΣX² − 2δ·ΣX·r`, with `r` the residual. Save `a = ΣX²` and `b = ΣX·r` per voxel, and any δ can be evaluated offline. The conditional optimum is `b/a`.
-- **Always check it:** compare forward and backward differences, or reconstruct the full prediction. The modulation is rectified (`max(·, 0)`), so very negative gains break linearity. Exclude fits where the relative error is above 10⁻³; in practice that was about 1% of fits, all with gains at a bound.
+- **Always check it:** compare forward and backward differences, or reconstruct the full prediction. The modulation is rectified (`max(·, 0)`), so very negative gains break linearity. Exclude fits where the relative error is above 10⁻³; in practice these are few, typically fits with gains at a bound.
 
 ## Modulation fields: identifiability
 

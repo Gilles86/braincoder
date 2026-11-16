@@ -11,8 +11,7 @@
 | Stress, dyscalculia | "Acute stress reduces risk-aversion by changing magnitude perception"; "Domain-specific and domain-general signatures of dyscalculia…", both bioRxiv |
 | Value code in orbitofrontal cortex | Le Bouc, de Hollander et al., "A Neural Population Code for Value in Human Orbitofrontal Cortex", bioRxiv |
 
-It is also used in ongoing projects on learned abstract value, two simultaneous
-numerosities, visual attention and suppression, and reward capture. Spatial Bayesian
+It is also used in several ongoing projects. Spatial Bayesian
 priors for PRFs (Daghlian et al. 2025) were built as a braincoder fork. Knapen's
 `prfmodel` (NL eScience Center) was inspired by it. Other users include groups in
 Amsterdam, Boston, Marseille, Melbourne and Paris.
@@ -25,6 +24,6 @@ Amsterdam, Boston, Marseille, Melbourne and Paris.
   gallery of examples; start with the lessons). It is published by hand, so it can lag a release.
 - **Cite:** de Hollander, G., Renkert, M., Ruff, C. C., & Knapen, T. H. *braincoder*.
   Zenodo. DOI [10.5281/zenodo.10778413](https://doi.org/10.5281/zenodo.10778413). A
-  methods paper is in preparation (benchmarks in [Gilles86/paper_braincoder](https://github.com/Gilles86/paper_braincoder)).
+  methods paper is in preparation.
 - **Related:** [prfmodel](https://popylar-org.github.io/prfmodel/) is another Keras 3 pRF
   package, with further models such as CSS, delayed normalization and connective fields.

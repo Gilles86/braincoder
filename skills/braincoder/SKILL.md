@@ -26,15 +26,16 @@ The second part is what sets it apart from most PRF packages, which stop at the 
 maps. The trial-by-trial uncertainty is what lets you link neural precision to behaviour.
 
 It runs on TensorFlow, JAX or PyTorch through Keras 3, so one fit can use a GPU and
-handle a whole cortical surface: 93,534 vertices took 6–13 minutes on a recent GPU in the
-paper benchmark (median 351 s on an H200 with JAX to 752 s on an A100 with TF).
+handle a whole cortical surface: the 93,534 vertices of the public van Es 2019 surface
+dataset take roughly 6–13 minutes on a recent data-centre GPU (details in
+[`references/performance.md`](./references/performance.md)).
 
 | Use it for | Look elsewhere for |
 |---|---|
 | Tuning to a continuous stimulus: position, number, value, orientation | Plain contrasts and mass-univariate GLMs (nilearn, SPM) |
 | Trial-wise decoding with calibrated uncertainty | Single-trial betas themselves (GLMsingle, then bring them here) |
 | Your own tuning function, without writing an optimizer | Non-fMRI data: untested for anything else so far |
-| Whole-brain PRF mapping on a GPU | Cognitive models of behaviour (**bauer**) |
+| Whole-brain PRF mapping on a GPU | Cognitive models of behaviour (a dedicated cognitive-modelling package) |
 
 - **Cite:** de Hollander, Renkert, Ruff & Knapen, *braincoder*, Zenodo,
   [10.5281/zenodo.10778413](https://doi.org/10.5281/zenodo.10778413). Papers, users,
@@ -181,7 +182,7 @@ arguments (e.g. `grid_coordinates`, `tr`) next to the files.
 | Write a new model class | [`references/custom_models.md`](./references/custom_models.md) |
 | Fit BOLD timeseries in the visual field (2D `*WithHRF`) | [Timeseries PRFs](#timeseries-prfs-2d-withhrf) below |
 | Decode a BOLD time series (moving bars) rather than single-trial betas | [`references/decoding.md`](./references/decoding.md), "Decoding BOLD time series" |
-| Compare braincoder with prfpy, popeye, analyzePRF, prfmodel, GEM-pRF | [`references/performance.md`](./references/performance.md), "Comparing packages" |
+| Benchmark braincoder against another PRF package | [`references/performance.md`](./references/performance.md), "Comparing packages" |
 | Reuse results from an older braincoder | [`references/version_history.md`](./references/version_history.md) |
 | Change braincoder itself | [`references/library_development.md`](./references/library_development.md) |
 | Understand a model's equation and parameters, or `rf_normalization` | [`references/models_and_parameters.md`](./references/models_and_parameters.md) |
@@ -212,7 +213,7 @@ row order is still your job to prevent. Assert it (step 2).
 **4. Remove NaN voxels before fitting.** A voxel with a single NaN sample, or zero variance,
 cannot be fitted. It returns NaN parameters and NaN `fitter.r2`, with a warning, and
 decoding with such a row raises `ValueError`. Masked voxels still cost compute (21% of the
-vertices in one surface dataset).
+vertices in the public van Es 2019 surface dataset are NaN).
 
 **5. Always grid, then refine, then fit.** The correlation-cost grid leaves amplitude and
 baseline at your placeholder, so its raw R² is about 0 (−0.004 → 0.43 after refine). Use a
@@ -252,7 +253,8 @@ from the fitted model and noise model, then decode with an ideal Bayesian observ
 
 **14. Write NIfTIs through a mask with `set_data_dtype(np.float32)` and
 `header.set_slope_inter(1, 0)`**, or parameters quantize to 256 values through the `uint8`
-mask. See **cogneuro-project**.
+mask (`NiftiMasker.inverse_transform` inherits the mask's dtype). Read one output back and
+check its dtype and the number of unique values.
 
 ## Models
 
@@ -269,12 +271,12 @@ mask. See **cogneuro-project**.
 | Parameters depend on condition | `RegressionGaussianPRF`, `RegressionAlphaGaussianPRF` | one column per (parameter, regressor) |
 | Fixed basis, fit weights only | `LinearModel`, or a PRF with fixed `parameters` + `WeightFitter` | |
 
-- **Orientation with few trials (about 100 per participant): fit weights on a fixed basis**
-  (for example 8 half-wave-rectified cos⁵ channels) with `WeightFitter(..., fit_intercept=True)`,
-  not per-voxel `AxialVonMisesPRF`. On the same 200 voxels the basis model decoded 3 to 5
-  degrees better (MAE 24.3 vs 28.4 and 26.9 vs 30.1 in two experiments) and was better
-  calibrated (the per-voxel model's 95% coverage was 0.62 to 0.87). Score circularly
-  (circular mean of the posterior, circular MAE) with `axial` periodicity (180 degrees).
+- **Orientation with few trials (about 100 per participant): consider weights on a fixed
+  basis** (for example 8 half-wave-rectified cos⁵ channels) with
+  `WeightFitter(..., fit_intercept=True)` instead of per-voxel `AxialVonMisesPRF`. With so few
+  trials per-voxel von Mises fits are noisy, and in our experience the basis model decoded
+  better and gave better-calibrated posteriors; compare both with cross-validation. Score
+  circularly (circular mean of the posterior, circular MAE) with `axial` periodicity (180 degrees).
 - **Single-trial betas take a non-HRF model; timeseries take a `*WithHRF` model** with
   `hrf_model=SPMHRFModel(tr=…)`. Mixing them up gives no error.
   `flexible_hrf_parameters=True` appends `hrf_delay, hrf_dispersion`. Put
@@ -322,13 +324,13 @@ pars = fitter.fit(init_pars=init, max_n_iterations=1000)
 `grid_coordinates`, `v1_timeseries`, `tr`). Add `flexible_hrf_parameters=True` to fit the HRF
 too (start from the fixed-HRF fit).
 
-**The canonical SPM HRF (peak 5 s) can be about 2 s too slow for real data** (3T CHN and 7T
-Szinte data both prefer a delay of about 4 s). Before a free per-voxel HRF, try **one
-participant-level HRF** chosen on the training runs (scan delay × dispersion, grid R²): it
-gave 0.048 of the 0.059 cvR² gain of the free HRF (82%). Delay is well identified, shape is
+**The canonical SPM HRF (peak 5 s) can be too slow for real data.** Before a free per-voxel
+HRF, try **one participant-level HRF** chosen on the training runs (scan delay × dispersion,
+grid R²): it adds two parameters per participant instead of two per voxel, so it is much less
+prone to overfitting. Compare both with cross-validated R². Delay is well identified, shape is
 not: `peak_s` = delay − dispersion is a gamma mode, not a measured peak, so report a fitted
-HRF as an effective latency, and check the optimum is not at the edge of the scan (dispersion
-hit it in 20 of 24 fits). Time-series CV with moving bars has its own traps:
+HRF as an effective latency, and check that the optimum is not at the edge of the scan
+(dispersion often is). Time-series CV with moving bars has its own traps:
 [`references/r2_and_cv.md`](./references/r2_and_cv.md). Decoding a BOLD time series is not
 `get_stimulus_pdf` on one TR: [`references/decoding.md`](./references/decoding.md).
 
@@ -356,8 +358,8 @@ permutation null, never one model's own score. Recipe in
   gave near-zero thresholds (Beta mixture).
 - **cvR² favours few-parameter models.** A negative median may be just the df cost of the
   model. Compare with a label-permutation null before reporting single-voxel tuning.
-- Drop NaN voxels before fitting and report how many (93,534 of 118,584 remained in the
-  benchmark).
+- Drop NaN voxels before fitting and report how many (93,534 of 118,584 remain in the
+  public van Es 2019 surface data).
 - A small ROI can select 0 voxels in a fold, and `ResidualFitter` then crashes. Handle it
   explicitly, for example by keeping the top voxel.
 
@@ -370,21 +372,15 @@ permutation null, never one model's own score. Recipe in
   Wrapped_PyInit__pywrap_*`).
 - **GP spatial prior** (`braincoder.optimize.bayesian_fitter.BayesianParameterFitter`,
   `braincoder.optimize.gp_prior.GeodesicGPPrior`; not exported at package level). Empirical
-  Bayes after Daghlian et al. 2025. The Cholesky scales as O(V³), so use it on ROIs. What
-  worked on numerosity data: a prior on the tuning peak `mu` only, with the
-  hyperparameters fitted jointly with the parameters (type-II MAP, which adds log det K to
-  the loss), was the best variant, but at full n (39) its gain in decoding r on unsmoothed
-  betas is small and not reliable (+0.005 to +0.014, every 95% CI includes 0) and MAE gets
-  WORSE by 0.3–0.5 (interim n = 23 had suggested +0.025). Priors on `sd`,
-  amplitude or baseline hurt (amplitude and baseline are voxel-specific scale and offset
-  with no smoothness rationale; a joint prior on all four was catastrophic on smoothed
-  data), and fitting the lengthscale by MLE on noisy per-voxel estimates over-smooths (about
-  25 mm, the size of the ROI). Keep the σ²·WᵀW term in the decoder Ω. **Caution:** the
-  prior is zero-mean on the native parameter, so by construction it also pulls `mu` toward 0.
-  That is design reasoning, not a measured effect, but it fits the observed pattern (MAE
-  worse by 0.3 to 0.5 numerosity units with any `mu` prior while r rose slightly); a
-  constant-mean variant is under test. Results and status:
-  `notes/analyses/gp_prior_summary.md` in the paper_braincoder repo.
+  Bayes after Daghlian et al. 2025. The Cholesky scales as O(V³), so use it on ROIs. Advice:
+  put the prior on the tuning peak (`mu`) only, and fit the hyperparameters jointly with the
+  parameters (type-II MAP, which adds log det K to the loss). Amplitude and baseline are
+  voxel-specific scale and offset with no smoothness rationale, so don't put a prior on them.
+  Fitting the lengthscale by MLE on noisy per-voxel estimates tends to over-smooth. Do not
+  assume the prior improves decoding: in our hands the gains were small and unreliable, so
+  test it with cross-validation against the unregularised fit. Keep the σ²·WᵀW term in the
+  decoder Ω. **Caution:** the prior is zero-mean on the native parameter, so by construction
+  it also pulls `mu` toward 0, which can bias decoded values.
 - **Not released:** `get_acuity`, `braincoder.datasets.load_dataset` and the stimulus
   parameterisations are on feature branches (`feature/acuity`, `feature/datasets`,
   `feature/stimulus-parameterization`); this skill does not describe them.
