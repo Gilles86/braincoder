@@ -63,6 +63,10 @@ before this.**
 - **`gamma_pdf` is computed in log space.** `t**(a-1)` and `d**a · Γ(a)` overflowed float32 for
   shapes above about 35, so very narrow gamma HRFs gave NaN. Values for ordinary shapes are
   unchanged up to float32 rounding.
+- **`ParameterFitter.fit` with `fixed_pars` on regression models** no longer crashes while
+  logging (their parameter labels are tuples).
+- **`ResidualFitter`** raises a clear error on data with 0 voxels and fits a single voxel with
+  `spherical=True`.
 
 ## 0.7.0 (2026-11-02)
 
