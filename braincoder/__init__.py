@@ -17,6 +17,7 @@ from .models import (
 )
 from .optimize import WeightFitter, ParameterFitter, ResidualFitter
 from . import noise
+from . import parametric
 from .noise import LowRankNoise
 try:
     from .optimize import (
