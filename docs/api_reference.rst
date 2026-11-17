@@ -81,7 +81,7 @@ instead of an image: a grid over the parameters is an exact posterior per volume
 and a differentiable rendering gives gradient-based MAP estimates.
 
 .. automodule:: braincoder.parametric
-   :members: ParametricStimulus, BarStimulus, get_parametric_stimulus_pdf, marginalize, forward_backward
+   :members: ParametricStimulus, BarStimulus, LogWidthPrior, get_parametric_stimulus_pdf, marginalize, forward_backward
 
 .. autoclass:: braincoder.optimize.ParametricStimulusFitter
    :members: fit, log_posterior

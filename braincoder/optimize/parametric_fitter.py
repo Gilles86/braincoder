@@ -62,15 +62,17 @@ class ParametricStimulusFitter(object):
             return mvn_log_prob(resid, self.omega_chol)
         return mvt_log_prob(resid, self.omega_chol, ops.convert_to_tensor(float(self.dof)))
 
-    def log_posterior(self, phi, smoothness=None):
+    def log_posterior(self, phi, smoothness=None, use_width_prior=False):
         """Objective (log likelihood / T + log prior) at ``phi`` (DataFrame or array), as a float."""
         u = ops.convert_to_tensor(self.stimulus.to_unconstrained(phi))
-        return float(ops.convert_to_numpy(-self._loss(u, smoothness)))
+        return float(ops.convert_to_numpy(-self._loss(u, smoothness, use_width_prior)))
 
-    def _loss(self, u, smoothness):
+    def _loss(self, u, smoothness, use_width_prior=False):
         phi = self.stimulus.from_unconstrained(u)
         ll = ops.sum(self._log_likelihood(self.stimulus.to_image(phi))) / self.temperature
         pen = 0.
+        if use_width_prior:
+            pen = pen - self.stimulus.log_prior_unconstrained(u)
         if smoothness:
             for label, sd in smoothness.items():
                 i = self.stimulus.parameter_labels.index(label)
@@ -82,7 +84,7 @@ class ParametricStimulusFitter(object):
         return -ll + pen
 
     def fit(self, init_phi, max_n_iterations=500, learning_rate=.05, fixed=None, smoothness=None, rtol=1e-7,
-            min_n_iterations=50, lag=50, decay=True, progressbar=False):
+            min_n_iterations=50, lag=50, decay=True, progressbar=False, use_width_prior=False):
         """Gradient descent (Adam) on φ in the stimulus' unconstrained space.
 
         Parameters
@@ -96,6 +98,9 @@ class ParametricStimulusFitter(object):
             differences are wrapped to ±90°.
         decay : bool
             Cosine decay of the learning rate over ``max_n_iterations`` (default True).
+        use_width_prior : bool
+            Add the stimulus' ``width_prior`` (a :class:`~braincoder.parametric.LogWidthPrior`, in its unconstrained
+            coordinate) to the objective: a MAP with a proper bounded prior on width instead of a flat one.
 
         Returns
         -------
@@ -135,7 +140,7 @@ class ParametricStimulusFitter(object):
             from tqdm.auto import tqdm
             it = tqdm(it)
         for step in it:
-            loss, grads = compute_gradients(lambda: self._loss(build(), smoothness), [var])
+            loss, grads = compute_gradients(lambda: self._loss(build(), smoothness, use_width_prior), [var])
             opt.apply_gradients(zip(grads, [var]))
             costs.append(float(ops.convert_to_numpy(loss)))
             if step > min_n_iterations and abs(costs[-1 - lag] - costs[-1]) <= rtol * abs(costs[-1 - lag]):

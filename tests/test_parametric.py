@@ -169,3 +169,57 @@ def test_fitter_sequence_with_hrf_positions_only():
     # the last frames' bars have barely entered the BOLD yet; judge the rest
     err = np.abs(est.position - truth.position).values[:n - 6]
     assert np.median(err) < .15 and err.max() < .6
+
+
+def test_log_width_prior_bounds_and_normalisation():
+    from braincoder.parametric import LogWidthPrior
+    pr = LogWidthPrior(.6, 6., median=2., scale=1.)
+    # density of the width integrates to 1 over the bounds and is -inf outside; the median is where it was put
+    w = np.exp(np.linspace(np.log(.6), np.log(6.), 400001)[1:-1])
+    dens = np.exp(pr.log_prob(w))
+    total = np.trapezoid(dens, w) if hasattr(np, 'trapezoid') else np.trapz(dens, w)
+    assert abs(total - 1) < 1e-3
+    cdf = np.cumsum(dens[1:] * np.diff(w))
+    assert abs(w[1:][np.searchsorted(cdf, .5)] - 2.) < .01
+    assert pr.log_prob(.5) == -np.inf and pr.log_prob(6.5) == -np.inf
+    s = pr.sample(20000, rng=0)
+    assert s.min() > .6 and s.max() < 6. and abs(np.median(s) - 2.) < .05
+    # unconstrained map round-trips and never leaves the bounds, however far the coordinate goes
+    z = np.array([-30., -3., 0., 3., 30.], dtype=np.float32)
+    ww = np.asarray(ops.convert_to_numpy(pr.width(ops.convert_to_tensor(z))))
+    assert (ww >= .6 - 1e-5).all() and (ww <= 6. + 1e-5).all()
+    w3 = np.asarray(ops.convert_to_numpy(pr.width(ops.convert_to_tensor(z[1:4]))))
+    np.testing.assert_allclose(pr.zeta(w3), z[1:4], atol=1e-3)
+    # the zeta-space density plus the Jacobian is the log-width density
+    zz = np.array([-1.3, .2, 1.1], dtype=np.float32)
+    u = pr.lo + (pr.hi - pr.lo) / (1 + np.exp(-zz))
+    jac = np.log((pr.hi - pr.lo) / (1 + np.exp(-zz)) / (1 + np.exp(zz)))
+    np.testing.assert_allclose(np.asarray(ops.convert_to_numpy(pr.log_prob_zeta(ops.convert_to_tensor(zz)))) - jac, pr.log_prob_log_width(u), atol=1e-4)
+    # grid of candidate widths: masses are a proper sub-distribution, larger near the median
+    lm = pr.cell_log_masses([1., 2., 3., 4.])
+    assert np.exp(lm).sum() <= 1 + 1e-9 and np.all(np.isfinite(lm))
+    assert np.exp(pr.cell_log_masses([.5, 2., 7.]))[[0, 2]].max() == 0.
+
+
+def test_bar_width_prior_option_and_fitter():
+    x, y, grid, pars = toy(300)
+    model = GaussianPRF2D(grid_coordinates=grid, rf_normalization='peak')
+    stim = BarStimulus(grid, edge='soft', edge_width=.25, width_prior=dict(min_width=.6, max_width=6., median=2.))
+    assert (stim.min_width, stim.max_width) == (.6, 6.)
+    phi = pd.DataFrame({'orientation': [10., 60.], 'position': [-2., 1.], 'width': [1.2, 3.]})
+    u = stim.to_unconstrained(phi)
+    back = np.asarray(ops.convert_to_numpy(stim.from_unconstrained(ops.convert_to_tensor(u))))
+    np.testing.assert_allclose(back[:, 2], phi.width.values, rtol=1e-4)
+    lp = float(ops.convert_to_numpy(stim.log_prior_unconstrained(ops.convert_to_tensor(u))))
+    assert np.isfinite(lp)
+    assert BarStimulus(grid).log_prior_unconstrained(u) == 0.        # no prior given: flat, nothing added
+    # with the prior in the objective a width-uninformative fit (noise only) stays inside the bounds; without it the loss is unchanged
+    rng = np.random.default_rng(5)
+    data = rng.normal(size=(2, len(pars))) * .2
+    noise = LowRankNoise.from_residuals(rng.normal(size=(500, len(pars))) * .2, k=0)
+    fit = ParametricStimulusFitter(model, stim, data, parameters=pars, noise_model=noise)
+    a = fit.log_posterior(phi)
+    b = fit.log_posterior(phi, use_width_prior=True)
+    assert abs((b - a) - lp) < 1e-1          # float32 on a loss of order 5e4
+    est = fit.fit(phi, max_n_iterations=60, use_width_prior=True)
+    assert (est.width > .6).all() and (est.width < 6.).all()

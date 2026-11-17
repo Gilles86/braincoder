@@ -52,7 +52,7 @@ import numpy as np
 import pandas as pd
 from keras import ops
 
-__all__ = ['ParametricStimulus', 'BarStimulus', 'get_parametric_stimulus_pdf', 'marginalize',
+__all__ = ['ParametricStimulus', 'BarStimulus', 'LogWidthPrior', 'get_parametric_stimulus_pdf', 'marginalize',
            'forward_backward']
 
 
@@ -61,6 +61,94 @@ def _as_grid(grid_coordinates):
     if g.ndim != 2 or g.shape[1] != 2:
         raise ValueError('grid_coordinates must be (n_pixels, 2): x and y of every pixel')
     return g
+
+
+class LogWidthPrior(object):
+    """A proper prior on a bar's width with support bounded away from 0 and from the field.
+
+    Log width ``u`` is a logit-scaled variable on ``(log min_width, log max_width)``::
+
+        u = log(min_width) + (log(max_width) - log(min_width)) * sigmoid(zeta),   zeta ~ Normal(m, scale**2),
+
+    where ``m`` puts the prior median at ``median`` (default: the geometric mean of the bounds). The width is
+    therefore strictly inside ``(min_width, max_width)``, the density is smooth (no wall for HMC or NUTS, which
+    sample ``zeta``), and ``scale`` sets how concentrated it is: about 1 gives a bell in log width, about 2 or more
+    is nearly flat over the interval.
+
+    Parameters
+    ----------
+    min_width, max_width : float
+        Bounds in the units of the stimulus grid. A sensible minimum is one pixel; a sensible maximum is clearly
+        below the field (e.g. 1.5 times the widest bar the design shows).
+    median : float, optional
+    scale : float
+        SD of ``zeta`` (default 1).
+    """
+
+    def __init__(self, min_width, max_width, median=None, scale=1.):
+        if not 0 < min_width < max_width:
+            raise ValueError('need 0 < min_width < max_width')
+        self.min_width, self.max_width, self.scale = float(min_width), float(max_width), float(scale)
+        self.lo, self.hi = np.log(self.min_width), np.log(self.max_width)
+        if median is None:
+            median = np.sqrt(self.min_width * self.max_width)
+        if not self.min_width < median < self.max_width:
+            raise ValueError('median must lie inside the bounds')
+        self.median = float(median)
+        self.loc = float(self.zeta(self.median))
+
+    def zeta(self, width):
+        """Unconstrained coordinate of a width (numpy)."""
+        f = np.clip((np.log(np.asarray(width, dtype=np.float64)) - self.lo) / (self.hi - self.lo), 1e-6, 1 - 1e-6)
+        return np.log(f / (1 - f))
+
+    def width(self, zeta):
+        """Width of an unconstrained coordinate, keras ops (any backend)."""
+        return ops.exp(self.lo + (self.hi - self.lo) * ops.sigmoid(zeta))
+
+    def log_prob_zeta(self, zeta):
+        """Log density of the prior in the unconstrained coordinate (keras ops), the quantity a sampler or MAP uses."""
+        return -.5 * ((zeta - self.loc) / self.scale) ** 2 - np.log(self.scale * np.sqrt(2 * np.pi))
+
+    def log_prob_log_width(self, u):
+        """Log density of log width (numpy); ``-inf`` outside the bounds."""
+        u = np.asarray(u, dtype=np.float64)
+        inside = (u > self.lo) & (u < self.hi)
+        f = np.clip((u - self.lo) / (self.hi - self.lo), 1e-12, 1 - 1e-12)
+        z = np.log(f / (1 - f))
+        lp = -.5 * ((z - self.loc) / self.scale) ** 2 - np.log(self.scale * np.sqrt(2 * np.pi)) - np.log((self.hi - self.lo) * f * (1 - f))
+        return np.where(inside, lp, -np.inf)
+
+    def log_prob(self, width):
+        """Log density of the width itself (numpy); ``-inf`` outside the bounds."""
+        width = np.asarray(width, dtype=np.float64)
+        return self.log_prob_log_width(np.log(width)) - np.log(width)
+
+    def sample(self, n, rng=None):
+        rng = np.random.default_rng(rng)
+        z = self.loc + self.scale * rng.normal(size=n)
+        return np.exp(self.lo + (self.hi - self.lo) / (1 + np.exp(-z)))
+
+    def cell_log_masses(self, widths):
+        """Log prior mass of each candidate width, each owning the cell of log widths nearest to it (cells clipped at the
+        bounds); widths outside the bounds get ``-inf``. For a grid over widths: a prior that sums to 1 over the candidates."""
+        w = np.asarray(widths, dtype=np.float64)
+        order = np.argsort(w)
+        u = np.log(w[order])
+        edges = np.r_[self.lo, (u[1:] + u[:-1]) / 2, self.hi]
+        edges = np.clip(edges, self.lo, self.hi)
+        f = np.clip((edges - self.lo) / (self.hi - self.lo), 1e-12, 1 - 1e-12)
+        z = np.log(f / (1 - f))
+        z[0], z[-1] = -np.inf, np.inf
+        from math import erf, sqrt
+        cdf = np.array([.5 * (1 + erf((v - self.loc) / (self.scale * sqrt(2)))) if np.isfinite(v) else (0. if v < 0 else 1.) for v in z])
+        mass = np.clip(np.diff(cdf), 1e-300, None)
+        out = np.full(len(w), -np.inf)
+        ok = (u > self.lo) & (u < self.hi)
+        lm = np.log(mass)
+        res = np.where(ok, lm, -np.inf)
+        out[order] = res
+        return out
 
 
 class ParametricStimulus(object):
@@ -234,10 +322,15 @@ class BarStimulus(ParametricStimulus):
         Upper bound on width for continuous optimisation (default: the field radius).
     min_width : float, optional
         Lower bound on width for continuous optimisation (default: half a pixel).
+    width_prior : LogWidthPrior or dict, optional
+        A proper prior on the width, bounded away from 0 and from the field (see :class:`LogWidthPrior`; a dict is
+        passed to its constructor). The bounds replace ``min_width`` and ``max_width``, the unconstrained width
+        coordinate becomes the prior's ``zeta`` (log-scaled logit), and :meth:`log_prior_unconstrained` gives the
+        log prior in that coordinate for a fitter or sampler.
     """
 
     def __init__(self, grid_coordinates, edge='hard', edge_width=None, contrast=False, aperture=None,
-                 max_width=None, min_width=None):
+                 max_width=None, min_width=None, width_prior=None):
         super().__init__(grid_coordinates, aperture=aperture)
         if edge not in ('hard', 'soft'):
             raise ValueError("edge must be 'hard' or 'soft'")
@@ -250,6 +343,11 @@ class BarStimulus(ParametricStimulus):
         self.radius = float(np.sqrt((self.grid_coordinates ** 2).sum(1)).max())
         self.max_width = float(self.radius if max_width is None else max_width)
         self.min_width = float(self.pixel_spacing / 2. if min_width is None else min_width)
+        if isinstance(width_prior, dict):
+            width_prior = LogWidthPrior(**width_prior)
+        self.width_prior = width_prior
+        if width_prior is not None:
+            self.min_width, self.max_width = width_prior.min_width, width_prior.max_width
 
     # distance of every pixel to the bar's centre line, keras ops
     def _distance(self, phi):
@@ -290,18 +388,32 @@ class BarStimulus(ParametricStimulus):
         min_width and max_width; contrast: logit."""
         phi = self._as_array(phi).copy()
         lo, hi = self.min_width, self.max_width
-        w = np.clip((phi[:, 2] - lo) / (hi - lo), 1e-4, 1 - 1e-4)
-        phi[:, 2] = np.log(w / (1 - w))
+        if self.width_prior is not None:
+            phi[:, 2] = self.width_prior.zeta(phi[:, 2])
+        else:
+            w = np.clip((phi[:, 2] - lo) / (hi - lo), 1e-4, 1 - 1e-4)
+            phi[:, 2] = np.log(w / (1 - w))
         if self.contrast:
             c = np.clip(phi[:, 3], 1e-4, 1 - 1e-4)
             phi[:, 3] = np.log(c / (1 - c))
         return phi.astype(np.float32)
 
     def from_unconstrained(self, u):
-        parts = [u[:, 0:1], u[:, 1:2], self.min_width + (self.max_width - self.min_width) * ops.sigmoid(u[:, 2:3])]
+        if self.width_prior is not None:
+            width = self.width_prior.width(u[:, 2:3])
+        else:
+            width = self.min_width + (self.max_width - self.min_width) * ops.sigmoid(u[:, 2:3])
+        parts = [u[:, 0:1], u[:, 1:2], width]
         if self.contrast:
             parts.append(ops.sigmoid(u[:, 3:4]))
         return ops.concatenate(parts, axis=1)
+
+    def log_prior_unconstrained(self, u):
+        """Log prior of the unconstrained coordinates, summed over rows (keras ops): the width prior's density in its
+        ``zeta`` coordinate, 0 when no ``width_prior`` was given (flat in the unconstrained space)."""
+        if self.width_prior is None:
+            return 0.
+        return ops.sum(self.width_prior.log_prob_zeta(u[:, 2]))
 
     def canonicalize(self, phi):
         """Orientation into [0, 180), flipping the sign of position where it moved by 180°."""
