@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### New features
+
+- **`braincoder.selection`: label-permutation voxel selection.** `PermutationSelector` fits the real data and `K`
+  within-group label shuffles with the identical fitting procedure, then selects voxels by a pooled empirical p-value
+  with Benjamini-Hochberg control within families such as ROIs. `fit_null` and `NullBank` cache the null for reuse.
+  Intended for trial-wise data such as single-trial betas: shuffling the rows of an autocorrelated BOLD time series
+  breaks its temporal structure, so the null is not valid there.
+
 ### Fixes
 
 - **Divisive normalization models no longer return NaN when `surround_baseline` is 0.** The denominators are

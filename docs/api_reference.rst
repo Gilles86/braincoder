@@ -85,3 +85,23 @@ and a differentiable rendering gives gradient-based MAP estimates.
 
 .. autoclass:: braincoder.optimize.ParametricStimulusFitter
    :members: fit, log_posterior
+
+Voxel selection
+===============
+
+.. automodule:: braincoder.selection
+
+.. autoclass:: braincoder.selection.PermutationSelector
+   :members: fit, fit_null
+
+.. autoclass:: braincoder.selection.PermutationSelectionResult
+   :members:
+
+.. autoclass:: braincoder.selection.NullBank
+   :members:
+
+.. autofunction:: braincoder.selection.subsample_voxels
+
+.. autofunction:: braincoder.selection.make_r2_fitter
+
+.. autofunction:: braincoder.selection.permutation_indices
