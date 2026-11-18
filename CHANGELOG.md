@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0 (2026-11-18)
+
+New features; no behaviour changes for existing code.
+
+### Gain-field PRF models (`braincoder.models.gain_field`)
+
+Fields around chosen locations (attended, salient, target, distractor, ...) multiply the stimulus image
+before each voxel's PRF pools it. With all gains at 0 the model is exactly the PRF model underneath.
+
+- **`GainFieldPRF2D`**, **`GainFieldDoGPRF2D`** and their **`WithHRF`** versions, for single-trial
+  betas and BOLD time courses. **`GainFieldMixin`** adds fields to any image PRF kernel.
+- Any number of field locations, anywhere, and any number of named gain types. The per-frame role of
+  every location (weights, 0/1 or fractional) is part of the paradigm, built with
+  **`braincoder.stimuli.make_gain_field_paradigm`** or `model.make_paradigm`.
+- Several fields per model (**`GainField`**), each with its own shape (**`FieldShape`** subclasses:
+  **`GaussianField`**, **`DoGField`**, or your own), gains (signed, positive or negative), and inside or
+  outside the clip at 0. The combination rule is pluggable.
+- **`ties`**: parameters fixed to a constant, equal to another, or a linear combination of others
+  (zero-sum gains, shared widths). **`image_scales`**: a model-level factor for part of the image.
+- Field parameters are model-level and fitted with `ParameterFitter(..., shared_pars=...)`, typically
+  with the PRFs fixed. The forward pass costs about as much as the PRF model underneath.
+- Documentation: a gain-field page (`docs/gain_fields.rst`) and a gallery tutorial
+  (`examples/02_gain_fields`, lesson 8).
+
 ## 0.8.0 (2026-11-18)
 
 New features; no behaviour changes for existing code (all defaults are unchanged).

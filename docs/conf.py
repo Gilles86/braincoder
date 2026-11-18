@@ -10,7 +10,7 @@ project = 'Braincoder'
 copyright = '2023-2026, Gilles de Hollander'
 author = 'Gilles de Hollander'
 version = '0.7'
-release = '0.8.0'
+release = '0.9.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
