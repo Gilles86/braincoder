@@ -30,6 +30,10 @@ With every gain at 0, the model predicts exactly what the PRF model
 underneath predicts. So you can fit the PRFs first and then ask how much the
 gain fields add.
 
+**Tutorial:** :doc:`auto_examples/02_gain_fields/01_gain_fields` simulates a
+population, fits shared gains with the PRFs fixed, combines two fields and adds
+a field shape of your own (also :ref:`tutorial_lesson8`).
+
 Step 1: the paradigm
 ====================
 

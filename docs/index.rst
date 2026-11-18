@@ -59,7 +59,8 @@ More resources
 - :doc:`noise_models` — calibrated decoding: low-rank Ω with
   cross-validated rank and temperature.
 - :doc:`gain_fields` — PRFs modulated by attention or gain fields around
-  chosen locations (single-trial betas or time courses).
+  chosen locations (single-trial betas or time courses); tutorial:
+  :doc:`auto_examples/02_gain_fields/01_gain_fields`.
 - :doc:`api_reference` — autodoc for the most used modules.
 - :doc:`tutorial/index` — hands-on lessons that walk through realistic
   encoding/decode pipelines.
