@@ -19,7 +19,9 @@ at different locations in stimulus space without actually doing any decoding.
 Notably, Fisher information also plays a crucial role in efficient coding theory. In general, the expected
 squared error of a likelihood function, given a limited 'information budget',
 can be minimized by using a likelihood function where the Fisher information is proportional
-to the derivative of the cummulative prior distribution (:cite:t:`wei2015bayesian`).
+to the derivative of the cumulative prior distribution (:footcite:t:`wei2015bayesian`).
+
+.. footbibliography::
 
 """
 

@@ -9,7 +9,7 @@
 project = 'Braincoder'
 copyright = '2023-2026, Gilles de Hollander'
 author = 'Gilles de Hollander'
-version = '0.7'
+version = '0.9'
 release = '0.9.0'
 
 # -- General configuration ---------------------------------------------------

@@ -24,6 +24,10 @@ pytest tests/test_glm.py::test_function_name
 
 No linting configuration is present in the repo.
 
+## Releasing
+
+Follow `RELEASING.md` for every version bump. A release is not finished until the documentation site is published too (`scripts/publish_docs.sh`); nothing does this automatically.
+
 ## Architecture
 
 ### Core Module Layout
