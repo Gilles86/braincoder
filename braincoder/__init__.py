@@ -2,7 +2,7 @@
 
 __author__ = """Gilles de Hollander"""
 __email__ = 'gilles.de.hollander@gmail.com'
-__version__ = '0.7.1'
+__version__ = '0.8.0'
 
 from .models import (
     EncodingModel, EncodingRegressionModel, HRFEncodingModel,
@@ -17,6 +17,7 @@ from .models import (
 )
 from .optimize import WeightFitter, ParameterFitter, ResidualFitter
 from . import noise
+from . import parametric
 from .noise import LowRankNoise
 try:
     from .optimize import (
