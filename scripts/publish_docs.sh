@@ -70,7 +70,8 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
   rm -rf docs/_build
   # -a: write all output files, even unchanged.
   # -E: rebuild environment from scratch.
-  sphinx-build -a -E -b html docs "$BUILD_DIR"
+  # -d: keep Sphinx's internal doctrees out of the published folder.
+  sphinx-build -a -E -b html -d docs/_build/doctrees docs "$BUILD_DIR"
 else
   echo "==> --skip-build: reusing existing $BUILD_DIR"
   if [[ ! -d "$BUILD_DIR" ]]; then
@@ -108,6 +109,17 @@ done
 echo "==> Copying $BUILD_DIR → $PAGES_DIR"
 # trailing slash on src copies *contents* of html/ (not the html/ dir itself)
 cp -R "$BUILD_DIR/." "$PAGES_DIR/"
+
+# Never publish local paths. Gallery output can contain the paths of the build machine.
+rm -rf "$PAGES_DIR/.doctrees"
+find "$PAGES_DIR" -name .git -prune -o -type f \( -name '*.html' -o -name '*.txt' -o -name '*.js' \) -print0 |
+  REPO_ROOT="$REPO_ROOT" LOCAL_USER="$(id -un)" xargs -0 perl -pi -e '
+    s/\Q$ENV{REPO_ROOT}\E\//braincoder\//g; s/\Q$ENV{HOME}\E\//~\//g;
+    s/"\Q$ENV{LOCAL_USER}\E":(\[[^\]]*\]|\d+),?//g'
+if grep -rqI --exclude-dir=.git -F -e "$HOME" -e "$REPO_ROOT" "$PAGES_DIR"; then
+  echo "ERROR: the build still contains local paths; not publishing." >&2
+  exit 1
+fi
 
 # .nojekyll is mandatory for sphinx output on GH Pages (sphinx uses
 # underscore-prefixed dirs like _static/, _images/ which Jekyll hides).
