@@ -3,14 +3,15 @@ API Reference
 =============
 
 This section documents the most frequently used modules.  All classes operate
-on numpy arrays or pandas ``DataFrame`` inputs and run TensorFlow under the
-hood.
+on numpy arrays or pandas ``DataFrame`` inputs and run on TensorFlow, JAX or
+PyTorch through Keras 3. Models hold only their configuration: pass the paradigm,
+parameters, weights and noise model to each method.
 
 Encoding models
 ===============
 
 .. autoclass:: braincoder.models.EncodingModel
-   :members: predict, simulate, get_paradigm, get_parameter_labels, to_discrete_model
+   :members: predict, simulate, get_paradigm, get_parameter_labels, get_stimulus_pdf, predict_stimulus_grid
    :show-inheritance:
 
 .. autoclass:: braincoder.models.LinearModelWithBaseline
@@ -45,13 +46,53 @@ Optimization helpers
    :members:
    :show-inheritance:
 
+.. autoclass:: braincoder.optimize.ResidualFitter
+   :members: fit
+   :show-inheritance:
+
+.. _api-noise:
+
+Noise models for decoding
+=========================
+
+See :doc:`noise_models` for the workflow.
+
+.. autoclass:: braincoder.noise.LowRankNoise
+   :members:
+   :show-inheritance:
+
+.. autofunction:: braincoder.noise.fit_lowrank_omega
+
+.. _api-calibration:
+
+Calibration diagnostics
+=======================
+
+.. automodule:: braincoder.utils.calibration
+   :members:
+
+.. _api-parametric:
+
+Stimulus parameterisations
+==========================
+
+Decode a few stimulus parameters (e.g. a bar's orientation, position and width)
+instead of an image: a grid over the parameters is an exact posterior per volume,
+and a differentiable rendering gives gradient-based MAP estimates.
+
+.. automodule:: braincoder.parametric
+   :members: ParametricStimulus, BarStimulus, LogWidthPrior, get_parametric_stimulus_pdf, marginalize, forward_backward
+
+.. autoclass:: braincoder.optimize.ParametricStimulusFitter
+   :members: fit, log_posterior
+
 Voxel selection
 ===============
 
 .. automodule:: braincoder.selection
 
 .. autoclass:: braincoder.selection.PermutationSelector
-   :members: fit
+   :members: fit, fit_null
 
 .. autoclass:: braincoder.selection.PermutationSelectionResult
    :members:

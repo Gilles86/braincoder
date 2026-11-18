@@ -5,7 +5,8 @@ import keras
 from keras import ops
 from tqdm.auto import tqdm
 from ..utils import format_data, format_paradigm, logit
-from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, compute_gradients, safe_cholesky
+from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, compute_gradients, safe_cholesky, strict_cholesky
+from .gp_prior import mds_embed_distances
 
 # Exceptions that indicate a bug in the likelihood / model code rather
 # than numerical divergence. Re-raised immediately by ResidualFitter.fit:
@@ -18,6 +19,34 @@ _PROGRAMMING_ERRORS = (TypeError, AttributeError, NameError, ImportError,
 
 
 class ResidualFitter(object):
+    """Fit a parametric noise covariance Ω (and Student-t ν) to residuals.
+
+    Ω = ρ ττᵀ + (1 − ρ) diag(τ²) + σ² WWᵀ (optionally mixed with the sample
+    covariance via ``lambd``).
+
+    With a pairwise distance matrix ``D`` passed to :meth:`fit`, the shared
+    factor becomes distance-dependent:
+
+    Ω = ρ [α (e^{−β D̃} ∘ ττᵀ) + (1 − α) ττᵀ] + (1 − ρ) diag(τ²) + σ² WWᵀ
+
+    with α ∈ (0, 1), β > 0 and D̃ the classical-MDS Euclidean embedding of
+    ``D`` (see :func:`braincoder.optimize.gp_prior.mds_embed_distances`). It
+    nests the model above at α = 0 and at β = 0. Each term is positive
+    semi-definite for every parameter value: e^{−β D̃} because D̃ is Euclidean
+    (Schoenberg 1938), its Hadamard product with ττᵀ by the Schur product
+    theorem, and WWᵀ as a Gram matrix. With ρ < 1 and τ > 0 the diagonal term
+    makes Ω positive definite, also when voxels share a location (D̃ = 0).
+
+    .. warning::
+       Ω has a single shared factor. On real single-trial fMRI betas the
+       residuals typically need tens of factors, and this Ω underestimates
+       held-out noise (held-out Mahalanobis distances ~4× too large on 7T
+       data), giving overconfident decoding posteriors. ``lambd > 0`` is
+       unsafe when n_voxels > n_trials (rank-deficient sample covariance).
+       The pseudo-WWᵀ from ``get_pseudoWWT`` is uncentred. For calibrated
+       decoding see :class:`braincoder.noise.LowRankNoise` and the
+       "Noise models for decoding" docs page.
+    """
 
     def __init__(self, model, data, paradigm=None, parameters=None, weights=None, lambd=0.0):
 
@@ -26,15 +55,8 @@ class ResidualFitter(object):
         self.lambd = lambd
 
         self.paradigm = self.model.get_paradigm(paradigm)
-
-        if parameters is None:
-            if self.model.parameters is None:
-                raise ValueError('Need to have parameters')
-        else:
-            self.model.parameters = parameters
-
-        if weights is not None:
-            self.model.weights = weights
+        self.parameters = parameters
+        self.weights = weights
 
     def fit(self, init_rho=.1, init_tau=None, init_dof=1., init_sigma2=1e-3, D=None, max_n_iterations=1000,
             resid_dist='gauss',
@@ -45,10 +67,14 @@ class ResidualFitter(object):
             use_wwt=True,
             learning_rate=0.02, rtol=1e-6, lag=100,
             init_alpha=0.99,
-            init_beta=0.0,
+            init_beta=None,
             spherical=False,
             progressbar=True,
-            max_consecutive_failures=50):
+            max_consecutive_failures=50,
+            stimulus_range=None,
+            WWT=None,
+            psd_correction='mds',
+            cholesky=None):
         """``use_wwt`` (default True): include the ``σ² · WᵀW`` term in
         Ω. When False, Ω is built without the tuning-similarity
         contribution — useful for testing whether ``WᵀW`` is doing
@@ -56,6 +82,10 @@ class ResidualFitter(object):
         signal-correlation structure that interacts with regularized
         encoding fits. ``σ²`` stays in the trainable set but has zero
         effect on Ω (gradient → 0; Adam leaves it inert).
+
+        The ``WWT`` term comes from, in order: the ``WWT`` argument; the
+        ``weights`` of the fitter; or the model's pseudo-WWT, which needs
+        ``stimulus_range`` for models that are not image-based.
 
         Failure handling: a step whose cost or gradients are non-finite,
         or which raises a numerical error (e.g. a Cholesky failure), is
@@ -67,12 +97,84 @@ class ResidualFitter(object):
         immediately. If no step ever produces a finite cost the fit
         raises instead of returning an unfitted Ω. The number of
         rolled-back steps is stored in ``self.n_failed_steps``.
+
+        Distance-dependent noise (``D``): ``D`` is an ``(n_voxels, n_voxels)``
+        symmetric, finite, non-negative distance matrix. β is constrained
+        positive with a softplus; α lies in (0, 1). ``init_beta`` must be
+        > 0 and defaults to ``1 / median(off-diagonal D̃)``.
+
+        ``psd_correction``: ``'mds'`` (default) replaces ``D`` by its
+        classical-MDS Euclidean embedding D̃ before the fit, which is what
+        makes Ω positive definite by construction. Exponential kernels on
+        raw graph or geodesic distances need not be PSD. ``'none'`` uses
+        ``D`` as given, only for distances you know are Euclidean. The
+        embedded matrix and its diagnostics are stored in
+        ``self.distance_matrix_embedded_`` and ``self.mds_info_``.
+
+        ``cholesky``: ``'strict'`` factorises Ω as it is, with no jitter, and
+        counts any numerical failure in ``n_failed_steps``. ``'safe'`` uses
+        :func:`~braincoder.utils.backend.safe_cholesky`, which adds adaptive
+        jitter to the diagonal. The default is ``'strict'`` with ``D`` and
+        ``'safe'`` without, so fits without ``D`` are unchanged. Pass
+        ``cholesky='strict'`` when comparing a fit without ``D`` with one
+        with ``D``, so that the kernel is the only difference. In strict mode
+        the smallest eigenvalue of the returned Ω (float64) is stored in
+        ``self.omega_min_eigenvalue_``.
         """
 
+        if cholesky is None:
+            cholesky = 'strict' if D is not None else 'safe'
+        if cholesky not in ('strict', 'safe'):
+            raise ValueError(f"cholesky must be 'strict' or 'safe', got {cholesky!r}")
+        factorise = strict_cholesky if cholesky == 'strict' else safe_cholesky
+
         n_voxels = self.data.shape[1]
+        if n_voxels == 0:
+            raise ValueError('ResidualFitter: data has no voxels; a noise model '
+                             'cannot be fitted to an empty selection.')
+
+        if n_voxels == 0:
+            raise ValueError('ResidualFitter: data contains 0 voxels — '
+                             'cannot fit a noise model')
+
+        if D is not None and self.lambd > 0.0:
+            # get_omega() below checks self.lambd>0 first and returns
+            # _get_omega_lambda(...) without ever touching D/alpha/beta --
+            # confirmed empirically (alpha/beta sit frozen at their init
+            # values across the whole fit, "Gradients do not exist for
+            # variables ['alpha_trans', 'beta']" UserWarning). A caller
+            # passing both would silently get a non-geodesic Omega while
+            # believing they'd requested the geodesic-distance structure.
+            # Loud failure here beats a mislabeled result downstream.
+            raise ValueError(
+                'ResidualFitter.fit(): D (geodesic distance) and '
+                'lambd > 0 (shrinkage toward the sample covariance) are '
+                'not composable in this implementation -- lambd > 0 '
+                'silently overrides the distance-structured Omega and '
+                'never uses D/alpha/beta. Pass lambd=0 when fitting with '
+                'D, or drop D if you want lambd-shrinkage instead.')
 
         if residuals is None:
-            residuals = (self.data - self.model.predict(paradigm=self.paradigm)).values
+            predictions = self.model.predict(self.paradigm, self.parameters, self.weights)
+            if len(predictions) != len(self.data):
+                raise ValueError(f'paradigm has {len(predictions)} rows but data '
+                                 f'has {len(self.data)}.')
+            if not predictions.columns.equals(self.data.columns):
+                if set(predictions.columns) != set(self.data.columns):
+                    raise ValueError(
+                        'The voxels of the model and of the data differ: pass '
+                        'parameters and weights for exactly the columns of data.')
+                predictions = predictions[self.data.columns]
+            # By position, like the fitters: labels may differ between the
+            # index of the data and the index of the paradigm.
+            residuals = self.data.values - predictions.values
+
+        if not np.isfinite(residuals).all():
+            raise ValueError(
+                f'ResidualFitter: residuals of '
+                f'{int((~np.isfinite(residuals)).any(axis=0).sum())} of {n_voxels} '
+                'voxels contain NaN or inf. Check the data and parameters of these '
+                'voxels, and drop them before fitting the noise model.')
 
         sample_cov = np.cov(residuals.T)
 
@@ -101,9 +203,7 @@ class ResidualFitter(object):
             return omega, None
 
         if init_tau is None:
-            init_tau = residuals.std(0)[np.newaxis, :]
-
-        print(f'init_tau: {init_tau.min()}, {init_tau.max()}')
+            init_tau = residuals.std(0)[np.newaxis, :].astype(np.float32)
 
         tau_ = keras.Variable(softplus_inverse(init_tau),
                               name='tau_trans', dtype='float32')
@@ -115,11 +215,16 @@ class ResidualFitter(object):
                                      name='sigma2_trans', dtype='float32')
 
             if use_wwt:
-                if (not hasattr(self.model, 'weights')) or (self.model.weights is None):
-                    print('USING A PSEUDO-WWT!')
-                    WWT = self.model.get_pseudoWWT()
-                else:
-                    WWT = self.model.get_WWT()
+                if WWT is None:
+                    if self.weights is not None:
+                        WWT = self.model.get_WWT(self.weights)
+                    else:
+                        if stimulus_range is None and self.model.pseudo_wwt_needs_stimulus_range:
+                            raise ValueError(
+                                'ResidualFitter needs a stimulus_range to build the pseudo-WWT from '
+                                'parameters: call fit(stimulus_range=...). Alternatively, pass WWT=..., '
+                                'pass weights to the fitter, or use use_wwt=False.')
+                        WWT = self.model.get_pseudoWWT(stimulus_range, self.parameters)
 
                 import pandas as pd
                 if isinstance(WWT, (pd.DataFrame, pd.Series)):
@@ -152,7 +257,10 @@ class ResidualFitter(object):
 
                 def get_omega(variables):
                     tau = transform_variables(variables)
-                    return ops.diag(ops.squeeze(tau**2))
+                    # reshape, not squeeze: with a single voxel tau has
+                    # shape (1, 1) and squeeze collapses it to a 0-d
+                    # scalar, which ops.diag rejects
+                    return ops.diag(ops.reshape(tau**2, [-1]))
 
                 def get_pbar_description(cost, best_cost, variables):
                     tau = transform_variables(variables)
@@ -190,10 +298,43 @@ class ResidualFitter(object):
 
         else:
 
+            if spherical:
+                raise ValueError('D cannot be combined with spherical=True: a '
+                                 'diagonal Ω has no distance-dependent term.')
+            if self.lambd > 0.0:
+                raise ValueError('D cannot be combined with lambd > 0: the '
+                                 'sample-covariance mixture ignores D.')
+            D = np.asarray(D, dtype=np.float64)
+            if D.shape != (n_voxels, n_voxels):
+                raise ValueError(f'D has shape {D.shape}, data has {n_voxels} voxels.')
+            if not np.allclose(D, D.T, atol=1e-5):
+                raise ValueError('D must be symmetric.')
+
+            if psd_correction == 'mds':
+                D_embedded, self.mds_info_ = mds_embed_distances(D, return_info=True)
+            elif psd_correction == 'none':
+                if not np.isfinite(D).all() or (D < 0).any():
+                    raise ValueError('D must be finite and non-negative.')
+                D_embedded, self.mds_info_ = D.astype(np.float32), None
+            else:
+                raise ValueError("psd_correction must be 'mds' or 'none', "
+                                 f'got {psd_correction!r}')
+            self.distance_matrix_embedded_ = D_embedded
+
+            if init_beta is None:
+                off_diagonal = D_embedded[~np.eye(n_voxels, dtype=bool)]
+                positive = off_diagonal[off_diagonal > 0]
+                init_beta = 1.0 / float(np.median(positive)) if positive.size else 1.0
+            if not init_beta > 0:
+                raise ValueError(f'init_beta must be > 0 (beta is constrained '
+                                 f'positive), got {init_beta}. beta -> 0 is the '
+                                 'model without D: fit without D for that.')
+            D = ops.convert_to_tensor(D_embedded, dtype='float32')
+
             alpha_ = keras.Variable(logit(init_alpha),
                                     name='alpha_trans', dtype='float32')
-            beta_  = keras.Variable(init_beta,
-                                    name='beta', dtype='float32')
+            beta_  = keras.Variable(softplus_inverse(float(init_beta)),
+                                    name='beta_trans', dtype='float32')
 
             trainable_variables += [alpha_, beta_]
 
@@ -203,7 +344,8 @@ class ResidualFitter(object):
                 rho    = ops.sigmoid(rho_)
                 sigma2 = ops.softplus(sigma2_)
                 alpha  = ops.sigmoid(alpha_)
-                return tau, rho, sigma2, alpha, beta_
+                beta   = ops.softplus(beta_)
+                return tau, rho, sigma2, alpha, beta
 
             def get_omega(variables):
                 tau, rho, sigma2, alpha, beta = transform_variables(variables)
@@ -226,9 +368,7 @@ class ResidualFitter(object):
 
         if method == 'gauss':
             def likelihood(omega):
-                # Adaptive jitter via safe_cholesky: Adam can push α/β/ρ to
-                # numerical edges where the assembled Ω dips below PSD.
-                omega_chol = safe_cholesky(omega)
+                omega_chol = factorise(omega)
                 return ops.sum(mvn_log_prob(residuals_tensor, omega_chol))
 
             fit_stat = likelihood
@@ -240,7 +380,7 @@ class ResidualFitter(object):
             trainable_variables += [dof_]
 
             def likelihood(omega):
-                omega_chol = safe_cholesky(omega)
+                omega_chol = factorise(omega)
                 dof = ops.softplus(trainable_variables[-1])
                 return ops.sum(mvt_log_prob(residuals_tensor, omega_chol, dof))
 
@@ -374,6 +514,10 @@ class ResidualFitter(object):
                 f'{learning_rate:.3g}).', RuntimeWarning, stacklevel=2)
 
         omega = best_omega
+
+        if cholesky == 'strict':
+            self.omega_min_eigenvalue_ = float(np.linalg.eigvalsh(
+                np.asarray(omega, dtype=np.float64)).min())
 
         fitted_parameters = [ops.convert_to_numpy(ops.convert_to_tensor(v)) for v in
                              transform_variables(best_values)]

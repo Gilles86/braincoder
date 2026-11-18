@@ -7,6 +7,8 @@ to ``tf.GradientTape``.
 """
 
 import numpy as np
+import contextlib
+
 import keras
 from keras import ops
 
@@ -14,6 +16,23 @@ from keras import ops
 # ---------------------------------------------------------------------------
 # Robust Cholesky
 # ---------------------------------------------------------------------------
+
+def _torch_on_mps():
+    if keras.backend.backend() != 'torch':
+        return False
+    import torch
+    return torch.backends.mps.is_available() and ops.convert_to_tensor(0.).device.type == 'mps'
+
+
+def float64_device():
+    """Scope for float64 linear algebra: Apple GPUs (MPS) have no float64, so use the CPU there."""
+    return keras.device('cpu') if _torch_on_mps() else contextlib.nullcontext()
+
+
+def to_float64(x):
+    """Cast to float64 inside :func:`float64_device`, moving the tensor there first."""
+    return ops.cast(ops.convert_to_tensor(x), 'float64')
+
 
 def safe_cholesky(M, jitter=1e-4, max_attempts=6):
     """Cholesky factor of ``M`` with adaptive diagonal jitter + retries.
@@ -77,6 +96,10 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
     # mode coerces float64 → float32 inside ``ops.convert_to_tensor``).
     in_dtype = getattr(M, 'dtype', None)
 
+    if str(in_dtype) == 'float64' and _torch_on_mps():
+        with float64_device():
+            return safe_cholesky(M, jitter=jitter, max_attempts=max_attempts)
+
     M_t = ops.convert_to_tensor(M)
     M_sym = 0.5 * (M_t + ops.transpose(M_t))
     n = ops.shape(M_sym)[0]
@@ -137,6 +160,21 @@ def safe_cholesky(M, jitter=1e-4, max_attempts=6):
         if str(L.dtype) != str(np.dtype(in_dtype)):
             L = np.asarray(ops.convert_to_numpy(L)).astype(in_dtype)
     return L
+
+
+def strict_cholesky(M):
+    """Cholesky factor of the symmetrised ``M``, with no jitter.
+
+    For matrices that are positive definite by construction. A numerical
+    failure is not papered over: it raises (TF, torch, eager JAX) or returns
+    NaN (JAX under tracing), which ``ResidualFitter.fit`` counts as a failed
+    step and rolls back, so what is reported in ``n_failed_steps`` is what
+    happened. Contrast :func:`safe_cholesky`, which always adds at least
+    ``1e-4 * mean(diag(M))`` to the diagonal, so the likelihood it gives is
+    that of a different matrix from the one returned to the caller.
+    """
+    M_t = ops.convert_to_tensor(M)
+    return ops.cholesky(0.5 * (M_t + ops.transpose(M_t)))
 
 
 # ---------------------------------------------------------------------------

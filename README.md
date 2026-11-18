@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Gilles86/braincoder/main/docs/_static/logo_dark.png">
+    <img src="https://raw.githubusercontent.com/Gilles86/braincoder/main/docs/_static/logo.png" alt="BrainCoder: neural encoding/decoding models" width="360">
+  </picture>
+</p>
+
 # Braincoder
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.10778413.svg)](https://doi.org/10.5281/zenodo.10778413)
@@ -18,20 +25,15 @@ single [Keras 3](https://keras.io)-based toolkit that runs on TensorFlow, JAX, o
 - Source code: https://github.com/Gilles86/braincoder
 - Documentation: https://braincoder-devs.github.io/
 
-## Installation
+## Quick start
 
-The quickest way to get started is with conda/mamba. Clone the repo, then create the environment:
+Install braincoder with one of the three backends:
 
 ```bash
-git clone https://github.com/Gilles86/braincoder.git
-cd braincoder
-conda env create -f environment.yml
-conda activate braincoder
+pip install "braincoder[tensorflow]"   # or [jax], or [torch]
 ```
 
-This installs braincoder in editable mode (`pip install -e .`) along with a TensorFlow backend and dev tools. See the [installation docs](https://braincoder-devs.github.io/installation.html) for other backends (JAX, PyTorch) and pip-only setups.
-
-## Quick start
+Then predict the responses of two voxels to a stimulus:
 
 ```python
 import numpy as np
@@ -48,6 +50,32 @@ predicted = model.predict(paradigm=paradigm, parameters=parameters)
 ```
 
 See the [tutorials](https://braincoder-devs.github.io/tutorial/index.html) for full fitting and decoding pipelines.
+Pin the version in your project's environment, e.g. `braincoder[tensorflow]==0.7.1`, so that its results stay reproducible.
+
+## Development install
+
+```bash
+git clone https://github.com/Gilles86/braincoder.git
+cd braincoder
+conda env create -f environment.yml
+conda activate braincoder
+```
+
+This installs braincoder in editable mode (`pip install -e .`) with a TensorFlow backend and dev tools. See the [installation docs](https://braincoder-devs.github.io/installation.html) for the other backends.
+
+## Using an AI coding assistant
+
+The [braincoder skill](skills/braincoder/SKILL.md) gives an AI coding assistant a step-by-step manual for new projects, the common silent errors, and measured runtimes. It is also readable on its own. In Claude Code, install it with:
+
+```
+/plugin install braincoder --marketplace Gilles86/braincoder
+```
+
+Other assistants (Codex, Cursor, Gemini CLI, …) can read [`skills/braincoder/SKILL.md`](skills/braincoder/SKILL.md) directly, e.g. by pointing to it from your project's `AGENTS.md`.
+
+## Related software
+
+[prfmodel](https://popylar-org.github.io/prfmodel/) is a Python package for population receptive field modelling, also built on Keras 3. It covers further pRF models, such as CSS, delayed normalization and connective fields.
 
 ## How to cite
 

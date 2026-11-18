@@ -25,7 +25,7 @@ weights = np.array([[1, 0, 1],
                     [0, 0, 1],
                     [0, 0, 1]]).astype(np.float32)
 
-model = VonMisesPRF(parameters=parameters, weights=weights)
+model = VonMisesPRF()
 
 # 50 random orientations
 paradigm = np.random.rand(50) * np.pi*2
@@ -35,7 +35,7 @@ cov = np.array([[.5, 0.0, 0.0],
        [.25, .75, .25],
        [.25, .25, .75]])
 
-data = model.simulate(noise=cov, weights=weights, paradigm=paradigm)
+data = model.simulate(paradigm, parameters, weights, noise=cov)
 
 # %%
 

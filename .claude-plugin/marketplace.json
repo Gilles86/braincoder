@@ -1,0 +1,11 @@
+{
+  "name": "braincoder",
+  "owner": { "name": "Gilles de Hollander" },
+  "plugins": [
+    {
+      "name": "braincoder",
+      "source": "./",
+      "description": "Claude Code skill for the braincoder library (fMRI encoding models and Bayesian decoding)."
+    }
+  ]
+}

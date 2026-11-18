@@ -1,9 +1,6 @@
-include AUTHORS.rst
-include CONTRIBUTING.rst
-include HISTORY.rst
 include LICENSE
-include README.rst
-include braincoder/data/*
+include README.md
+recursive-include braincoder/data *
 
 recursive-include tests *
 recursive-exclude * __pycache__

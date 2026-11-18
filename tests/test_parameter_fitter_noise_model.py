@@ -3,20 +3,18 @@
 The two modes (``'ssq'`` and ``'gaussian'``) share the same per-voxel
 fixed point: at the optimum, ``∂SSQᵥ/∂θᵥ = 0`` and
 ``∂log(SSQᵥ)/∂θᵥ = (1/SSQᵥ) · ∂SSQᵥ/∂θᵥ = 0`` coincide. They differ
-only in gradient magnitudes during the optimization trajectory —
-Gaussian's per-voxel ``1/σ²ᵥ`` scaling means every voxel makes
-comparable progress under a shared Adam optimizer regardless of its
-noise level.
+only in the path the optimizer takes, because σ²ᵥ changes during the fit.
 
 These tests verify:
 
 1. Both modes recover the ground-truth θ at high iterations.
-2. Gaussian gets there faster on heteroskedastic noise (its raison
-   d'être).
-3. The default is unchanged in 0.6 (still ``'ssq'``).
+2. Both improve the fit on heteroskedastic noise.
+3. The default is ``'ssq'``.
 4. Invalid kwargs raise.
 """
 from __future__ import annotations
+
+from helpers import Bound, grid_for
 
 import numpy as np
 import pandas as pd
@@ -37,7 +35,7 @@ def _simulate(n_voxels=12, n_t=120, seed=0, hetero=False):
         'amplitude': np.full(n_voxels, 2.0, dtype=np.float32),
         'baseline':  np.zeros(n_voxels, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
 
     if hetero:
@@ -61,7 +59,7 @@ def _mu_rmse(fitted, truth):
 
 # ---------------------------------------------------------------- core tests
 def test_default_is_ssq():
-    """Back-compat: omitting ``noise_model`` runs the SSQ loss."""
+    """Omitting ``noise_model`` runs the SSQ loss."""
     model, paradigm, data, _, init = _simulate(n_voxels=8, n_t=80)
     fitter = ParameterFitter(model, data, paradigm, log_dir=False)
     fitter.fit(init_pars=init, max_n_iterations=50, progressbar=False)
@@ -110,8 +108,7 @@ def test_both_modes_produce_sensible_r2():
 def test_modes_agree_at_convergence():
     """Both modes share the same per-voxel fixed point. With enough
     iterations and the same init, the fitted θ should agree to within
-    a small tolerance. This is the equivalence claim that justifies
-    flipping the default in 0.7.
+    a small tolerance.
     """
     model, paradigm, data, _, init = _simulate(
         n_voxels=10, n_t=120, seed=3, hetero=True)

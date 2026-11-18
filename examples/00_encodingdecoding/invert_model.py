@@ -39,7 +39,7 @@ import numpy as np
 parameters = pd.DataFrame([{'mu':0.5*np.pi, 'kappa':1., 'amplitude':1.0, 'baseline':0.0}]).astype(np.float32)
 weights = np.array([[1]]).astype(np.float32)
 
-model = VonMisesPRF(parameters=parameters, weights=weights)
+model = VonMisesPRF()
 omega = np.array([[0.1]]).astype(np.float32)
 
 data = pd.DataFrame([y]).astype(np.float32)
@@ -90,7 +90,7 @@ plt.legend()
 parameters = pd.DataFrame([{'mu':0.5*np.pi, 'kappa':.5, 'amplitude':1.0, 'baseline':0.0},
                            {'mu':1.*np.pi, 'kappa':.5, 'amplitude':1.0, 'baseline':0.0}]).astype(np.float32)
 
-model = VonMisesPRF(parameters=parameters)
+model = VonMisesPRF()
 omega = np.array([[0.05, 0.0], [0.0, 0.05]]).astype(np.float32)
 
 dist1 = ss.vonmises(loc=.5*np.pi, kappa=.5)

@@ -6,9 +6,6 @@ Why the spiky FI curves you may have seen are *real*, and how to compute
 Fisher information and decoder uncertainty reliably from an
 :class:`~braincoder.models.EncodingModel`.
 
-.. contents::
-   :local:
-
 Two questions, two APIs
 -----------------------
 
@@ -18,8 +15,7 @@ of two things:
 **How much information does the population carry about a stimulus value?**
   → :meth:`EncodingModel.get_fisher_information`
 
-**How well will an unbiased decoder recover the true stimulus, averaged
-over noise draws?**
+**How well will an unbiased decoder recover the true stimulus, averaged over noise draws?**
   → :meth:`EncodingModel.get_expected_uncertainty`
 
 Both work on the same fitted ``(parameters, omega, dof)`` tuple. The
@@ -116,14 +112,15 @@ Worked example
         "amplitude": np.ones(100, dtype=np.float32),
         "baseline":  np.zeros(100, dtype=np.float32),
     })
-    model = LogGaussianPRF(parameterisation="mode_fwhm_natural", parameters=pars)
+    model = LogGaussianPRF(parameterisation="mode_fwhm_natural")
     omega = (0.25 ** 2) * np.eye(100, dtype=np.float32)
     stim = np.linspace(1, 40, 100, dtype=np.float32)
 
-    fi_gauss = model.get_fisher_information(stim, omega=omega)
-    fi_t     = model.get_fisher_information(stim, omega=omega, dof=5.0)
+    fi_gauss = model.get_fisher_information(stim, omega=omega, parameters=pars)
+    fi_t     = model.get_fisher_information(stim, omega=omega, dof=5.0, parameters=pars)
     out      = model.get_expected_uncertainty(
-        stim, omega=omega, dof=5.0, n_simulations=500, batch_stimuli=20)
+        stim, omega=omega, dof=5.0, parameters=pars,
+        n_simulations=500, batch_stimuli=20)
 
     # `out` is a DataFrame with mean_E, var_E, mean_error, mean_abs_error
     # indexed by true stimulus. 1/out["var_E"] ≈ fi_t for an unbiased

@@ -1,8 +1,8 @@
 """Top-level package for braincoder."""
 
 __author__ = """Gilles de Hollander"""
-__email__ = 'giles.de.hollander@gmail.com'
-__version__ = '0.5.1'
+__email__ = 'gilles.de.hollander@gmail.com'
+__version__ = '0.9.0'
 
 from .models import (
     EncodingModel, EncodingRegressionModel, HRFEncodingModel,
@@ -13,9 +13,13 @@ from .models import (
     GaussianPRF2DAngle, GaussianPRF2DWithHRF, GaussianPRF2DAngleWithHRF,
     DifferenceOfGaussiansPRF2D, DifferenceOfGaussiansPRF2DWithHRF,
     DivisiveNormalizationGaussianPRF2D, DivisiveNormalizationGaussianPRF2DWithHRF,
+    GainFieldPRF2D, GainFieldPRF2DWithHRF, GainFieldDoGPRF2D, GainFieldDoGPRF2DWithHRF,
     DiscreteModel, LinearModel, LinearModelWithBaseline, LinearModelWithBaselineHRF,
 )
 from .optimize import WeightFitter, ParameterFitter, ResidualFitter
+from . import noise
+from . import parametric
+from .noise import LowRankNoise
 try:
     from .optimize import (
         StimulusFitter, CustomStimulusFitter,

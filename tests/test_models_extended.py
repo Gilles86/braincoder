@@ -4,6 +4,7 @@ Covers: VonMisesPRF, LogGaussianPRF, AlphaGaussianPRF, GaussianPRFWithHRF,
 GaussianPRF2DAngle, DifferenceOfGaussiansPRF2D, simulate() behaviour,
 and ResidualFitter.
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -58,7 +59,7 @@ class TestVonMisesPRF:
             'amplitude': np.ones(3, dtype=np.float32),
             'baseline':  np.zeros(3, dtype=np.float32),
         })
-        return VonMisesPRF(paradigm=circular_paradigm, parameters=pars)
+        return Bound(VonMisesPRF(), circular_paradigm, pars)
 
     def test_predict_shape(self, model, circular_paradigm):
         pred = model.predict()
@@ -84,7 +85,7 @@ class TestVonMisesPRF:
             'mu': mus, 'kappa': [5., 5., 5.],
             'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.],
         }, dtype=np.float32)
-        m = VonMisesPRF(paradigm=circular_paradigm, parameters=pars)
+        m = Bound(VonMisesPRF(), circular_paradigm, pars)
         pred = m.predict()
         stim = circular_paradigm[:, 0]
         for i, mu in enumerate(mus):
@@ -97,8 +98,8 @@ class TestVonMisesPRF:
         from braincoder.models import VonMisesPRF
         pars_low = pd.DataFrame({'mu': [0.], 'kappa': [3.], 'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
         pars_high = pd.DataFrame({'mu': [0.], 'kappa': [3.], 'amplitude': [2.], 'baseline': [0.]}, dtype=np.float32)
-        pred_low = VonMisesPRF(paradigm=circular_paradigm, parameters=pars_low).predict()
-        pred_high = VonMisesPRF(paradigm=circular_paradigm, parameters=pars_high).predict()
+        pred_low = Bound(VonMisesPRF(), circular_paradigm, pars_low).predict()
+        pred_high = Bound(VonMisesPRF(), circular_paradigm, pars_high).predict()
         np.testing.assert_allclose(pred_high.values, 2 * pred_low.values, rtol=1e-5)
 
 
@@ -127,7 +128,7 @@ class TestAxialVonMisesPRF:
             'amplitude': np.ones(3, dtype=np.float32),
             'baseline':  np.zeros(3, dtype=np.float32),
         })
-        return AxialVonMisesPRF(paradigm=orientation_paradigm, parameters=pars)
+        return Bound(AxialVonMisesPRF(), orientation_paradigm, pars)
 
     def test_predict_shape(self, model, orientation_paradigm):
         pred = model.predict()
@@ -169,7 +170,7 @@ class TestAxialVonMisesPRF:
         pars = pd.DataFrame({
             'mu': [mu], 'kappa': [5.], 'amplitude': [1.], 'baseline': [0.],
         }, dtype=np.float32)
-        m = AxialVonMisesPRF(paradigm=orientation_paradigm, parameters=pars)
+        m = Bound(AxialVonMisesPRF(), orientation_paradigm, pars)
         pred = m.predict().iloc[:, 0]
         stim = orientation_paradigm[:, 0]
         bin_width = stim[1] - stim[0]
@@ -198,21 +199,21 @@ class TestLogGaussianPRF:
         from braincoder.models import LogGaussianPRF
         pars = pd.DataFrame({'mu': [1., 2., 3.], 'sd': [0.5, 0.5, 0.5],
                              'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.]}, dtype=np.float32)
-        m = LogGaussianPRF(paradigm=log_paradigm, parameters=pars)
+        m = Bound(LogGaussianPRF(), log_paradigm, pars)
         assert m.predict().shape == (len(log_paradigm), 3)
 
     def test_predict_finite(self, log_paradigm):
         from braincoder.models import LogGaussianPRF
         pars = pd.DataFrame({'mu': [1., 2.], 'sd': [0.5, 0.5],
                              'amplitude': [1., 1.], 'baseline': [0., 0.]}, dtype=np.float32)
-        pred = LogGaussianPRF(paradigm=log_paradigm, parameters=pars).predict()
+        pred = Bound(LogGaussianPRF(), log_paradigm, pars).predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_noiseless_simulate_equals_predict(self, log_paradigm):
         from braincoder.models import LogGaussianPRF
         pars = pd.DataFrame({'mu': [2.], 'sd': [0.5],
                              'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
-        m = LogGaussianPRF(paradigm=log_paradigm, parameters=pars)
+        m = Bound(LogGaussianPRF(), log_paradigm, pars)
         np.testing.assert_allclose(m.simulate(noise=0.).values, m.predict().values, atol=1e-5)
 
     def test_peak_increases_with_mu(self, log_paradigm):
@@ -220,7 +221,7 @@ class TestLogGaussianPRF:
         from braincoder.models import LogGaussianPRF
         pars = pd.DataFrame({'mu': [0.5, 1.5, 2.5], 'sd': [0.3, 0.3, 0.3],
                              'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.]}, dtype=np.float32)
-        pred = LogGaussianPRF(paradigm=log_paradigm, parameters=pars).predict()
+        pred = Bound(LogGaussianPRF(), log_paradigm, pars).predict()
         peak_locs = log_paradigm[pred.values.argmax(0), 0]
         assert peak_locs[0] < peak_locs[1] < peak_locs[2]
 
@@ -229,8 +230,7 @@ class TestLogGaussianPRF:
         from braincoder.models import LogGaussianPRF
         pars = pd.DataFrame({'mode': [2., 4.], 'fwhm': [1., 1.5],
                              'amplitude': [1., 1.], 'baseline': [0., 0.]}, dtype=np.float32)
-        m = LogGaussianPRF(paradigm=log_paradigm, parameters=pars,
-                           parameterisation='mode_fwhm_natural')
+        m = Bound(LogGaussianPRF(parameterisation='mode_fwhm_natural'), log_paradigm, pars)
         pred = m.predict()
         assert pred.shape == (len(log_paradigm), 2)
         assert np.all(np.isfinite(pred.values))
@@ -250,21 +250,21 @@ class TestAlphaGaussianPRF:
         from braincoder.models import AlphaGaussianPRF
         pars = pd.DataFrame({'mu': [3., 5., 7.], 'sd': [1., 1., 1.], 'alpha': [0.5, 0.5, 0.5],
                              'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.]}, dtype=np.float32)
-        m = AlphaGaussianPRF(paradigm=alpha_paradigm, parameters=pars)
+        m = Bound(AlphaGaussianPRF(), alpha_paradigm, pars)
         assert m.predict().shape == (len(alpha_paradigm), 3)
 
     def test_predict_finite(self, alpha_paradigm):
         from braincoder.models import AlphaGaussianPRF
         pars = pd.DataFrame({'mu': [5.], 'sd': [1.], 'alpha': [0.5],
                              'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
-        pred = AlphaGaussianPRF(paradigm=alpha_paradigm, parameters=pars).predict()
+        pred = Bound(AlphaGaussianPRF(), alpha_paradigm, pars).predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_noiseless_simulate_equals_predict(self, alpha_paradigm):
         from braincoder.models import AlphaGaussianPRF
         pars = pd.DataFrame({'mu': [5.], 'sd': [1.], 'alpha': [0.5],
                              'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
-        m = AlphaGaussianPRF(paradigm=alpha_paradigm, parameters=pars)
+        m = Bound(AlphaGaussianPRF(), alpha_paradigm, pars)
         np.testing.assert_allclose(m.simulate(noise=0.).values, m.predict().values, atol=1e-5)
 
     def test_alpha_zero_stability(self, alpha_paradigm):
@@ -272,7 +272,7 @@ class TestAlphaGaussianPRF:
         from braincoder.models import AlphaGaussianPRF
         pars = pd.DataFrame({'mu': [5.], 'sd': [1.], 'alpha': [0.001],
                              'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
-        pred = AlphaGaussianPRF(paradigm=alpha_paradigm, parameters=pars).predict()
+        pred = Bound(AlphaGaussianPRF(), alpha_paradigm, pars).predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_peak_tracks_mu(self, alpha_paradigm):
@@ -281,7 +281,7 @@ class TestAlphaGaussianPRF:
         mus = np.array([3., 5., 7.], dtype=np.float32)
         pars = pd.DataFrame({'mu': mus, 'sd': [1., 1., 1.], 'alpha': [0.5, 0.5, 0.5],
                              'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.]}, dtype=np.float32)
-        pred = AlphaGaussianPRF(paradigm=alpha_paradigm, parameters=pars).predict()
+        pred = Bound(AlphaGaussianPRF(), alpha_paradigm, pars).predict()
         peak_locs = alpha_paradigm[pred.values.argmax(0), 0]
         assert peak_locs[0] < peak_locs[1] < peak_locs[2]
 
@@ -296,13 +296,13 @@ class TestGaussianPRFWithHRF:
         from braincoder.models import GaussianPRFWithHRF
         pars = pd.DataFrame({'mu': [-2., 0., 2.], 'sd': [1., 1., 1.],
                              'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.]}, dtype=np.float32)
-        m = GaussianPRFWithHRF(paradigm=gauss_paradigm, parameters=pars, hrf_model=spm_hrf)
+        m = Bound(GaussianPRFWithHRF(hrf_model=spm_hrf), gauss_paradigm, pars)
         assert m.predict().shape == (len(gauss_paradigm), 3)
 
     def test_predict_finite(self, gauss_paradigm, spm_hrf):
         from braincoder.models import GaussianPRFWithHRF
         pars = pd.DataFrame({'mu': [0.], 'sd': [1.], 'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
-        pred = GaussianPRFWithHRF(paradigm=gauss_paradigm, parameters=pars, hrf_model=spm_hrf).predict()
+        pred = Bound(GaussianPRFWithHRF(hrf_model=spm_hrf), gauss_paradigm, pars).predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_hrf_changes_predictions(self, gauss_paradigm, spm_hrf):
@@ -310,21 +310,21 @@ class TestGaussianPRFWithHRF:
         from braincoder.models import GaussianPRF, GaussianPRFWithHRF
         pars = pd.DataFrame({'mu': [0., 2.], 'sd': [1., 1.],
                              'amplitude': [1., 1.], 'baseline': [0., 0.]}, dtype=np.float32)
-        pred_plain = GaussianPRF(paradigm=gauss_paradigm, parameters=pars).predict()
-        pred_hrf = GaussianPRFWithHRF(paradigm=gauss_paradigm, parameters=pars, hrf_model=spm_hrf).predict()
+        pred_plain = Bound(GaussianPRF(), gauss_paradigm, pars).predict()
+        pred_hrf = Bound(GaussianPRFWithHRF(hrf_model=spm_hrf), gauss_paradigm, pars).predict()
         assert not np.allclose(pred_plain.values, pred_hrf.values)
 
     def test_noiseless_simulate_equals_predict(self, gauss_paradigm, spm_hrf):
         from braincoder.models import GaussianPRFWithHRF
         pars = pd.DataFrame({'mu': [0.], 'sd': [1.], 'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
-        m = GaussianPRFWithHRF(paradigm=gauss_paradigm, parameters=pars, hrf_model=spm_hrf)
+        m = Bound(GaussianPRFWithHRF(hrf_model=spm_hrf), gauss_paradigm, pars)
         np.testing.assert_allclose(m.simulate(noise=0.).values, m.predict().values, atol=1e-5)
 
     def test_requires_hrf_model(self, gauss_paradigm):
         from braincoder.models import GaussianPRFWithHRF
         pars = pd.DataFrame({'mu': [0.], 'sd': [1.], 'amplitude': [1.], 'baseline': [0.]}, dtype=np.float32)
         with pytest.raises((ValueError, TypeError)):
-            GaussianPRFWithHRF(paradigm=gauss_paradigm, parameters=pars)
+            Bound(GaussianPRFWithHRF(), gauss_paradigm, pars)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +343,7 @@ class TestGaussianPRF2DAngle:
             'baseline':  np.zeros(3, dtype=np.float32),
             'amplitude': np.ones(3, dtype=np.float32),
         })
-        return GaussianPRF2DAngle(paradigm=image_paradigm, parameters=pars)
+        return Bound(GaussianPRF2DAngle(grid_coordinates=grid_for(image_paradigm)), image_paradigm, pars)
 
     def test_predict_shape(self, model, image_paradigm):
         assert model.predict().shape == (len(image_paradigm), 3)
@@ -362,7 +362,7 @@ class TestGaussianPRF2DAngle:
         r = 0.3
         pars_angle = pd.DataFrame({'theta': [0.], 'ecc': [r], 'sd': [0.3],
                                    'baseline': [0.], 'amplitude': [1.]}, dtype=np.float32)
-        model = GaussianPRF2DAngle(paradigm=image_paradigm, parameters=pars_angle)
+        model = Bound(GaussianPRF2DAngle(grid_coordinates=grid_for(image_paradigm)), image_paradigm, pars_angle)
         rf = model.get_rf()  # shape: (n_voxels, n_grid_spaces)
         peak_idx = np.argmax(rf[0])
         peak_x = model.grid_coordinates['x'].values[peak_idx]
@@ -391,17 +391,17 @@ class TestDifferenceOfGaussiansPRF2D:
 
     def test_predict_shape(self, image_paradigm, dog_pars):
         from braincoder.models import DifferenceOfGaussiansPRF2D
-        m = DifferenceOfGaussiansPRF2D(paradigm=image_paradigm, parameters=dog_pars)
+        m = Bound(DifferenceOfGaussiansPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, dog_pars)
         assert m.predict().shape == (len(image_paradigm), 2)
 
     def test_predict_finite(self, image_paradigm, dog_pars):
         from braincoder.models import DifferenceOfGaussiansPRF2D
-        pred = DifferenceOfGaussiansPRF2D(paradigm=image_paradigm, parameters=dog_pars).predict()
+        pred = Bound(DifferenceOfGaussiansPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, dog_pars).predict()
         assert np.all(np.isfinite(pred.values))
 
     def test_noiseless_simulate_equals_predict(self, image_paradigm, dog_pars):
         from braincoder.models import DifferenceOfGaussiansPRF2D
-        m = DifferenceOfGaussiansPRF2D(paradigm=image_paradigm, parameters=dog_pars)
+        m = Bound(DifferenceOfGaussiansPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, dog_pars)
         np.testing.assert_allclose(m.simulate(noise=0.).values, m.predict().values, atol=1e-5)
 
     def test_surround_suppresses_response(self, image_paradigm):
@@ -412,8 +412,8 @@ class TestDifferenceOfGaussiansPRF2D:
         dog_pars = pd.DataFrame({'x': [0.], 'y': [0.], 'sd': [0.25], 'baseline': [0.],
                                  'amplitude': [1.], 'srf_amplitude': [0.5], 'srf_size': [2.]},
                                 dtype=np.float32)
-        pred_gauss = GaussianPRF2D(paradigm=image_paradigm, parameters=xy_pars).predict()
-        pred_dog = DifferenceOfGaussiansPRF2D(paradigm=image_paradigm, parameters=dog_pars).predict()
+        pred_gauss = Bound(GaussianPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, xy_pars).predict()
+        pred_dog = Bound(DifferenceOfGaussiansPRF2D(grid_coordinates=grid_for(image_paradigm)), image_paradigm, dog_pars).predict()
         # DoG peak should be lower in absolute value than Gaussian peak
         assert pred_dog.values.max() < pred_gauss.values.max()
 
@@ -429,7 +429,7 @@ class TestSimulateBehaviour:
         from braincoder.models import GaussianPRF
         pars = pd.DataFrame({'mu': [-2., 0., 2.], 'sd': [1., 1., 1.],
                              'amplitude': [1., 1., 1.], 'baseline': [0., 0., 0.]}, dtype=np.float32)
-        return GaussianPRF(paradigm=gauss_paradigm, parameters=pars)
+        return Bound(GaussianPRF(), gauss_paradigm, pars)
 
     def test_n_repeats_shape(self, simple_model, gauss_paradigm):
         sim = simple_model.simulate(noise=0.1, n_repeats=4)
@@ -486,8 +486,7 @@ class TestResidualFitter:
             'amplitude': np.ones(n_voxels, dtype=np.float32),
             'baseline':  np.zeros(n_voxels, dtype=np.float32),
         })
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=pars)
-        model.init_pseudoWWT(gauss_paradigm, pars)
+        model = Bound(GaussianPRF(), gauss_paradigm, pars)
         data = model.simulate(noise=0.3)
         return model, data
 
@@ -495,8 +494,8 @@ class TestResidualFitter:
         from braincoder.optimize import ResidualFitter
         model, data = fitted_model_and_data
         n_voxels = data.shape[1]
-        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm)
-        omega, dof = fitter.fit(max_n_iterations=50, min_n_iterations=20,
+        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm, parameters=model.parameters)
+        omega, dof = fitter.fit(stimulus_range=gauss_paradigm, max_n_iterations=50, min_n_iterations=20,
                                 progressbar=False)
         assert omega.shape == (n_voxels, n_voxels)
         assert dof is None  # Gaussian method returns None for dof
@@ -504,8 +503,8 @@ class TestResidualFitter:
     def test_omega_is_positive_definite(self, fitted_model_and_data, gauss_paradigm):
         from braincoder.optimize import ResidualFitter
         model, data = fitted_model_and_data
-        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm)
-        omega, _ = fitter.fit(max_n_iterations=50, min_n_iterations=20,
+        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm, parameters=model.parameters)
+        omega, _ = fitter.fit(stimulus_range=gauss_paradigm, max_n_iterations=50, min_n_iterations=20,
                               progressbar=False)
         # All eigenvalues should be positive for a valid covariance matrix
         eigvals = np.linalg.eigvalsh(omega)
@@ -514,8 +513,8 @@ class TestResidualFitter:
     def test_omega_is_symmetric(self, fitted_model_and_data, gauss_paradigm):
         from braincoder.optimize import ResidualFitter
         model, data = fitted_model_and_data
-        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm)
-        omega, _ = fitter.fit(max_n_iterations=50, min_n_iterations=20,
+        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm, parameters=model.parameters)
+        omega, _ = fitter.fit(stimulus_range=gauss_paradigm, max_n_iterations=50, min_n_iterations=20,
                               progressbar=False)
         np.testing.assert_allclose(omega, omega.T, atol=1e-5)
 
@@ -523,8 +522,8 @@ class TestResidualFitter:
         from braincoder.optimize import ResidualFitter
         model, data = fitted_model_and_data
         n_voxels = data.shape[1]
-        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm)
-        omega, _ = fitter.fit(max_n_iterations=50, min_n_iterations=20,
+        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm, parameters=model.parameters)
+        omega, _ = fitter.fit(stimulus_range=gauss_paradigm, max_n_iterations=50, min_n_iterations=20,
                               progressbar=False, spherical=True)
         # Off-diagonal elements should be ~0
         off_diag = omega - np.diag(np.diag(omega))
@@ -533,8 +532,8 @@ class TestResidualFitter:
     def test_fitted_parameters_stored(self, fitted_model_and_data, gauss_paradigm):
         from braincoder.optimize import ResidualFitter
         model, data = fitted_model_and_data
-        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm)
-        fitter.fit(max_n_iterations=50, min_n_iterations=20, progressbar=False)
+        fitter = ResidualFitter(model, data, paradigm=gauss_paradigm, parameters=model.parameters)
+        fitter.fit(stimulus_range=gauss_paradigm, max_n_iterations=50, min_n_iterations=20, progressbar=False)
         assert hasattr(fitter, 'fitted_omega_parameters')
         assert 'tau' in fitter.fitted_omega_parameters
         assert 'rho' in fitter.fitted_omega_parameters
@@ -556,7 +555,7 @@ class TestParameterFitterAdvanced:
             'amplitude': np.ones(n_voxels, dtype=np.float32),
             'baseline':  np.zeros(n_voxels, dtype=np.float32),
         })
-        model = GaussianPRF(paradigm=gauss_paradigm, parameters=pars)
+        model = Bound(GaussianPRF(), gauss_paradigm, pars)
         data = model.simulate(noise=0.1)
         return model, data, pars, gauss_paradigm
 

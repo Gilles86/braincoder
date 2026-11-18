@@ -19,12 +19,15 @@ adds a distance-modulated component:
 .. math::
 
     \\Omega = \\rho\\,\\bigl[\\alpha \\cdot
-    (e^{-\\beta D} \\odot \\tau\\tau^T) + (1 - \\alpha) \\cdot \\tau\\tau^T \\bigr]
+    (e^{-\\beta \\tilde D} \\odot \\tau\\tau^T) + (1 - \\alpha) \\cdot \\tau\\tau^T \\bigr]
     + (1 - \\rho)\\,\\mathrm{diag}(\\tau^2)
     + \\sigma^2 W W^T
 
-where :math:`D` is voxel-to-voxel distance, and :math:`\\alpha,\\beta`
-are learned from data. Plug in **geodesic** distance on the cortical
+where :math:`\\tilde D` is the classical-MDS Euclidean embedding of the
+voxel-to-voxel distance matrix :math:`D`, which makes :math:`\\Omega` positive
+definite by construction, and :math:`\\alpha \\in (0, 1), \\beta > 0` are learned
+from data. At :math:`\\alpha = 0` this is the model of van Bergen et al. (2015).
+Plug in **geodesic** distance on the cortical
 mesh (rather than Euclidean) and you respect the fact that two voxels
 sitting on opposite banks of a sulcus are close in 3D but functionally
 far apart.
@@ -216,20 +219,20 @@ resid_df = pd.DataFrame(resid, columns=data.columns)
 # once over a dense stimulus grid and reuse it for both fits below.
 stim_grid_fit = pd.DataFrame({'n': np.linspace(10, 40, 31)})
 stim_grid_fit.index.name = 'stimulus'
-model.init_pseudoWWT(stim_grid_fit, pars)
+WWT = model.get_pseudoWWT(stim_grid_fit, pars)
 
 print('Fitting Ω without distance regularisation …')
 rf_std = ResidualFitter(model, data.iloc[train_idx],
                          paradigm[['n']].iloc[train_idx],
                          parameters=pars)
-omega_std, dof_std = rf_std.fit(method='t', init_dof=10.0,
+omega_std, dof_std = rf_std.fit(method='t', init_dof=10.0, WWT=WWT,
                                   max_n_iterations=400, progressbar=False)
 
 print('Fitting Ω with geodesic-distance regularisation …')
 rf_geo = ResidualFitter(model, data.iloc[train_idx],
                          paradigm[['n']].iloc[train_idx],
                          parameters=pars)
-omega_geo, dof_geo = rf_geo.fit(method='t', init_dof=10.0,
+omega_geo, dof_geo = rf_geo.fit(method='t', init_dof=10.0, WWT=WWT,
                                   D=D, init_alpha=0.5, init_beta=0.05,
                                   max_n_iterations=400, progressbar=False)
 print(f'  fitted dof:  std={dof_std:.1f}, geo={dof_geo:.1f}')

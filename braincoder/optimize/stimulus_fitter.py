@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import tensorflow as tf
 from tqdm.auto import tqdm
-from ..utils import format_data
+from ..utils import format_data, format_weights
 from ..stimuli import ImageStimulus
 import logging
 from tensorflow_probability import bijectors as tfb
@@ -15,19 +15,15 @@ class StimulusFitter(object):
 
         self.data = format_data(data)
         self.model = model
-        self.model.omega = omega
-        self.model.dof = dof
+        self.omega = omega
+        self.dof = dof
+        self.parameters = model._get_parameters(parameters)
+        self.weights = format_weights(weights)
 
         if stimulus is None:
             self.stimulus = self.model.stimulus
 
         self.single_bijector = not isinstance(self.stimulus.bijectors, list)
-
-        if parameters is not None:
-            self.model.parameters = parameters
-
-        if weights is not None:
-            self.model.weights = weights
 
     def fit(self, init_pars=None, fit_vars=None, max_n_iterations=1000, min_n_iterations=100, lag=100, rtol=1e-6, learning_rate=0.01, progressbar=True,
             l2_norm=None,
@@ -107,7 +103,7 @@ class StimulusFitter(object):
                     trainable_vars.append(tf_var)
 
         if mask is None:
-            likelihood = self.build_likelihood()
+            likelihood = self.build_likelihood(single_tensor=self.single_bijector)
         else:
             likelihood = self.build_likelihood(use_mask=True, mask_ix=mask_ix)
 
@@ -128,16 +124,18 @@ class StimulusFitter(object):
                     untransformed_pars = [bijector.forward(
                         par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
 
-                if mask is None:
+                if mask is None and not self.single_bijector:
                     ll = likelihood(*untransformed_pars)[0]
                 else:
                     ll = likelihood(untransformed_pars)[0]
 
                 cost = -ll
+                # A single bijector gives one tensor: never iterate over it, that is one eager op per pixel per trial.
+                pars_list = [untransformed_pars] if self.single_bijector else untransformed_pars
                 if l1_norm is not None:
-                    cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in untransformed_pars])
+                    cost = cost + l1_norm * tf.add_n([tf.reduce_sum(tf.abs(par)) for par in pars_list])
                 if l2_norm is not None:
-                    cost += l2_norm * tf.reduce_sum([tf.reduce_sum(par**2) for par in untransformed_pars])
+                    cost += l2_norm * tf.add_n([tf.reduce_sum(par**2) for par in pars_list])
 
             gradients = tape.gradient(cost, trainable_vars)
             opt.apply_gradients(zip(gradients, trainable_vars))
@@ -158,8 +156,8 @@ class StimulusFitter(object):
                             break
 
         if mask is None:
-            fitted_pars_ = np.stack(
-                [par.numpy() for par in untransformed_pars], axis=1)
+            fitted_pars_ = (untransformed_pars.numpy().T if self.single_bijector else
+                            np.stack([par.numpy() for par in untransformed_pars], axis=1))
         else:
             fitted_pars_ = self.stimulus.generate_empty_stimulus(len(self.data))
             fitted_pars_[mask] = untransformed_pars.numpy()
@@ -170,12 +168,13 @@ class StimulusFitter(object):
                                     dtype=np.float32)
         return fitted_pars
 
-    def build_likelihood(self, use_batch_dimension=False, use_mask=False, mask_ix=None):
+    def build_likelihood(self, use_batch_dimension=False, use_mask=False, mask_ix=None, single_tensor=False):
 
         data = self.data.values[tf.newaxis, ...]
-        parameters = self.model.parameters.values[tf.newaxis, ...]
-        weights = None if self.model.weights is None else self.model.weights.values[tf.newaxis, ...]
-        omega_chol = np.linalg.cholesky(self.model.omega)
+        parameters = self.parameters.values[tf.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[tf.newaxis, ...]
+        from ..utils.backend import safe_cholesky
+        omega_chol = np.array(safe_cholesky(tf.convert_to_tensor(self.omega, dtype=tf.float32)))
 
         if use_mask:
             if use_batch_dimension:
@@ -193,9 +192,20 @@ class StimulusFitter(object):
 
                     stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
+
+        elif single_tensor:
+            # pars: one (n_dimensions, n_datapoints) tensor, as produced by a single bijector
+            @tf.function
+            def likelihood(pars):
+
+                stimulus = self.stimulus._generate_stimulus(tf.transpose(pars))[tf.newaxis, ...]
+                ll = self.model._likelihood(
+                    stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
+
+                return tf.reduce_sum(ll, 1)
 
         else:
             if use_batch_dimension:
@@ -205,7 +215,7 @@ class StimulusFitter(object):
                     pars = tf.stack(pars, axis=1)
                     stimulus = self.stimulus._generate_stimulus(pars)[:, tf.newaxis, ...]
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return ll
 
@@ -216,7 +226,7 @@ class StimulusFitter(object):
                     pars = tf.stack(pars, axis=1)
                     stimulus = self.stimulus._generate_stimulus(pars)[tf.newaxis, ...]
                     ll = self.model._likelihood(
-                        stimulus,  data, parameters, weights, omega_chol, dof=self.model.dof, logp=True)
+                        stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
 
@@ -254,14 +264,16 @@ class CustomStimulusFitter(StimulusFitter):
 
     def __init__(self, data, model, stimulus,
                  omega, dof=None,
-                 baseline_image=None):
+                 baseline_image=None, parameters=None, weights=None):
 
         self.data = data
         self.model = model
         self.stimulus = stimulus
-        self.model.omega = omega
-        self.model.omega_chol = tf.linalg.cholesky(omega).numpy()
-        self.model.dof = dof
+        self.omega = omega
+        self.omega_chol = tf.linalg.cholesky(omega).numpy()
+        self.dof = dof
+        self.parameters = model._get_parameters(parameters)
+        self.weights = format_weights(weights)
 
         if baseline_image is None:
             self.baseline_image = None
@@ -290,8 +302,8 @@ class CustomStimulusFitter(StimulusFitter):
 
         data = self.data.values
         model = self.model
-        parameters = self.model.parameters.values[np.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[np.newaxis, ...]
+        parameters = self.parameters.values[np.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[np.newaxis, ...]
 
         if hasattr(self.model, 'hrf_model'):
 
@@ -316,8 +328,8 @@ class CustomStimulusFitter(StimulusFitter):
             ll = self.model._likelihood_timeseries(data[tf.newaxis, ...],
                                                    ts_prediction_summed_over_hrf[:,
                                                                                  tf.newaxis, :],
-                                                   self.model.omega_chol,
-                                                   self.model.dof,
+                                                   self.omega_chol,
+                                                   self.dof,
                                                    logp=True,
                                                    normalize=False)
 
@@ -328,7 +340,7 @@ class CustomStimulusFitter(StimulusFitter):
             images = images[:, tf.newaxis, :]
 
             ll = self.model._likelihood(images, data[tf.newaxis, ...], parameters, weights,
-                                        self.model.omega_chol, self.model.dof, logp=True)
+                                        self.omega_chol, self.dof, logp=True)
 
         ll = pd.DataFrame(ll.numpy().T, columns=pd.MultiIndex.from_frame(grid))
 
@@ -425,8 +437,8 @@ class CustomStimulusFitter(StimulusFitter):
         data = self.data.values[tf.newaxis, ...]
         grid_coordinates = self.stimulus.grid_coordinates.values
         model = self.model
-        parameters = self.model.parameters.values[tf.newaxis, ...]
-        weights = None if model.weights is None else model.weights.values[tf.newaxis, ...]
+        parameters = self.parameters.values[tf.newaxis, ...]
+        weights = None if self.weights is None else self.weights.values[tf.newaxis, ...]
 
         if self.baseline_image is None:
             @tf.function
@@ -448,7 +460,7 @@ class CustomStimulusFitter(StimulusFitter):
                 images = self.stimulus._generate_images(*pars)
                 images = add_baseline(images)
                 ll = self.model._likelihood(
-                    images, data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                    images, data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                 return tf.reduce_sum(ll, 1)
 
@@ -477,7 +489,7 @@ class CustomStimulusFitter(StimulusFitter):
                 images = add_baseline(images)
 
                 ll = self.model._likelihood(
-                    images,  data, parameters, weights, self.model.omega_chol, dof=self.model.dof, logp=True)
+                    images,  data, parameters, weights, self.omega_chol, dof=self.dof, logp=True)
 
                 return tf.reduce_sum(ll, 1)
 

@@ -1,11 +1,294 @@
 # Changelog
 
-## 0.6.0 (DRAFT — unreleased)
+## Unreleased
+
+### New features
+
+- **`braincoder.selection`: label-permutation voxel selection.** `PermutationSelector` fits the real data and `K`
+  within-group label shuffles with the identical fitting procedure, then selects voxels by a pooled empirical p-value
+  with Benjamini-Hochberg control within families such as ROIs. `fit_null` and `NullBank` cache the null for reuse.
+  Intended for trial-wise data such as single-trial betas: shuffling the rows of an autocorrelated BOLD time series
+  breaks its temporal structure, so the null is not valid there.
+
+### Fixes
+
+- **Divisive normalization models no longer return NaN when `surround_baseline` is 0.** The denominators are
+  now at least `1e-6`. The NaN predictions could also produce a spurious R² of exactly 1. Predictions for other
+  parameter values are unchanged. Reported and first fixed by Ningkai Wang (#7).
+
+## 0.9.0 (2026-11-18)
+
+New features; no behaviour changes for existing code.
+
+### Gain-field PRF models (`braincoder.models.gain_field`)
+
+Fields around chosen locations (attended, salient, target, distractor, ...) multiply the stimulus image
+before each voxel's PRF pools it. With all gains at 0 the model is exactly the PRF model underneath.
+
+- **`GainFieldPRF2D`**, **`GainFieldDoGPRF2D`** and their **`WithHRF`** versions, for single-trial
+  betas and BOLD time courses. **`GainFieldMixin`** adds fields to any image PRF kernel.
+- Any number of field locations, anywhere, and any number of named gain types. The per-frame role of
+  every location (weights, 0/1 or fractional) is part of the paradigm, built with
+  **`braincoder.stimuli.make_gain_field_paradigm`** or `model.make_paradigm`.
+- Several fields per model (**`GainField`**), each with its own shape (**`FieldShape`** subclasses:
+  **`GaussianField`**, **`DoGField`**, or your own), gains (signed, positive or negative), and inside or
+  outside the clip at 0. The combination rule is pluggable.
+- **`ties`**: parameters fixed to a constant, equal to another, or a linear combination of others
+  (zero-sum gains, shared widths). **`image_scales`**: a model-level factor for part of the image.
+- Field parameters are model-level and fitted with `ParameterFitter(..., shared_pars=...)`, typically
+  with the PRFs fixed. The forward pass costs about as much as the PRF model underneath.
+- Documentation: a gain-field page (`docs/gain_fields.rst`) and a gallery tutorial
+  (`examples/02_gain_fields`, lesson 8).
+
+### Fixes
+
+- **`StimulusFitter` on images is about 100 times faster.** The L1/L2 penalties looped over every pixel of every
+  trial in eager mode, and free decoding passed each pixel as a separate tensor. Results are unchanged.
+
+## 0.8.0 (2026-11-18)
+
+New features; no behaviour changes for existing code (all defaults are unchanged).
+
+### Stimulus parameterisations: `braincoder.parametric`
+
+Decode a few named stimulus parameters (for example the position, width and orientation of a bar)
+instead of a free pixel image.
+
+- **`ParametricStimulus`** is a stimulus class defined as a map from named parameters to an image;
+  **`BarStimulus`** is a bar with a hard or soft edge, an optional contrast and an optional aperture.
+- **`get_parametric_stimulus_pdf`** gives the exact grid posterior over the parameters (with a blank
+  state and a prior) through `get_stimulus_pdf`; **`marginalize`** sums it over parameters;
+  **`forward_backward`** gives exact HMM marginals over a candidate set for slowly changing stimuli.
+- **`LogWidthPrior`** is a proper prior on a bar's width, bounded away from 0 and from the field.
+  Log width is a logit-scaled variable on `(log min_width, log max_width)` with a normal prior on the
+  unconstrained scale, so the density is smooth (no wall for HMC or NUTS) and `scale` sets how
+  concentrated it is.
+- **`optimize.ParametricStimulusFitter`** finds the MAP over the parameters by gradient descent, per
+  volume, or for a whole BOLD series with a `*WithHRF` model and a random-walk prior. Parameters can be
+  clamped.
+
+### `GeodesicGPPrior`: mean and transform
+
+- **`mean=`** `'zero'` (default, unchanged), `'constant'` (a scalar estimated together with the kernel
+  hyperparameters: type-II ML in `fit_hyperparameters`, type-II MAP in `fit_map(joint_hyperparams=True)`,
+  initialised at the median of the classical estimates) or a fixed number.
+- **`transform=`** `'identity'` (default, unchanged) or `'log'` (the prior is on log theta; the MAP is the
+  mode in log coordinates).
+- With the defaults, fits are unchanged. `BayesianParameterFitter` centres a constant-mean
+  prior on the classical estimates before stage 2 or 3.
+
+### Other
+
+- Documentation: pip-first install instructions; the braincoder skill is shipped in the repository as a
+  Claude Code plugin.
+
+## 0.7.1 (2026-11-16)
+
+Bug-fix release. Two of the fixes change fitted values: **refit** anything fitted with
+`SPMHRFModel` / `SPMHRFDerivativeModel` (the usual `hrf_model` of the `*WithHRF` models), and anything
+fitted with `ResidualFitter.fit(D=...)`.
+
+### Behaviour change: `SPMHRFModel` is SPM's canonical HRF
+
+**Changes fitted values for anyone using `SPMHRFModel`, `SPMHRFDerivativeModel` or `spm_hrf`.**
+
+`SPMHRFModel` now gives SPM's canonical HRF. Two things were different:
+
+- **It peaked at 6 s instead of 5 s.** The response gamma had shape `delay / dispersion + 1`, not
+  `delay / dispersion`. `delay=6` still means what it does in SPM, so the default now peaks at 5 s.
+- **Samples weren't one TR apart.** They came from `linspace(1e-4, 32, n)`, so the spacing was
+  `32 / (n - 1)`: 1.6 s at a TR of 1.5 s, for example. Convolution assumes one TR, which
+  compressed the HRF by a few percent. Samples are now exactly one TR apart, from 0.
+
+The bounds on a fitted `hrf_delay` move from 3-7 to 4-8, so the range of fitted peak times stays the
+same. To reproduce an older fit, use `SPMHRFModel(tr=tr, delay=7.)` for about the old peak time; the
+sampling change can't be undone.
+
+### Distance-dependent noise model
+
+Fixes to the distance-dependent noise model, `ResidualFitter.fit(D=...)`:
+Ω = ρ[α(e^{−βD̃} ∘ ττᵀ) + (1−α)ττᵀ] + (1−ρ)diag(τ²) + σ²WWᵀ. **Refit anything fitted with `D=`
+before this.**
+
+- **β is constrained positive** (softplus). It was an unconstrained variable, so a step to
+  β < 0 made the kernel grow with distance. The default `init_beta` changes from 0, which is
+  no longer in the domain, to 1 / median(off-diagonal D̃); an `init_beta` ≤ 0 raises. Without
+  `D`, nothing changes.
+- **Ω is positive definite by construction.** The kernel is now computed on D̃, the
+  classical-MDS Euclidean embedding of `D` (the embedding `GeodesicGPPrior` already used), not
+  on raw graph distances, where an exponential kernel need not be PSD. `psd_correction='none'`
+  keeps `D` as given, for distances known to be Euclidean. MDS lengthens non-Euclidean
+  distances, so β is on the scale of D̃: compare `fitter.distance_matrix_embedded_` with `D`,
+  and see `fitter.mds_info_['negative_eigenvalue_fraction']`.
+- **No jitter with `D`.** New `cholesky='strict'|'safe'` argument, default `'strict'` with `D`
+  and `'safe'` (unchanged) without it. `safe_cholesky` always adds at least
+  1e-4 · mean(diag Ω), so the fitted likelihood was that of a different matrix from the one
+  returned. A numerical failure is now a rolled-back step, counted in `n_failed_steps`, and
+  `fitter.omega_min_eigenvalue_` reports the returned Ω. Pass `cholesky='strict'` to a fit without
+  `D` as well when comparing the two, so that the kernel is the only difference.
+- **`D` combined with `lambd > 0` or `spherical=True` now raises.** `lambd > 0` silently dropped
+  `D`; `spherical=True` crashed with an unrelated error. A non-finite `D` (unreachable vertices
+  on a disconnected patch) raises as well.
+- `fitted_omega_parameters['beta']` is now the constrained value.
+- `mds_embed_distances` (`braincoder.optimize.gp_prior`) is public, can return diagnostics, and
+  uses O(n²) memory instead of an n × n × r difference tensor, which needed about 4 GB at
+  n = 800 and about 64 GB at n = 2000. `GeodesicGPPrior` output is unchanged.
+- `init_tau` is cast to float32, so float64 residuals work on torch with MPS.
+
+### Other fixes
+
+- **Torch: `ParameterFitter.fit` no longer leaks memory.** The forward pass that tracks R²
+  between gradient steps ran with autograd on, and the best-so-far R² and parameters kept that
+  graph alive, so voxels × pixels tensors piled up every iteration until the GPU ran out of
+  memory (on CPU, 3,000 voxels × 961 pixels: about 2.2 GB of live tensors after 40 iterations,
+  0 MB now, same loss). Results are unchanged; TensorFlow and JAX were not affected.
+- **`gamma_pdf` is computed in log space.** `t**(a-1)` and `d**a · Γ(a)` overflowed float32 for
+  shapes above about 35, so very narrow gamma HRFs gave NaN. Values for ordinary shapes are
+  unchanged up to float32 rounding.
+- **`ParameterFitter.fit` with `fixed_pars` on regression models** no longer crashes while
+  logging (their parameter labels are tuples).
+- **`ResidualFitter`** raises a clear error on data with 0 voxels and fits a single voxel with
+  `spherical=True`.
+
+## 0.7.0 (2026-11-02)
+
+**Breaking.** Models no longer hold data or fitted values. See the
+[migration guide](https://braincoder-devs.github.io/migration.html); most scripts need only
+a few mechanical edits, and old constructor arguments raise an error that points to it.
+
+### Models hold configuration only
+
+- Constructors no longer take `paradigm`, `data`, `parameters`, `weights` or `omega`, and models
+  have no such attributes. Pass them to each method: `model.predict(paradigm, parameters)`.
+- Fitters no longer write to the model. `ResidualFitter` used to overwrite `model.parameters` and
+  `model.weights`, and `StimulusFitter` `model.omega` and `model.dof`, so a model reused across
+  cross-validation folds could silently decode with the last fold's parameters. That can no
+  longer happen: leaving out `parameters` raises `ValueError`.
+- `get_stimulus_pdf` needs `omega` or `noise_model`, and never reads a stored `dof`.
+- `init_pseudoWWT` + `get_pseudoWWT()` become `get_pseudoWWT(stimulus_range, parameters)`, which
+  returns the matrix. `ResidualFitter.fit` takes `stimulus_range=` or `WWT=`.
+- `get_WWT(weights)` and `get_rf(parameters, ...)` take their inputs.
+- `to_linear_model(parameters)` returns `(model, parameters, weights)`, and
+  `to_xy_model(parameters)` returns `(model, parameters)`.
+- `RegressionGaussianPRF` and friends take `design_data=` (it only defines the design) and build
+  their design matrices from the paradigm of each call. `set_paradigm` is gone.
+- `CustomStimulusFitter` and `BarStimulusFitter` take `parameters=` and `weights=`.
+- `HRFModel` is no longer changed by the model using it: `unique_hrfs` and `set_unique_hrfs` are
+  gone, and the HRF's shape decides how it is applied.
+- `GaussianPRF2D` needs `grid_coordinates`. It used to guess them from a 3D paradigm.
+- Removed: `apply_mask`, and `to_discrete_model`, which could not run. `DiscreteModel` takes
+  `stimulus_values`.
+
+Fitters keep their results as attributes (`fitter.r2`, `fitter.estimated_parameters`,
+`fitter.r2_history_`). A fitter represents one fit; a model is reusable.
+
+### `ParameterFitter.fit`
+
+- **New default `r2_atol=1e-4`** (was 1e-6). On large real data, 1e-6 was unreachable within 10,000
+  iterations, and 1e-4 was about 3x faster for under 0.001 of R² in the paper benchmark. Pass
+  `r2_atol=1e-6` for a tighter fit.
+- **`noise_model` stays `'ssq'` by default, contrary to what 0.6 announced.** New tests do not support
+  the stated reason for switching. Adam scales each parameter's steps by its own gradient history, so
+  a constant per-voxel rescaling of the loss changes almost nothing: a sum-of-R² loss follows the SSQ
+  path. From a good grid start `'gaussian'` gave the same fit at about 25% more time per iteration.
+  From a poor start it did reach the optimum in fewer iterations (about 2-5x smaller remaining R² gap
+  at 3,000 iterations), but as much with equal noise across voxels as with unequal noise. The
+  explanation in the 0.6 notes, that it balances noisy voxels, is not correct.
+
+### Other changes
+
+- **Available on PyPI:** `pip install "braincoder[tensorflow]"`, `[jax]` or `[torch]`.
+- **Torch on Apple GPUs (MPS):** the GP prior and `safe_cholesky` with float64 input now work. MPS has
+  no float64, so those steps run on the CPU and the rest stays on the GPU.
+- `fit()` without `init_pars` no longer crashes in `GaussianPRF.get_init_pars`, and a fit with a
+  regression model no longer crashes in its logging.
+- Models with a stimulus amplitude no longer fail on a 2-column numpy paradigm.
+
+## 0.6.2 (2026-11-02)
+
+Bug-fix release: inputs that gave plausible-looking wrong results now give the right
+result or a clear error. Some of these change what existing scripts do, so read the
+heads-up below.
+
+- **`get_rsq` raises `ValueError` when row or column labels differ.** Without overlapping
+  rows, it returned R² = 1.0 for every voxel, because a sum skips the NaN that pandas
+  filled in. **If your cvR² came from frames with different indices, recompute it.** A
+  residual that is entirely NaN now gives NaN.
+- **`ParameterFitter` pairs `data` and `paradigm` by position throughout.** `fit` always
+  did, but `refine_baseline_and_amplitude` and `get_rsq` paired by label, so an off-by-one
+  index compared shifted timeseries: refined amplitudes were wrong, with no error. The
+  paradigm now takes the index of the data, with a warning if a labelled index differed.
+  **Refit if this applied to you.** A different number of rows raises `ValueError`.
+- **Voxels with any NaN, or zero variance, now return NaN** (parameters and `fitter.r2`),
+  with a warning, instead of all-zero parameters and `r2 == -1000`. `fitter.r2.mean()`
+  therefore stays meaningful. Such voxels also no longer poison `shared_pars`.
+- **`get_stimulus_pdf` and `predict_stimulus_grid` raise `ValueError` on non-finite
+  parameters.** A single such row used to make every posterior NaN.
+- **Decoding with `*WithHRF` models now ignores the HRF, with a warning.** Each candidate
+  stimulus was treated as a one-sample timeseries, which scaled the tuning curve by the first
+  HRF samples: about 1/17 at a TR of 1.6 s, making posteriors about 5× too wide in a test.
+  **Re-decode if you decoded with a `*WithHRF` model.**
+- `get_fisher_information` and `get_expected_uncertainty` raise `NotImplementedError` on
+  `*WithHRF` models, which would convolve the stimuli as one timeseries.
+- **`get_stimulus_pdf` uses `model.dof` when it also uses `model.omega`.** It previously
+  fell back to a Gaussian likelihood. With an explicit `omega=`, `dof=None` still means
+  Gaussian.
+- **`ResidualFitter`** pairs residuals by position, reorders voxels if needed, and gives
+  clear errors for NaN residuals, an empty voxel selection or different voxels.
+- **`WeightFitter.fit(fit_intercept=True)`** fits a per-voxel intercept and returns
+  `(weights, intercept)`. `WeightFitter` with `LinearModelWithBaseline` now subtracts the
+  known baseline first: an all-positive feature otherwise absorbed the offset, and decoding
+  could fall to r≈0.
+- **DN with a negative `rf_amplitude`:** the denominator used the signed amplitude, so it
+  shrank and could cross zero, giving poles in the prediction. It now uses `|rf_amplitude|`, as the
+  TensorFlow-era line did and as Aqil et al. (2021) define it. Positive amplitudes are unchanged.
+  **Refit DN models where negative amplitudes occurred.**
+- `refine_baseline_and_amplitude`: clear error for zero amplitudes (TF raised
+  "not invertible", JAX returned junk); `n_iterations > 1` keeps `positive_amplitude` and
+  `l2_alpha`.
+- `get_rf(parameters=...)` no longer ignores its argument.
+- `to_linear_model()` on `*WithHRF` models raised `TypeError`. It now works, and
+  `LinearModelWithBaselineHRF` adds the baseline after convolution, so it matches the PRF model.
+- A flexible-HRF model given `parameters=` in its constructor raised `KeyError`.
+- `LinearModel.simulate()` without parameters raised `AttributeError`.
+- Passing `omega=` to a constructor uses `safe_cholesky`, as decoding does, instead of raising
+  `LinAlgError` on a slightly non-PSD matrix.
+- A missing TensorFlow or TFP now gives an explanatory `ImportError` for `StimulusFitter`, and
+  `from braincoder.optimize import *` no longer fails.
+- Torch on MPS: fixed device errors in `get_rf` and the DN `*WithHRF` model.
+- Docs: braincoder is not on PyPI, so the install page now uses tagged git URLs. Added citation,
+  license, related software (prfmodel) and the Claude Code skill. `.zenodo.json`: corrected
+  ORCIDs and no longer describes the package as TensorFlow-based.
+
+## 0.6.1 (2026-11-02)
+
+Bug-fix release.
+
+- **`DivisiveNormalizationGaussianPRF2DWithHRF` with `flexible_hrf_parameters=True`:** the
+  forward parameter transform passed `bold_baseline` and `hrf_delay` to the HRF model instead
+  of `hrf_delay` and `hrf_dispersion`. The fitted HRF delay was therefore a fixed function of
+  the BOLD baseline (`delay = range·sigmoid(bold_baseline) + min`) and the dispersion was driven
+  by the raw delay; backward/forward did not round-trip. **Refit any DN model fitted with a
+  flexible HRF.**
+- **`DifferenceOfGaussiansPRF2D`:** had no transforms of its own, so it inherited the
+  5-column Gaussian ones and dropped `srf_amplitude` / `srf_size`. It now transforms all 7
+  columns (`srf_amplitude > 0`, `srf_size > 1`).
+- **New `rf_normalization` option** on `GaussianPRF2D` and all subclasses:
+  `'legacy'` (default, unchanged: Gaussian divided by `σ·√(2π)/pixel_area`), `'peak'`
+  (peak 1, as prfpy's `normalize_RFs=False`) and `'area'` (integral 1). The three are exact
+  reparameterisations of the amplitudes; existing fits are unaffected.
+- Tests: parameter-transform round trips for all `*WithHRF` 2D PRF models; normalisation scales.
+
+## 0.6.0 (2026-10-25)
 
 The headline of 0.6 is a new **per-voxel Gaussian likelihood** option in
 `ParameterFitter`, opt-in here and the default in 0.7. Same fixed points
 as the existing sum-of-squares loss, much faster convergence under
 heteroskedastic noise — which is to say, on every real fMRI dataset.
+
+The second headline is **calibrated decoding**: `braincoder.noise.LowRankNoise`
+(low-rank + diagonal noise covariance with cross-validated rank and
+likelihood temperature) and `braincoder.utils.calibration`.
 
 The rest of 0.6 is a substantial set of stability fixes, a new GP-prior
 fitter, and a per-fold voxel-selection helper.
@@ -28,6 +311,45 @@ fitter, and a per-fold voxel-selection helper.
   for the full convergence study.
 - **0.7 will flip the default to `'gaussian'`**. If you need exact
   reproduction of pre-0.6 fits, pin `noise_model='ssq'` explicitly.
+- **`ParameterFitter.r2_history_` / `loss_history_`** — the R² and loss
+  trajectories of the last `fit()` call are now stored on the fitter.
+
+### Calibrated decoding: low-rank noise model with CV rank + temperature
+
+- **`braincoder.noise.LowRankNoise`** (also `braincoder.LowRankNoise`) —
+  noise covariance Ω = D (F Fᵀ + Ψ) D: `k` principal factors of the residual
+  correlation plus diagonal uniquenesses (floored), Student-t (ν by ML) or
+  Gaussian. Stored and evaluated in factored form (Woodbury + determinant
+  lemma; no dense V × V inverse), so it scales to thousands of voxels.
+- **`LowRankNoise.fit(model, data, paradigm, parameters, stimulus_range=grid,
+  groups=runs)`** chooses the rank `k` and a likelihood **temperature** `T`
+  (posterior ∝ likelihood^(1/T)) jointly by nested, group-wise CV *within the
+  training data* on the decoding objective (held-out log posterior of the
+  true stimulus). Fixed `k=` / `temperature=` also accepted. Encoding
+  parameters are held fixed in the inner folds by default;
+  `inner_parameters=` takes per-group parameters (dict) or a refit callable.
+  `noise.summary()` / `noise.cv_scores_` report the choice.
+- **`get_stimulus_pdf(..., noise_model=, temperature=)`** — new optional
+  arguments (also on `EncodingRegressionModel`). Defaults unchanged: without
+  them the output is identical to 0.5.x. `temperature` also works with a
+  dense `omega=`. New helper `EncodingModel.predict_stimulus_grid`.
+- **`braincoder.noise.fit_lowrank_omega(residuals, k)`** → dense
+  `(omega, dof)` for code that passes `omega=` / `dof=`.
+- **`braincoder.utils.calibration`** — randomised PIT, HPD level of the
+  truth, HDI coverage, log score vs uniform, `marginalize`,
+  `calibration_summary`, `plot_calibration`; works on any
+  `get_stimulus_pdf` DataFrame.
+- Docs: new page `docs/noise_models.rst`, example
+  `examples/01_decoding_pipeline/04_lowrank_noise_calibration.py`.
+- **Warnings documented there** (from 7T single-trial numerosity data):
+  `ResidualFitter`'s one-factor Ω underestimates held-out noise (Mahalanobis
+  ~4× too large; posteriors overconfident, all 38 participant × ROI worse
+  than flat); `lambd` shrinkage is unsafe when voxels > trials; the
+  pseudo-WWᵀ from `init_pseudoWWT` is uncentred (dominated by the
+  common-mode response). `ResidualFitter` itself is unchanged.
+- Tests: `tests/test_noise_models.py` (Woodbury vs dense, CV recovery of k,
+  calibrated coverage, T ≈ 1 when correct and > 1 when tuning is
+  misspecified, backward compatibility, all backends).
 
 ### Hierarchical Bayesian / GP prior
 
@@ -55,30 +377,6 @@ Gaussian-Process prior over cortical geodesic distance.
   posterior `P(signal | R²)` and the R² at which it crosses a chosen
   probability. More forgiving than tail-FDR on small/degenerate ROIs.
 - **`plot_r2_mixture`** — diagnostic plot of the mixture fit + threshold.
-- **`braincoder.selection.PermutationSelector`** (new module) —
-  label-permutation voxel selection. Fits the real data and `K` within-group
-  (e.g. within-run) label shuffles with the *identical* fitting callable
-  (a braincoder model via `make_r2_fitter`, or any
-  `fit_fn(data, paradigm) -> R²`), then pooled empirical p
-  `(1 + #{null >= R²}) / (1 + K·V)` and Benjamini-Hochberg q within
-  user-given families (`bh_groups`, e.g. ROI labels; optional
-  `pool_within_family`). The result carries `r2`, `null_r2`, `p`, `q`,
-  `mask`, the unpooled `p_voxelwise`, `summary()`,
-  `exchangeability_report()` (split-half r and variance ratio of the
-  per-voxel null; warns when the pooled-null assumption looks violated)
-  and `calibration()` (leave-one-permutation-out false-positive rate).
-  Seeds are `SeedSequence([*seed, k])`, so permutation k never depends on
-  K. `stack=True` fits real + all shuffles in one optimiser run (valid for
-  row-wise / single-trial models). Unlike the R²-mixture rules above it
-  selects few or no voxels in participants without signal. Note: with
-  small K the pooled-BH rule cannot select fewer than about `1/(q·K)`
-  voxels (4 for K = 5, q = .05).
-- **`PermutationSelector.fit_null` / `NullBank`** — cached null: fit only
-  the K shuffles (optionally on a fixed random voxel subsample of a big ROI,
-  `subsample_voxels`), `save` / `load` (npz + JSON metadata), and
-  `select(r2, q)` for an existing real-data statistic (e.g. per-fold
-  training R² of a CV fit). `calibration(test_null)` gives the
-  leave-one-shuffle-out false-positive rate.
 
 ### Fisher information & expected uncertainty
 
@@ -144,6 +442,12 @@ Gaussian-Process prior over cortical geodesic distance.
 
 ### Backend layer fixes (TF / JAX / torch parity)
 
+- TF `compute_jacobian` uses `tf.while_loop` instead of `pfor`, which
+  overflowed int32 indexing on large (trials × voxels × parameters) problems.
+- Monte-Carlo Fisher information sums the log-probability before taking the
+  gradient, so `analytical=False` works under JAX / torch (previously it
+  raised on the non-scalar loss; TF summed it silently).
+
 - JAX `compute_gradients` runs inside a `StatelessScope` so
   `keras.Variable` reads inside `value_and_grad` don't leak tracers.
 - `sample_mvt` / `sample_student_t` derive independent sub-seeds for
@@ -165,8 +469,7 @@ Gaussian-Process prior over cortical geodesic distance.
 
 ### Tests & CI
 
-- New test files: `test_selection.py` (FDR on pure noise, power,
-  within-group shuffles, seed reproducibility), `test_gp_prior.py` (+360 lines), `test_safe_cholesky.py`
+- New test files: `test_gp_prior.py` (+360 lines), `test_safe_cholesky.py`
   (+174), `test_backend_multibackend.py` (+376), additions to
   `test_utils.py` (+168).
 - `scikit-learn` now declared as a runtime dep (used by

@@ -26,7 +26,7 @@ parameters = pd.DataFrame({'mu':np.linspace(0, 2*np.pi, 8, False), 'kappa':1.0, 
 
 weights = np.identity(8) * 5.0
 weights += np.random.rand(8, 8)
-model = VonMisesPRF(parameters=parameters, model_stimulus_amplitude=True, weights=weights)
+model = VonMisesPRF(model_stimulus_amplitude=True)
 
 # Note how the stimulus type is now `OneDimensionalRadialStimulusWithAmplitude`
 # which means that the stimulus is two-dimensional
@@ -37,7 +37,7 @@ print(model.stimulus.dimension_labels)
 
 # Now we can simulate some data and estimate parameters+noise
 mapper_paradigm = pd.DataFrame({'x (radians)':np.random.rand(100)*2*np.pi, 'amplitude':1.})
-data = model.simulate(paradigm=mapper_paradigm, noise=noise)
+data = model.simulate(mapper_paradigm, parameters, weights, noise=noise)
 
 # Set up parameter fitter
 from braincoder.optimize import WeightFitter, ResidualFitter
@@ -64,7 +64,7 @@ experimental_paradigm['x (radians)'] = np.random.rand(n)*2*np.pi
 
 # Amplitudes have some noise
 experimental_paradigm['amplitude'] = np.where(experimental_paradigm.index.get_level_values('condition') == 'attended', ss.norm(1.5, 0.1).rvs(n), ss.norm(.5, 0.1).rvs(n))
-experimental_data = model.simulate(paradigm=experimental_paradigm, noise=noise)
+experimental_data = model.simulate(experimental_paradigm, parameters, weights, noise=noise)
 # Restore the MultiIndex (simulate() flattens it to a single 'stimulus' level)
 experimental_data.index = experimental_paradigm.index
 
@@ -93,7 +93,8 @@ potential_amplitudes = np.sort(np.append(potential_amplitudes, [0.5, 1.5]))
 potential_stimuli = pd.MultiIndex.from_product([potential_orientations, potential_amplitudes], names=['x (radians)', 'amplitude']).to_frame(index=False)
 
 # Now we get, for each data point, the likelihood of each possible stimulus
-ll = model.get_stimulus_pdf(experimental_data, potential_stimuli, omega=omega, dof=dof,
+ll = model.get_stimulus_pdf(experimental_data, potential_stimuli, parameters=parameters,
+                            weights=fitted_weights, omega=omega, dof=dof,
                             include_multidimensional_stimulus_index=True)
 
 # %%

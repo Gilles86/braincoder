@@ -1,0 +1,92 @@
+# What's new
+
+## 0.9.0 highlights (2026-11-18)
+
+- **Gain-field PRF models** ({doc}`gain_fields`): `GainFieldPRF2D`, `GainFieldDoGPRF2D` and their
+  `WithHRF` versions multiply the stimulus by fields around chosen locations (attended, salient,
+  target, ...) before the PRF pools it. Any number of locations and named gain types, several
+  fields of different shapes (`GaussianField`, `DoGField`, or your own `FieldShape`), tied and
+  zero-sum parameters, image-scale masks, and `GainFieldMixin` for other PRF kernels. The paradigm
+  helper is `braincoder.stimuli.make_gain_field_paradigm`. Tutorial:
+  {doc}`auto_examples/02_gain_fields/01_gain_fields`.
+
+## 0.8.0 highlights (2026-11-18)
+
+- **`braincoder.parametric`**: write a stimulus class as a map from a few named parameters to an
+  image (`ParametricStimulus`; `BarStimulus` with a hard or soft edge, an optional contrast and an
+  optional aperture). `get_parametric_stimulus_pdf` gives the exact grid posterior over the parameters
+  (with a blank state and a prior) through `get_stimulus_pdf`; `marginalize` sums it;
+  `forward_backward` gives exact HMM marginals over a candidate set for slowly changing stimuli.
+- **`LogWidthPrior`**: a proper, smooth prior on a bar's width, bounded away from 0 and from the field.
+- **`optimize.ParametricStimulusFitter`**: MAP over the parameters by gradient descent, per volume, or
+  for a whole BOLD series with a `*WithHRF` model and a random-walk prior; parameters can be clamped.
+- **`GeodesicGPPrior(mean=..., transform=...)`**: a constant (estimated) or fixed prior mean, and a log
+  transform. Defaults are unchanged.
+
+## 0.7.1 highlights (2026-11-16)
+
+Bug-fix release. **Refit** if you used either of the first two:
+
+- **`SPMHRFModel` is now SPM's canonical HRF**, peaking at 5 s (it peaked at 6 s) and sampled
+  exactly one TR apart (samples were `32 / (n - 1)` s apart). This changes the fitted values of
+  any `*WithHRF` model built with `hrf_model=SPMHRFModel(...)`. Bounds on a fitted `hrf_delay` move to 4-8 so
+  the range of peak times is unchanged.
+- **`ResidualFitter.fit(D=...)`**: β is constrained positive and Ω is positive definite by
+  construction (the kernel uses the classical-MDS Euclidean embedding of `D`, and no jitter).
+  `D` with `lambd > 0` or `spherical=True` now raises.
+- **Torch:** `ParameterFitter.fit` no longer accumulates an autograd graph every iteration,
+  which ran large fits out of GPU memory.
+- **`gamma_pdf`** no longer returns NaN for gamma shapes above about 35.
+
+## 0.7.0 highlights (2026-11-02)
+
+- **Models no longer hold data or fitted values.** Pass `paradigm`, `parameters`, `weights`,
+  `omega` and `dof` to each method. See the [migration guide](migration.rst).
+- **New `ParameterFitter.fit` default:** `r2_atol=1e-4`. `noise_model` stays `'ssq'`, contrary to what 0.6
+  announced: see the changelog below.
+- **On PyPI:** `pip install "braincoder[tensorflow]"`.
+- **Torch on Apple GPUs** now runs the whole library.
+
+## 0.6.2 highlights (2026-11-02)
+
+Bug-fix release. Inputs that gave plausible-looking wrong results now give the right result
+or a clear error. **Recompute** cvR² from frames with different indices (R² could be exactly
+1), **refit** if `data` and `paradigm` had different indices, and **re-decode** anything
+decoded with a `*WithHRF` model. Voxels that cannot be fitted now return NaN rather than
+zeros and `r2 == -1000`. Details are in the changelog below.
+
+## 0.6.0 highlights (2026-10-25)
+
+- **Calibrated decoding.** {class}`braincoder.noise.LowRankNoise` models the
+  noise covariance as low-rank + diagonal (Student-t or Gaussian) and tempers
+  the likelihood; rank *k* and temperature *T* are chosen by nested,
+  run-grouped cross-validation on the decoding objective. Use it with
+  `get_stimulus_pdf(..., noise_model=noise)` (or `temperature=` with a dense
+  `omega=`). Guide: [Noise models for decoding](noise_models.rst); worked
+  example: [example 04](auto_examples/01_decoding_pipeline/04_lowrank_noise_calibration.rst).
+- **Calibration tools.** {mod}`braincoder.utils.calibration`: HDI coverage,
+  randomised PIT, HPD level of the truth, log score vs. a flat posterior,
+  `calibration_summary` and `plot_calibration`, for any `get_stimulus_pdf`
+  output ([API](api_reference.rst)).
+- **New fitting options.** `ParameterFitter(noise_model='gaussian')`
+  (per-voxel Gaussian likelihood; default stays `'ssq'`), `r2_history_` /
+  `loss_history_`, a GP spatial prior (`GeodesicGPPrior`,
+  `BayesianParameterFitter`), R² mixture / FDR voxel-selection helpers
+  ([example 01](auto_examples/01_decoding_pipeline/01_voxel_selection_fdr.rst)),
+  analytical Student-t Fisher information and `get_expected_uncertainty`
+  ([Fisher information](fisher_information.rst)).
+- **Key fixes.** `safe_cholesky` (adaptive jitter, NaN check);
+  `ResidualFitter` no longer swallows errors; differentiable `_lgamma`
+  (Student-t ν was biased low on TF and never fitted on JAX — refit Ω/ν
+  from older checkouts); TF `compute_jacobian` int32 overflow; MC Fisher
+  information on JAX / torch; NumPy 2 `trapezoid`.
+- **Documented caveat.** `ResidualFitter`'s one-factor Ω underestimates
+  held-out noise on single-trial fMRI; prefer `LowRankNoise` for decoding
+  (see [Noise models for decoding](noise_models.rst)).
+
+## Full changelog
+
+```{include} ../CHANGELOG.md
+:start-line: 1
+:heading-offset: 1
+```

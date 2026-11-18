@@ -7,6 +7,7 @@ Three layers of coverage:
   * BayesianParameterFitter recovers smooth-spatial-structure parameters
     better than classical at high noise (a mini version of paper Fig. 2)
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -205,7 +206,7 @@ def test_no_prior_ml_runs_and_recovers_params():
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.3
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -234,7 +235,7 @@ def test_map_beats_classical_at_high_noise(noise_sd):
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * noise_sd
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -282,7 +283,7 @@ def test_joint_hyperparams_updates_kernel_params():
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.5
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -335,7 +336,7 @@ def test_shared_lengthscale_ties_priors():
         'amplitude': np.full(n_vx, 2.0, dtype=np.float32),
         'baseline': np.zeros(n_vx, dtype=np.float32),
     })
-    model = GaussianPRF(paradigm=paradigm, parameters=true_pars)
+    model = Bound(GaussianPRF(), paradigm, true_pars)
     clean = model.predict(paradigm=paradigm, parameters=true_pars)
     noise = rng.standard_normal(clean.shape).astype(np.float32) * 0.4
     data = pd.DataFrame(clean.values + noise, columns=true_pars.index)
@@ -358,3 +359,146 @@ def test_shared_lengthscale_ties_priors():
     # History recorded the shared value.
     assert '_shared' in fitter.hyperparameter_history
     assert 'shared_lengthscale' in fitter.hyperparameter_history['_shared']
+
+
+# ---------------------------------------------------------------------------
+# Mean function and transform
+# ---------------------------------------------------------------------------
+
+def test_zero_mean_is_the_default_and_unchanged():
+    """mean='zero', transform='identity' is the original prior: no mean
+    variable, three trainable hyperparameters, MVN(0, K) log-prob."""
+    rng = np.random.default_rng(11)
+    n = 20
+    d = line_distance_matrix(n)
+    prior = GeodesicGPPrior(d, lengthscale_init=2., variance_init=1.3,
+                            nugget_init=.2, jitter=0.0)
+    assert prior.mean_type == 'zero' and prior.mean == 0.0
+    assert prior.transform == 'identity'
+    assert len(prior.trainable_variables) == 3
+    values = (20. + rng.standard_normal(n)).astype(np.float32)
+    K = 1.3 * np.exp(-d ** 2 / (2 * 2. ** 2)) + .2 * np.eye(n)
+    assert np.isclose(float(prior.log_prob(values)),
+                      numpy_mvn_log_prob(values.astype(float), K), rtol=1e-3)
+
+
+@pytest.mark.parametrize('transform', ['identity', 'log'])
+def test_constant_and_fixed_mean_log_prob(transform):
+    rng = np.random.default_rng(12)
+    n = 20
+    d = line_distance_matrix(n)
+    K = 1.3 * np.exp(-d ** 2 / (2 * 2. ** 2)) + .2 * np.eye(n)
+    values = np.exp(3. + .3 * rng.standard_normal(n)).astype(np.float32)
+    z = np.log(values.astype(float)) if transform == 'log' else values.astype(float)
+    for mean in ('constant', 2.5):
+        prior = GeodesicGPPrior(d, lengthscale_init=2., variance_init=1.3,
+                                nugget_init=.2, jitter=0.0, mean=mean,
+                                mean_init=2.5 if mean == 'constant' else None,
+                                transform=transform)
+        assert np.isclose(prior.mean, 2.5)
+        expected = numpy_mvn_log_prob(z - 2.5, K)
+        assert np.isclose(float(prior.log_prob(values)), expected, rtol=1e-3), mean
+        n_vars = 4 if mean == 'constant' else 3
+        assert len(prior.trainable_variables) == n_vars
+
+
+def test_constant_mean_initialised_at_median():
+    d = line_distance_matrix(10)
+    values = np.arange(10, 20, dtype=np.float32)
+    prior = GeodesicGPPrior(d, mean='constant', transform='log')
+    assert prior.needs_mean_init
+    prior.initialize_mean(values)
+    assert not prior.needs_mean_init
+    assert np.isclose(prior.mean, np.median(np.log(values)), atol=1e-5)
+
+
+def _demo_geometry(n_vox=150):
+    """Geodesic distances between the best voxels of the public NPC demo."""
+    try:
+        from braincoder.utils.data import load_pratcarrabin2025_npc
+        from scipy.spatial import cKDTree
+        b = load_pratcarrabin2025_npc()
+    except Exception as exc:          # offline: the bundle cannot be downloaded
+        pytest.skip(f'demo bundle unavailable: {exc}')
+    top = np.argsort(b['r2'].values)[::-1][:n_vox]
+    xyz = b['voxel_coords_mm'][['x', 'y', 'z']].values[top]
+    verts = b['surface_vertices'].astype(float)
+    _, vtx = cKDTree(verts).query(xyz)
+    D = geodesic_distance_matrix(verts, b['surface_faces'].astype(int),
+                                 source_indices=vtx, progressbar=False,
+                                 dtype=np.float64)
+    from braincoder.optimize.gp_prior import _mds_embed_distances
+    return _mds_embed_distances(D.astype(np.float32)).astype(np.float64)
+
+
+def test_zero_mean_shrinks_offset_constant_mean_does_not():
+    """A smooth map with mean 20 on real cortical (geodesic) distances.
+
+    With the generating kernel, the posterior mean of the map given noisy
+    estimates is pulled towards 0 under the zero-mean prior, and not under
+    the constant-mean prior. With hyperparameters fitted by type-II ML, the
+    constant-mean prior recovers the mean and the lengthscale; the zero-mean
+    prior can only absorb the offset by inflating the lengthscale.
+    """
+    D = _demo_geometry()
+    n = len(D)
+    rng = np.random.default_rng(5)
+    l_true, sd_true, m_true, noise_sd = 8., 4., 20., 3.
+    K = sd_true ** 2 * np.exp(-D ** 2 / (2 * l_true ** 2))
+    truth = m_true + np.linalg.cholesky(K + 1e-6 * np.eye(n)) @ rng.standard_normal(n)
+    y = (truth + noise_sd * rng.standard_normal(n)).astype(np.float32)
+
+    def posterior_mean(m, K_prior):
+        return m + K_prior @ np.linalg.solve(K_prior + noise_sd ** 2 * np.eye(n), y - m)
+
+    # 1. Known kernel: the zero-mean prior shrinks the map towards 0.
+    post_zero = posterior_mean(0., K + 1e-6 * np.eye(n))
+    post_const = posterior_mean(m_true, K + 1e-6 * np.eye(n))
+    bias_const = post_const.mean() - truth.mean()
+    shrink_zero = truth.mean() - post_zero.mean()
+    assert abs(bias_const) < .5, bias_const
+    assert shrink_zero > 1. and shrink_zero > 3 * abs(bias_const), (shrink_zero, bias_const)
+    assert np.sqrt(np.mean((post_const - truth) ** 2)) < np.sqrt(np.mean((y - truth) ** 2))
+
+    # 2. Type-II ML of the hyperparameters.
+    fitted = {}
+    for mean in ('zero', 'constant'):
+        prior = GeodesicGPPrior(D.astype(np.float32), lengthscale_init=5.,
+                                variance_init=float(np.var(y)),
+                                nugget_init=.1 * float(np.var(y)),
+                                psd_correction='none', mean=mean)
+        prior.fit_hyperparameters(y, max_n_iterations=1000, learning_rate=.05,
+                                  progressbar=False)
+        fitted[mean] = prior.hyperparameters
+    c, z = fitted['constant'], fitted['zero']
+    assert abs(c['mean'] - m_true) < 2., c
+    assert .5 * l_true < c['lengthscale'] < 2. * l_true, c
+    assert z['lengthscale'] > 1.5 * c['lengthscale'], (z, c)
+
+
+def test_bayesian_fitter_estimates_constant_mean():
+    """The mean starts at the median of the classical estimates and is
+    estimated in stage 2 and in joint type-II MAP."""
+    rng = np.random.default_rng(3)
+    n = 40
+    x = np.linspace(0, 20, n)
+    d = np.abs(x[:, None] - x[None])
+    model = GaussianPRF()
+    pars = pd.DataFrame(dict(mu=20 + 3 * np.sin(x / 4), sd=6., amplitude=1.,
+                             baseline=0.)).astype(np.float32)
+    paradigm = pd.DataFrame({'x': rng.uniform(5, 35, 120)}).astype(np.float32)
+    data = pd.DataFrame(model.predict(paradigm=paradigm, parameters=pars).values
+                        + rng.normal(0, .05, (120, n))).astype(np.float32)
+    for joint in (False, True):
+        prior = GeodesicGPPrior(d, lengthscale_init=3., variance_init=5.,
+                                nugget_init=.5, mean='constant')
+        fitter = BayesianParameterFitter(model, data, paradigm, priors={'mu': prior})
+        fitter.classical_estimates = pars
+        if not joint:
+            fitter.fit_hyperparameters(progressbar=False, max_n_iterations=50)
+        m0 = float(np.median(pars['mu']))
+        fitter.fit_map(max_n_iterations=60, progressbar=False, joint_hyperparams=joint)
+        assert not prior.needs_mean_init
+        assert abs(prior.mean - m0) < 3.
+        assert prior.mean != m0          # it was estimated, not only initialised
+        assert np.isfinite(fitter.map_estimates.values).all()

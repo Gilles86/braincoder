@@ -102,14 +102,9 @@ print(f'Train R² — median {np.nanmedian(train_r2):.3f}, '
 # alone* can support stimulus decoding. See notebook 2 for the
 # trade-off in the other direction (structured Ω with geodesic
 # regularisation when you need cross-voxel correlations).
-#
-# ``init_pseudoWWT`` is still called: even though the spherical
-# variant doesn't use WWᵀ in the loss, the underlying model API
-# requires it to be initialised before any decoding call.
 
 stim_grid = pd.DataFrame({'n': np.arange(10, 41, 1, dtype=np.float32)})
 stim_grid.index.name = 'stimulus'
-model.init_pseudoWWT(stim_grid, pars)
 
 resid_fitter = ResidualFitter(model, data, paradigm[['n']], parameters=pars)
 omega, dof = resid_fitter.fit(method='t', spherical=True, init_dof=10.0,

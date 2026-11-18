@@ -42,9 +42,15 @@ class BayesianParameterFitter(object):
 
     Notes
     -----
-    The GP prior is applied to the parameter's *native* (constrained)
-    values — e.g. the linear-space mu of a LogGaussianPRF — matching
-    Daghlian et al.'s convention.
+    Each GP prior acts on ``transform(theta) - mean`` (see
+    ``GeodesicGPPrior``). With the defaults (``transform='identity'``,
+    ``mean='zero'``) that is the parameter's *native* (constrained) value,
+    e.g. the linear-space mu of a LogGaussianPRF, under a zero-mean GP,
+    matching Daghlian et al.'s convention. A prior with ``mean='constant'``
+    and no ``mean_init`` is centred on the median of the classical
+    estimates before stage 2 or 3 starts, and the mean is then estimated
+    with the other hyperparameters (stage 2, or stage 3 with
+    ``joint_hyperparams=True``).
     """
 
     def __init__(self, model, data, paradigm, priors):
@@ -115,6 +121,14 @@ class BayesianParameterFitter(object):
                             progressbar=progressbar,
                             **map_kwargs)
 
+    def _initialize_prior_means(self):
+        """Centre every constant-mean prior that has no mean yet on the
+        median of the (transformed) classical estimates."""
+        for name, prior in self.priors.items():
+            if prior.needs_mean_init:
+                prior.initialize_mean(
+                    self.classical_estimates[name].values.astype(np.float32))
+
     def tie_lengthscales(self):
         """Tie every prior's ``_log_lengthscale`` Variable to one shared
         instance, so subsequent fitting (stage 2 or stage 3) sees a
@@ -167,6 +181,7 @@ class BayesianParameterFitter(object):
             return self._fit_hyperparameters_shared(progressbar=progressbar,
                                                      **kwargs)
 
+        self._initialize_prior_means()
         for name, prior in self.priors.items():
             values = self.classical_estimates[name].values.astype(np.float32)
             self.hyperparameter_history[name] = prior.fit_hyperparameters(
@@ -191,9 +206,12 @@ class BayesianParameterFitter(object):
         priors_list = list(self.priors.values())
         shared_var = priors_list[0]._log_lengthscale
 
+        self._initialize_prior_means()
         trainable_vars = [shared_var]
         for p in priors_list:
             trainable_vars.extend([p._log_variance, p._log_nugget])
+            if p._mean is not None:
+                trainable_vars.append(p._mean)
 
         values_tensors = {}
         for name, prior in self.priors.items():
@@ -207,7 +225,7 @@ class BayesianParameterFitter(object):
             for name, prior in self.priors.items():
                 v_arr = values_tensors[name]
                 total = total - prior._log_prob_tensor(
-                    v_arr,
+                    prior.centred(v_arr),
                     prior._log_lengthscale,
                     prior._log_variance,
                     prior._log_nugget,
@@ -281,7 +299,7 @@ class BayesianParameterFitter(object):
 
         ``joint_hyperparams`` (default False): if True, each prior's
         ``(_log_lengthscale, _log_variance, _log_nugget)`` Variables
-        are added to the trainable set and co-optimized with the model
+        (and its mean, for ``mean='constant'``) are added to the trainable set and co-optimized with the model
         parameters under the type-II MAP objective. K is recomputed
         every step (no ``freeze_cholesky``), so the prior's
         ``-½ log|K(ψ)|`` term provides automatic regularization on ψ
@@ -292,6 +310,7 @@ class BayesianParameterFitter(object):
 
         if init_pars is None:
             init_pars = self.classical_estimates
+        self._initialize_prior_means()
 
         n_t, n_vx = self.data.shape
         n_pars = len(self.model.parameter_labels)
@@ -326,7 +345,7 @@ class BayesianParameterFitter(object):
         # Per-vertex Gaussian noise variance, parameterized via softplus.
         # Initial sigma^2 from classical residuals.
         with_initial_pred = self.model.predict(
-            self.paradigm, self.classical_estimates, self.model.weights)
+            self.paradigm, self.classical_estimates)
         residual = self.data.values - with_initial_pred.values
         init_sigma2 = np.maximum(np.var(residual, axis=0).astype(np.float32),
                                  1e-4)
@@ -346,13 +365,13 @@ class BayesianParameterFitter(object):
             # K is rebuilt every step (no caching). Deduplicate the
             # lengthscale Variable so a shared-lengthscale setup adds
             # it once, not once per prior.
+            # A constant mean (``mean='constant'``) is estimated here too.
             seen = set()
             for prior in self.priors.values():
-                if id(prior._log_lengthscale) not in seen:
-                    trainable_variables.append(prior._log_lengthscale)
-                    seen.add(id(prior._log_lengthscale))
-                trainable_variables.extend([prior._log_variance,
-                                             prior._log_nugget])
+                for var in prior.trainable_variables:
+                    if id(var) not in seen:
+                        trainable_variables.append(var)
+                        seen.add(id(var))
         else:
             # Hyperparameters frozen. Cache L = chol(K) outside the
             # gradient graph so CholeskyGrad never runs — it NaN'd on

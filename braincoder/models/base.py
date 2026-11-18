@@ -1,4 +1,5 @@
 import logging
+import warnings
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
@@ -10,6 +11,49 @@ from ..utils.backend import softplus_inverse, mvn_log_prob, mvt_log_prob, sample
 import scipy.stats as ss
 from ..stimuli import Stimulus, OneDimensionalRadialStimulus, OneDimensionalGaussianStimulus, OneDimensionalStimulusWithAmplitude, OneDimensionalRadialStimulusWithAmplitude, ImageStimulus, TwoDimensionalStimulus
 from patsy import dmatrix, build_design_matrices
+
+def _apply_temperature(ll, temperature):
+    """Divide a log-likelihood table by the temperature (None/1 = unchanged,
+    inf = flat)."""
+    if temperature is None or temperature == 1:
+        return ll
+    temperature = float(temperature)
+    if temperature <= 0:
+        raise ValueError('temperature must be > 0')
+    if np.isinf(temperature):
+        return np.zeros_like(ll)
+    return ll / temperature
+
+
+_REMOVED_STATE = ('paradigm', 'data', 'parameters', 'weights', 'omega')
+
+
+def _reject_state_kwargs(kwargs, class_name, strict=True):
+    """Explain the 0.7 API when a constructor still gets data or fitted values."""
+    removed = [k for k in kwargs if k in _REMOVED_STATE]
+    if removed:
+        raise TypeError(
+            f'{class_name} no longer takes {", ".join(removed)}. Since braincoder 0.7, '
+            'models hold only their configuration: pass paradigm, parameters, weights, '
+            'omega and dof to each method, e.g. model.predict(paradigm, parameters). '
+            'See the migration guide: https://braincoder-devs.github.io/migration.html')
+    if kwargs and strict:
+        raise TypeError(f'{class_name} got unexpected arguments: {", ".join(kwargs)}')
+
+
+def _cholesky_numpy(omega):
+    """Cholesky factor with adaptive jitter for a slightly non-PSD Ω."""
+    return ops.convert_to_numpy(safe_cholesky(ops.convert_to_tensor(omega, dtype='float32')))
+
+
+def _check_finite_parameters(parameters):
+    if parameters is not None and not np.isfinite(parameters).all():
+        n_bad = int((~np.isfinite(parameters)).any(axis=1).sum())
+        raise ValueError(
+            f'{n_bad} of {len(parameters)} rows of the parameters contain NaN or inf, '
+            'which would make every posterior NaN. Drop those voxels (with their '
+            'data and Ω) before decoding.')
+
 
 class EncodingModel(object):
     """Abstract base class for encoding models."""
@@ -55,32 +99,16 @@ class EncodingModel(object):
                 raise NotImplementedError(f"Unknown transform: {t!r}")
         return ops.concatenate(out, axis=1)
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                 weights=None, omega=None, verbosity=logging.INFO):
-        """Normalize paradigm/parameter inputs and set shared attributes."""
+    #: Whether ``get_pseudoWWT`` needs a stimulus range (images do not).
+    pseudo_wwt_needs_stimulus_range = True
 
-        if paradigm is not None:
-
-            if paradigm.ndim == 1:
-                paradigm = np.asarray(paradigm)[:, np.newaxis]
-
-            self.stimulus = self._get_stimulus(n_dimensions=paradigm.shape[1])
-            self.paradigm = self.stimulus.clean_paradigm(paradigm)
-        else:
+    def __init__(self, n_dimensions=1, verbosity=logging.INFO, **kwargs):
+        """Configure the model. It holds no data, parameters or noise model."""
+        _reject_state_kwargs(kwargs, type(self).__name__)
+        if n_dimensions == 1:
             self.stimulus = self._get_stimulus()
-            self.paradigm = None
-
-        self.data = data
-        self.parameters = format_parameters(parameters, parameter_labels=self.parameter_labels)
-
-        if (self.parameter_labels is not None) and (self.parameters is not None):
-            self.parameters = self.parameters[self.parameter_labels]
-
-        self.weights = weights
-        self.omega = omega
-
-        if omega is not None:
-            self.omega_chol = np.linalg.cholesky(omega)
+        else:
+            self.stimulus = self._get_stimulus(n_dimensions=n_dimensions)
 
     def get_parameter_labels(self):
         """Return the ordered list of parameter labels used by the model."""
@@ -123,7 +151,7 @@ class EncodingModel(object):
         """Instantiate the configured ``Stimulus`` type."""
         return self.stimulus_type(**kwargs)
 
-    def predict(self, paradigm=None, parameters=None, weights=None):
+    def predict(self, paradigm, parameters=None, weights=None):
         """Return pandas predictions for the provided paradigm/parameters."""
 
         weights, weights_ = self._get_weights(weights)
@@ -137,26 +165,20 @@ class EncodingModel(object):
 
         predictions = self._predict(paradigm_, parameters_, weights_)[0]
 
-        if weights is None:
-            return pd.DataFrame(ops.convert_to_numpy(predictions),
-                                index=paradigm.index, columns=parameters.index)
+        if weights is not None:
+            columns = weights.columns
         else:
-            return pd.DataFrame(ops.convert_to_numpy(predictions),
-                                index=paradigm.index, columns=weights.columns)
+            columns = parameters.index if parameters is not None else None
 
-    def simulate(self, paradigm=None, parameters=None, weights=None, noise=1.,
-                dof=None,
-                n_repeats=1):
+        return pd.DataFrame(ops.convert_to_numpy(predictions), index=paradigm.index, columns=columns)
+
+    def simulate(self, paradigm, parameters=None, weights=None, noise=1.,
+                 dof=None, n_repeats=1):
         """Generate synthetic data by adding noise to predictions."""
 
         weights, weights_ = self._get_weights(weights)
         paradigm = self.get_paradigm(paradigm)
         paradigm_ = self._get_paradigm(paradigm)
-
-        if parameters is None:
-            parameters = self.parameters
-        else:
-            parameters = format_parameters(parameters)
 
         parameters = self._get_parameters(parameters)
 
@@ -166,7 +188,7 @@ class EncodingModel(object):
 
         simulated_data = self._simulate(
             stimulus,
-            parameters.values[np.newaxis, ...],
+            parameters.values[np.newaxis, ...] if parameters is not None else None,
             weights_, noise, dof)
 
         simulated_data = ops.convert_to_numpy(simulated_data)
@@ -179,10 +201,12 @@ class EncodingModel(object):
         else:
             index = pd.MultiIndex.from_product([np.arange(n_repeats), paradigm.index], names=['repeat', 'stimulus'])
 
-        if weights is None:
-            return pd.DataFrame(simulated_data, index=index, columns=parameters.index)
+        if weights is not None:
+            columns = weights.columns
         else:
-            return pd.DataFrame(simulated_data, index=index, columns=weights.columns)
+            columns = parameters.index if parameters is not None else None
+
+        return pd.DataFrame(simulated_data, index=index, columns=columns)
 
     def _simulate(self, paradigm, parameters, weights, noise=1., dof=None):
         """Compute predictions and add noise."""
@@ -222,79 +246,29 @@ class EncodingModel(object):
         gradients = ops.sum(jacobians, axis=[-2, -1])
         return ops.squeeze(gradients, axis=-1)
 
-    @property
-    def data(self):
-        return self._data
-
-    @data.setter
-    def data(self, data):
-        if data is None:
-            self._data = None
-        else:
-            self._data = format_data(data)
-
-    @property
-    def weights(self):
-        return self._weights
-
-    @weights.setter
-    def weights(self, weights):
-        self._weights = format_weights(weights)
-
-    def to_discrete_model(self, grid, parameters=None, weights=None):
-        from .linear import DiscreteModel
-
-        grid = np.array(grid, dtype=np.float32)[:, np.newaxis]
-        parameters = format_parameters(parameters)
-        weights = format_weights(weights)
-
-        if parameters is None:
-            parameters = self.parameters
-
-        if weights is None:
-            weights = self.weights
-
-        if weights is not None:
-            weights = weights.value
-
-        discrete_weights = self._predict(grid, parameters.values, weights)
-
-        return DiscreteModel(paradigm=self.paradigm,
-                             parameters=np.diag(grid[:, 0]),
-                             weights=discrete_weights,
-                             data=self.data)
-
-    def likelihood(self, stimuli, data=None, parameters=None, weights=None, omega=None, dof=None, logp=False, normalize=True):
+    def likelihood(self, stimuli, data, parameters=None, weights=None, omega=None, dof=None, logp=False, normalize=True):
         """Log-likelihood of observing ``data`` given stimuli and model parameters."""
 
-        if data is None:
-            data = self.data
-        else:
-            data = format_data(data)
-
-        if parameters is None:
-            parameters = self.parameters
-        else:
-            parameters = format_parameters(parameters)
+        data = format_data(data)
+        parameters = self._get_parameters(parameters)
 
         if weights is not None:
             weights = weights if not hasattr(weights, 'values') else weights.values
+
+        if omega is None:
+            raise ValueError('likelihood needs the noise covariance omega.')
 
         if not isinstance(stimuli, pd.DataFrame):
             stimuli = pd.DataFrame(stimuli)
             stimuli.index.name = 'stimulus'
             stimuli.columns.name = 'stimulus dimension'
 
-        for name, value in zip(['data', 'parameters'], [data, parameters]):
-            if value is None:
-                raise Exception('Please set {}'.format(name))
-
-        omega_chol = np.linalg.cholesky(omega)
+        omega_chol = _cholesky_numpy(omega)
 
         likelihood = self._likelihood(stimuli.values[np.newaxis, ...],
                                       data.values[np.newaxis, ...],
-                                      parameters.values[np.newaxis, ...],
-                                      weights[np.newaxis, ...] if weights else None,
+                                      parameters.values[np.newaxis, ...] if parameters is not None else None,
+                                      weights[np.newaxis, ...] if weights is not None else None,
                                       omega_chol,
                                       dof,
                                       logp,
@@ -307,35 +281,9 @@ class EncodingModel(object):
 
         return likelihood
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
-                         include_multidimensional_stimulus_index=False):
-        """Evaluate posterior over stimuli for each time point given data."""
-
-        if hasattr(data, 'values'):
-            time_index = data.index
-            data = data.values
-        else:
-            time_index = pd.Index(np.arange(len(data)), name='frame')
-
-        parameters = self._get_parameters(parameters)
-
+    def _prepare_stimulus_range(self, stimulus_range):
         if hasattr(stimulus_range, 'values'):
             stimulus_range = stimulus_range.values
-
-        if hasattr(parameters, 'values'):
-            parameters = parameters.values
-
-        if omega is None:
-            omega = self.omega
-
-        # Compute Cholesky factor here so callers never need to do it themselves.
-        # ``safe_cholesky`` symmetrises and adds adaptive diagonal jitter so a
-        # noise covariance that slipped slightly below PSD (e.g. residual
-        # fitter drove α/β/ρ to numerical edges) still factorises cleanly.
-        omega_t = ops.convert_to_tensor(omega, dtype='float32')
-        omega_chol = safe_cholesky(omega_t)
-
-        weights, weights_ = self._get_weights(weights)
 
         stimulus_range = self.stimulus._clean_paradigm(stimulus_range)
 
@@ -345,23 +293,110 @@ class EncodingModel(object):
             stimulus_range = stimulus_range[:, np.newaxis, :]
         else:
             raise Exception('Stimulus range needs to be either 1D or 2D')
+        return stimulus_range
 
-        # Convert ``data`` to a backend tensor at the entry point so the
-        # downstream ``data - prediction`` in ``_likelihood_timeseries``
-        # doesn't end up mixing numpy with a torch tensor (which raises
-        # ``TypeError: unsupported operand type(s) for -``).
-        data_t = ops.convert_to_tensor(data, dtype='float32')
+    def _predict_grid(self, stimulus_range, parameters, weights):
+        """Predictions for decoding: one batch per candidate stimulus."""
+        return self._predict(stimulus_range, parameters, weights)
 
-        ll = self._likelihood(stimulus_range,
-                              data_t[None, :, :],
-                              parameters[np.newaxis, :, :] if parameters is not None else None,
-                              weights_,
-                              omega_chol,
-                              dof,
-                              logp=True,
-                              normalize=False)
+    def predict_stimulus_grid(self, stimulus_range, parameters=None, weights=None):
+        """Predicted response to every stimulus of a decoding grid.
 
-        ll = ops.convert_to_numpy(ll)
+        Returns a float64 array ``(n_stimuli, n_voxels)``. Uses the same
+        batching as :meth:`get_stimulus_pdf` (one batch per grid point).
+        """
+        parameters = self._get_parameters(parameters)
+        if hasattr(parameters, 'values'):
+            parameters = parameters.values
+        _check_finite_parameters(parameters)
+        weights, weights_ = self._get_weights(weights)
+        stimulus_range = self._prepare_stimulus_range(stimulus_range)
+        pred = self._predict_grid(stimulus_range,
+                                  parameters[np.newaxis, :, :] if parameters is not None else None,
+                                  weights_)
+        return np.asarray(ops.convert_to_numpy(pred), dtype=np.float64)[:, 0, :]
+
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
+                         include_multidimensional_stimulus_index=False, noise_model=None, temperature=None):
+        """Evaluate posterior over stimuli for each time point given data.
+
+        Parameters
+        ----------
+        data : DataFrame or array (n_timepoints, n_voxels)
+        stimulus_range : array (n_stimuli,) or (n_stimuli, n_dims)
+            Grid of candidate stimuli (flat prior over the grid).
+        parameters, weights : DataFrame
+            Encoding parameters, and basis weights for basis-function models.
+        omega, dof : array, float, optional
+            Dense noise covariance and Student-t degrees of freedom, e.g. from
+            ``ResidualFitter.fit``. ``dof=None`` means Gaussian. Pass either
+            ``omega`` or ``noise_model``.
+        noise_model : braincoder.noise.LowRankNoise, optional
+            Factored noise model (low-rank + diagonal Ω, Gaussian or
+            Student-t). The likelihood is evaluated with the Woodbury identity
+            (no dense V × V matrix). Its ``temperature`` is applied unless
+            ``temperature`` is passed explicitly.
+        temperature : float, optional
+            Likelihood temperature T: posterior ∝ likelihood^(1/T). Default
+            ``None`` = 1 (or the noise model's own temperature). ``np.inf``
+            gives a flat posterior.
+        """
+
+        if hasattr(data, 'values'):
+            time_index = data.index
+        else:
+            time_index = pd.Index(np.arange(len(data)), name='frame')
+
+        stimulus_range = self._prepare_stimulus_range(stimulus_range)
+
+        if noise_model is not None:
+            pred = self.predict_stimulus_grid(stimulus_range[:, 0, :], parameters=parameters,
+                                              weights=weights)
+            ll = noise_model.grid_log_likelihood(data, pred).T          # (n_stimuli, n_timepoints)
+            if temperature is None:
+                temperature = noise_model.temperature
+        else:
+            if hasattr(data, 'values'):
+                data = data.values
+
+            parameters = self._get_parameters(parameters)
+
+            if hasattr(parameters, 'values'):
+                parameters = parameters.values
+
+            _check_finite_parameters(parameters)
+
+            if omega is None:
+                raise ValueError('get_stimulus_pdf needs a noise model: pass omega (and dof) or noise_model.')
+
+            # Compute Cholesky factor here so callers never need to do it themselves.
+            # ``safe_cholesky`` symmetrises and adds adaptive diagonal jitter so a
+            # noise covariance that slipped slightly below PSD (e.g. residual
+            # fitter drove α/β/ρ to numerical edges) still factorises cleanly.
+            omega_t = ops.convert_to_tensor(omega, dtype='float32')
+            omega_chol = safe_cholesky(omega_t)
+
+            weights, weights_ = self._get_weights(weights)
+
+            # Convert ``data`` to a backend tensor at the entry point so the
+            # downstream ``data - prediction`` in ``_likelihood_timeseries``
+            # doesn't end up mixing numpy with a torch tensor (which raises
+            # ``TypeError: unsupported operand type(s) for -``).
+            data_t = ops.convert_to_tensor(data, dtype='float32')
+
+            prediction = self._predict_grid(stimulus_range,
+                                            parameters[np.newaxis, :, :] if parameters is not None else None,
+                                            weights_)
+            ll = self._likelihood_timeseries(data_t[None, :, :],
+                                  prediction,
+                                  omega_chol,
+                                  dof,
+                                  logp=True,
+                                  normalize=False)
+
+            ll = ops.convert_to_numpy(ll)
+
+        ll = _apply_temperature(ll, temperature)
 
         if stimulus_range.shape[-1] == 1:
             ll = pd.DataFrame(ll.T, index=time_index, columns=pd.Index(
@@ -382,18 +417,10 @@ class EncodingModel(object):
 
         return ll
 
-    def apply_mask(self, mask):
-        if self.data is not None:
-            self.data = self.data.loc[:, mask]
-
-        if self.weights is None:
-            if self.parameters is not None:
-                self.parameters = self.parameters.loc[mask]
-        else:
-            self.weights = self.weights.loc[:, mask]
-
-    def get_WWT(self):
-        return self.weights.T.dot(self.weights)
+    def get_WWT(self, weights):
+        """Tuning similarity between voxels, from basis weights."""
+        weights = format_weights(weights)
+        return weights.T.dot(weights)
 
     def _likelihood(self, stimuli, data, parameters, weights, omega_chol, dof, logp=False, normalize=False):
         """Compute likelihoods for batches of stimuli."""
@@ -431,9 +458,6 @@ class EncodingModel(object):
 
     def _get_weights(self, weights=None):
 
-        if (weights is None) and (self.weights is not None):
-            weights = self.weights
-
         weights = format_weights(weights)
 
         if weights is None:
@@ -467,20 +491,12 @@ class EncodingModel(object):
         """
 
         if omega is None:
-            omega = self.omega
-
-        if omega is None:
             raise ValueError("Need noise covariance matrix omega!")
 
         weights, weights_ = self._get_weights(weights)
 
-        if parameters is None:
-            if self.parameters is None:
-                raise Exception('Need to set parameters')
-            else:
-                parameters = self.parameters
-
-        parameters_ = parameters.values[np.newaxis, ...].astype(np.float32)
+        parameters = self._get_parameters(parameters)
+        parameters_ = parameters.values[np.newaxis, ...].astype(np.float32) if parameters is not None else None
 
         if stimuli.ndim == 1:
             stimuli = stimuli[:, np.newaxis]
@@ -568,10 +584,9 @@ class EncodingModel(object):
             Degrees of freedom for multivariate Student-t noise. ``None``
             uses Gaussian.
         parameters : DataFrame or None
-            Encoding-model parameters (one row per voxel). Defaults to
-            ``self.parameters``.
+            Encoding-model parameters (one row per voxel).
         weights : DataFrame or None
-            Basis weights for linear models. Defaults to ``self.weights``.
+            Basis weights for linear models.
         n_simulations : int
             Noisy repeats per stimulus.
         batch_stimuli : int or None
@@ -610,12 +625,7 @@ class EncodingModel(object):
         if stimuli_arr.ndim == 1:
             stimuli_arr = stimuli_arr[:, np.newaxis]
 
-        if parameters is None:
-            parameters = self.parameters
         parameters = format_parameters(parameters) if parameters is not None else None
-
-        if weights is None:
-            weights = self.weights
         weights = format_weights(weights) if weights is not None else None
 
         if decoder_stimulus_range is None:
@@ -692,67 +702,71 @@ class EncodingModel(object):
     def _get_parameters(self, parameters=None):
         """Return parameters formatted as DataFrame matching ``parameter_labels``."""
 
-        if (parameters is None) and (self.parameters is not None):
-            parameters = self.parameters
+        if parameters is None:
+            if self.parameter_labels is not None and len(self.parameter_labels) > 0:
+                raise ValueError(f'{type(self).__name__} needs parameters: pass parameters=... '
+                                 f'with columns {list(self.parameter_labels)}.')
+            return None
 
         parameters = format_parameters(parameters)
 
-        if parameters is not None:
-            parameters = parameters[self.parameter_labels]
-
-        return parameters
+        return parameters[self.parameter_labels]
 
     def get_paradigm(self, paradigm):
-        """Return the cleaned paradigm DataFrame, falling back to stored one."""
+        """Return the paradigm as a cleaned DataFrame."""
 
         if paradigm is None:
-            if self.paradigm is not None:
-                return self.paradigm
-            else:
-                raise ValueError('Please provide paradigm!')
+            raise ValueError('Please provide paradigm!')
 
-        paradigm = self.stimulus.clean_paradigm(paradigm)
-
-        return paradigm
+        return self.stimulus.clean_paradigm(paradigm)
 
     def _get_paradigm(self, paradigm):
         """Tensor-ready paradigm (np.array) used inside computation."""
+        return self.stimulus._clean_paradigm(paradigm)
 
-        if paradigm is None:
-            paradigm = self.get_paradigm(paradigm)
-
-        paradigm = self.stimulus._clean_paradigm(paradigm)
-
-        return paradigm
 
 class EncodingRegressionModel(EncodingModel):
-    """Encoding model whose parameters are linear combinations of regressors."""
+    """Encoding model whose parameters are linear combinations of regressors.
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                regressors={}, weights=None, omega=None,
-                baseline_parameter_values=None,
+    Parameters
+    ----------
+    design_data : DataFrame
+        Named stimulus dimensions plus the columns used by ``regressors``. It only
+        defines the design (columns, factor levels and so on). Pass the actual
+        paradigm, with the same columns, to each method.
+    regressors : dict
+        Patsy formula per parameter, e.g. ``{'mu': '0 + C(condition)'}``.
+        Parameters without a formula get an intercept.
+    """
+
+    def __init__(self, design_data=None, regressors=None,
+                 baseline_parameter_values=None,
                  verbosity=logging.INFO, **kwargs):
 
-        self.regressors = regressors
+        if design_data is None:
+            raise TypeError(f'{type(self).__name__} needs design_data: a DataFrame with the stimulus '
+                            'dimensions and regressor columns.' +
+                            (' It replaces the paradigm argument since braincoder 0.7.' if 'paradigm' in kwargs else ''))
 
-        if paradigm is not None:
-            self.stimulus = self._get_stimulus()
+        super().__init__(verbosity=verbosity, **kwargs)
 
-            for paradigm_label in self.stimulus.dimension_labels:
-                if paradigm_label not in paradigm:
-                    raise ValueError('Paradigm is missing required dimension: ' + paradigm_label + \
-                                    '\nNote that `EncodingRegressionModel` requires a paradigm named stimulus dimensions!')
+        for label in self.stimulus.dimension_labels:
+            if label not in design_data:
+                raise ValueError('design_data is missing required dimension: ' + label +
+                                 '\nNote that `EncodingRegressionModel` requires named stimulus dimensions!')
 
-            base_paradigm = paradigm[self.stimulus.dimension_labels]
-
-        else:
-            raise ValueError('Please provide paradigm!')
-
-        self.base_parameter_labels = self.parameter_labels
-        self.set_paradigm(paradigm, regressors)
-
-        super().__init__(paradigm=base_paradigm, data=data, parameters=parameters,
-                         weights=weights, omega=omega, verbosity=logging.INFO, **kwargs)
+        design_data = design_data.astype(np.float32)
+        self.regressors = dict(regressors or {})
+        self.design_columns = list(design_data.columns)
+        self.base_parameter_labels = list(self.parameter_labels)
+        self.design_infos = {
+            parameter: dmatrix(self.regressors.get(parameter, '1'), design_data).design_info
+            for parameter in self.base_parameter_labels}
+        self.parameter_labels = pd.MultiIndex.from_tuples(
+            [(parameter + '_unbounded', column)
+             for parameter in self.base_parameter_labels
+             for column in self.design_infos[parameter].column_names],
+            names=['parameter', 'regressor'])
 
         baseline_parameter_values = baseline_parameter_values or {}
 
@@ -760,6 +774,10 @@ class EncodingRegressionModel(EncodingModel):
             param: baseline_parameter_values.get(param, 0.0)
             for param in self.base_parameter_labels
         }
+
+        # A one-entry memo: patsy is too slow to rerun at every optimizer step.
+        # It does not change any result, and it is keyed on the paradigm values.
+        self._design_cache = (None, None)
 
         self._basis_basis_predictions = self._basis_predictions
         self._basis_predictions = self._basis_predictions_regressors
@@ -770,25 +788,34 @@ class EncodingRegressionModel(EncodingModel):
         self._transform_parameters_forward = lambda x: x
         self._transform_parameters_backward = lambda x: x
 
-    def _get_regressor_parameter_labels(self, design_matrices):
-        regressor_parameters = []
+    def get_paradigm(self, paradigm):
+        """Return the paradigm with the columns of ``design_data``, in the same order."""
+        if not isinstance(paradigm, pd.DataFrame):
+            raise ValueError(f'{type(self).__name__} needs a paradigm DataFrame with columns {self.design_columns}.')
+        return paradigm[self.design_columns].astype(np.float32)
 
-        for parameter in self.base_parameter_labels:
-            regressor_parameters += zip([parameter+'_unbounded'] * design_matrices[parameter].shape[1],
-                                        design_matrices[parameter].design_info.column_names)
+    def _get_paradigm(self, paradigm):
+        if isinstance(paradigm, pd.DataFrame):
+            paradigm = paradigm[self.design_columns]
+        return self.stimulus._clean_paradigm(paradigm)
 
-        return pd.MultiIndex.from_tuples(regressor_parameters, names=['parameter', 'regressor'])
+    def _design_matrices(self, paradigm):
+        frame = pd.DataFrame(np.asarray(paradigm), columns=self.design_columns)
+        return {parameter: np.asarray(build_design_matrices([self.design_infos[parameter]], frame)[0], dtype=np.float32)
+                for parameter in self.base_parameter_labels}
 
     def _get_base_parameters(self, design_matrices, regressor_parameters):
 
+        regressor_parameters = ops.convert_to_tensor(regressor_parameters, dtype='float32')
         parameters = []
 
         ix = 0
 
         for parameter in self.base_parameter_labels:
-            end_ix = ix + design_matrices[parameter].shape[1]
+            design_matrix = design_matrices[parameter]
+            end_ix = ix + design_matrix.shape[1]
 
-            parameters.append(ops.sum(np.asarray(design_matrices[parameter], dtype=np.float32)[:, np.newaxis, :] * \
+            parameters.append(ops.sum(ops.convert_to_tensor(design_matrix)[:, np.newaxis, :] *
                                       regressor_parameters[:, :, ix:end_ix], axis=2) + self.baseline_parameter_values[parameter])
 
             ix = end_ix
@@ -798,61 +825,22 @@ class EncodingRegressionModel(EncodingModel):
 
         return parameters
 
-    def build_design_matrices(self, paradigm, regressors=None):
-
-        design_matrices = {}
-
-        if not hasattr(self, 'design_matrices'):
-            for parameter in self.base_parameter_labels:
-                if parameter in regressors:
-                    design_matrices[parameter] = dmatrix(self.regressors[parameter], paradigm)
-                else:
-                    design_matrices[parameter] = dmatrix('1', paradigm)
-        else:
-            assert regressors is None, 'Regressors should be set when the model is initialized.'
-
-            for parameter in self.base_parameter_labels:
-                design_info = self.design_matrices[parameter].design_info
-                design_matrices[parameter] = build_design_matrices([design_info], paradigm)[0]
-
-        return design_matrices
-
-    def set_paradigm(self, paradigm, regressors=None):
-
-        if not hasattr(self, 'paradigm'):
-
-            if regressors is None:
-                regressors = {}
-
-            if regressors is None:
-                raise Exception('For EncodignRegressionModel, the regressors should be set when the model is initialized.')
-
-            self.paradigm = paradigm
-
-            self.design_matrices = self.build_design_matrices(paradigm, regressors)
-            self.parameter_labels = self._get_regressor_parameter_labels(self.design_matrices)
-
-        else:
-            if regressors is not None:
-                raise Exception('For EncodingRegressionModel, the regressors should be set when the model is initialized.')
-
-            self.design_matrices = self.build_design_matrices(paradigm)
-            self.paradigm = paradigm
-
-        self.base_paradigm = paradigm[self.stimulus.dimension_labels]
-
     def _basis_predictions_regressors(self, paradigm, parameters):
-        base_parameters = self._get_base_parameters(self.design_matrices, parameters)
-        result = self._basis_basis_predictions(self.base_paradigm.values[:, np.newaxis, :], base_parameters)
+        paradigm_ = ops.convert_to_numpy(paradigm)[0]
+        key = paradigm_.tobytes()
+        if self._design_cache[0] != key:
+            self._design_cache = (key, self._design_matrices(paradigm_))
+        base_parameters = self._get_base_parameters(self._design_cache[1], parameters)
+        stimulus_ix = [self.design_columns.index(label) for label in self.stimulus.dimension_labels]
+        base_paradigm = ops.convert_to_tensor(paradigm_[:, stimulus_ix][:, np.newaxis, :], dtype='float32')
+        result = self._basis_basis_predictions(base_paradigm, base_parameters)
         return ops.reshape(result, [1, result.shape[0], -1])
-
-    def _get_paradigm(self, paradigm):
-        paradigm = self.stimulus._clean_paradigm(paradigm)
-        return paradigm
 
     def get_conditionspecific_parameters(self, conditions, parameters):
 
-        design_matrices = self.build_design_matrices(conditions)
+        design_matrices = {
+            parameter: np.asarray(build_design_matrices([self.design_infos[parameter]], conditions)[0], dtype=np.float32)
+            for parameter in self.base_parameter_labels}
 
         if hasattr(parameters, 'values'):
             parameters_ = parameters.values
@@ -872,16 +860,37 @@ class EncodingRegressionModel(EncodingModel):
 
         return transformed_parameters
 
-    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
-                            include_multidimensional_stimulus_index=False):
+    def predict_stimulus_grid(self, stimulus_range, parameters=None, weights=None):
+        """Predicted response to every row of ``stimulus_range`` (n_stimuli, n_voxels)."""
+        pred = self.predict(stimulus_range, parameters=parameters, weights=weights)
+        return np.asarray(pred.values, dtype=np.float64)
 
-        self.set_paradigm(stimulus_range)
+    def get_stimulus_pdf(self, data, stimulus_range, parameters=None, weights=None, omega=None, dof=None, normalize=True,
+                            include_multidimensional_stimulus_index=False, noise_model=None, temperature=None):
+        """Posterior (unnormalised by default: max = 1) over regression stimuli.
+
+        ``noise_model`` / ``temperature``: see
+        :meth:`EncodingModel.get_stimulus_pdf`.
+        """
 
         pred = self.predict(stimulus_range, parameters=parameters, weights=weights)
 
+        if noise_model is not None:
+            ll = noise_model.grid_log_likelihood(data, pred.values)
+            if temperature is None:
+                temperature = noise_model.temperature
+            ll = _apply_temperature(ll, temperature)
+            ll = pd.DataFrame(ll, index=data.index, columns=pd.MultiIndex.from_frame(stimulus_range))
+            if normalize:
+                ll = ll.sub(ll.max(axis=1), axis=0)
+            return np.exp(ll)
+
+        if omega is None:
+            raise ValueError('get_stimulus_pdf needs a noise model: pass omega (and dof) or noise_model.')
+
         residuals = data.values[np.newaxis, :, :] - pred.values[:, np.newaxis, :]
 
-        omega_chol = np.linalg.cholesky(omega)
+        omega_chol = _cholesky_numpy(omega)
         n_units = data.shape[1]
 
         n_batches, n_timepoints, n_voxels = residuals.shape
@@ -896,6 +905,7 @@ class EncodingRegressionModel(EncodingModel):
 
         ll = ops.reshape(ll_flat, (n_batches, n_timepoints))
         ll = ops.convert_to_numpy(ll)
+        ll = _apply_temperature(ll, temperature)
 
         ll = pd.DataFrame(ll, index=pd.MultiIndex.from_frame(stimulus_range), columns=data.index).T
 
@@ -909,25 +919,22 @@ class EncodingRegressionModel(EncodingModel):
 class HRFEncodingModel(object):
     """Mixin that equips an encoding model with HRF convolution support."""
 
-    def __init__(self, paradigm=None, data=None, parameters=None,
-                    weights=None, omega=None, hrf_model=None, verbosity=logging.INFO,
-                    flexible_hrf_parameters=False, **kwargs):
+    def __init__(self, hrf_model=None, verbosity=logging.INFO,
+                 flexible_hrf_parameters=False, **kwargs):
+
+        # *WithHRF classes forward their options here as well as to the base class.
+        _reject_state_kwargs(kwargs, type(self).__name__, strict=False)
 
         if hrf_model is None:
             raise ValueError('Please provide HRFModel!')
 
         self.hrf_model = hrf_model
 
-        if flexible_hrf_parameters != hrf_model.unique_hrfs:
-            hrf_model.set_unique_hrfs(flexible_hrf_parameters)
-
         if flexible_hrf_parameters:
             self.flexible_hrf_parameters = True
             self.parameter_labels = self.get_parameter_labels() + self.hrf_model.parameter_labels
         else:
             self.flexible_hrf_parameters = False
-
-        self.parameters = self._get_parameters(parameters)
 
     def _predict(self, paradigm, parameters, weights):
         """Convolve base predictions with HRF, reapplying amplitude/baseline."""
@@ -966,6 +973,31 @@ class HRFEncodingModel(object):
             pred_convolved += parameters[:, :, baseline_idx][:, None, :]
 
         return pred_convolved
+
+    def _predict_grid(self, stimulus_range, parameters, weights):
+        """Decode without the HRF.
+
+        A candidate stimulus has no time course to convolve: treating it as a
+        one-sample timeseries scales the tuning curve by the HRF's first
+        samples (about 1/17 at a TR of 1.6 s) and inflates the posterior.
+        """
+        warnings.warn(
+            'Decoding with a *WithHRF model ignores the HRF. The data should be '
+            'single-trial responses (e.g. betas) on the scale of the amplitude '
+            'parameter, not BOLD timepoints.', UserWarning, stacklevel=3)
+        return self._predict_no_hrf(stimulus_range, parameters, weights)
+
+    def _not_for_timeseries(self, method):
+        raise NotImplementedError(
+            f'{method} treats stimuli as independent, but a *WithHRF model would '
+            'convolve them as one timeseries. Use the same parameters, without '
+            'HRF columns, on the model class without HRF.')
+
+    def get_fisher_information(self, *args, **kwargs):
+        self._not_for_timeseries('get_fisher_information')
+
+    def get_expected_uncertainty(self, *args, **kwargs):
+        self._not_for_timeseries('get_expected_uncertainty')
 
     def _predict_no_hrf(self, paradigm, parameters, weights):
         """Bypass HRF convolution; useful for diagnostics/debugging."""

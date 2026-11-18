@@ -38,6 +38,12 @@ Example
 >>> res = sel.fit(data, paradigm, fit_kwargs=dict(grid=(mus, sds, [1.], [0.])))
 >>> res.mask.sum(), res.exchangeability_report()
 
+Time series
+-----------
+The shuffles assume that the rows of a group are exchangeable under the null, which holds for trial-wise data such
+as single-trial betas. It does not hold for BOLD time courses: shuffling their rows destroys the temporal
+autocorrelation, and the null is then not valid. Do not use this module on time-series models (``*WithHRF``).
+
 Cached null (fit once, select many times)
 -----------------------------------------
 Often the real-data fit already exists (e.g. per-fold training R² of a CV fit)

@@ -7,8 +7,10 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 project = 'Braincoder'
-copyright = '2023, Gilles de Hollander'
+copyright = '2023-2026, Gilles de Hollander'
 author = 'Gilles de Hollander'
+version = '0.9'
+release = '0.9.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -21,7 +23,8 @@ html_static_path = ['_static']
 html_css_files = ['css/custom.css']
 
 extensions = ['sphinx.ext.autodoc', 'sphinx.ext.napoleon', 'sphinx.ext.duration', 
-              'sphinx_gallery.gen_gallery', 'sphinxcontrib.bibtex', 'sphinx.ext.mathjax']
+              'sphinx_gallery.gen_gallery', 'sphinxcontrib.bibtex', 'sphinx.ext.mathjax',
+              'myst_parser']
 
 bibtex_bibfiles = ["./references.bib"]
 bibtex_style = "unsrt"
@@ -30,6 +33,9 @@ bibtex_footreference_style = "author_year"
 bibtex_footbibliography_header = ""
 
 autosummary_generate = True
+
+# MyST (Markdown) is used for whats_new.md, which includes ../CHANGELOG.md
+source_suffix = {'.rst': 'restructuredtext', '.md': 'markdown'}
 
 # Generate the plots for the gallery
 plot_gallery = "True"
@@ -45,10 +51,6 @@ sphinx_gallery_conf = {
     # "show_memory": not sys.platform.startswith("win"),
     "remove_config_comments": True,
     "nested_sections": True,
-    # fit_prf needs load_szinte2024 (real fMRI download); skip in docs.
-    "expected_failing_examples": [
-        "../examples/00_encodingdecoding/fit_prf.py",
-    ],
 }
 
 templates_path = ['_templates']
@@ -69,4 +71,11 @@ html_css_files += [
     f"{font_awesome}brands.min.css",
 ]
 html_theme = 'furo'
+html_favicon = '_static/favicon.png'
+# The logo already carries the name.
+html_theme_options = {
+    'sidebar_hide_name': True,
+    'light_logo': 'logo.png',
+    'dark_logo': 'logo_dark.png',
+}
 html_static_path = ['_static']

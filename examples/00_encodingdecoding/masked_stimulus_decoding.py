@@ -25,8 +25,6 @@ data = ds['v1_timeseries']
 
 
 model = GaussianPRF2DWithHRF(grid_coordinates=grid_coordinates,
-                      paradigm=stimulus,
-                      parameters=prf_pars,
                     hrf_model=SPMHRFModel(tr=tr))
 
 
@@ -34,11 +32,11 @@ resid_fitter = ResidualFitter(model, data, stimulus, parameters=prf_pars)
 omega, dof = resid_fitter.fit()
 
 from braincoder.optimize import StimulusFitter
-stim_fitter = StimulusFitter(data, model, omega)
+stim_fitter = StimulusFitter(data, model, omega, parameters=prf_pars)
 
 
 # Note how we use the original stimulus as a mask to only fit the stimulus at the locations where it was actually presented
-reconstructed_stimulus = stim_fitter.fit(legacy_adam=True, min_n_iterations=1000, max_n_iterations=2000, learning_rate=.05, mask=(stimulus > 0.1))
+reconstructed_stimulus = stim_fitter.fit(min_n_iterations=1000, max_n_iterations=2000, learning_rate=.05, mask=(stimulus > 0.1))
 
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation

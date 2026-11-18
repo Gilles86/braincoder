@@ -12,6 +12,7 @@ Two themes:
    unbiased on a well-fit model, and that 1/var_E correlates with the
    analytical Fisher information across stimuli.
 """
+from helpers import Bound, grid_for
 import numpy as np
 import pandas as pd
 import pytest
@@ -32,7 +33,7 @@ def toy_model():
         'amplitude': np.ones(5, dtype=np.float32) * 2,
         'baseline':  np.zeros(5, dtype=np.float32),
     })
-    model = GaussianPRF(parameters=pars)
+    model = Bound(GaussianPRF(), None, pars)
     return model, pars
 
 
@@ -162,7 +163,7 @@ class TestExpectedUncertainty:
             'amplitude': np.full(20, 2.0, dtype=np.float32),
             'baseline':  np.zeros(20, dtype=np.float32),
         })
-        model = GaussianPRF(parameters=pars)
+        model = Bound(GaussianPRF(), None, pars)
         omega = (0.3 ** 2) * np.eye(20, dtype=np.float32)
         stim = np.linspace(-2.5, 2.5, 21, dtype=np.float32)
         fi = model.get_fisher_information(stim, omega=omega,
