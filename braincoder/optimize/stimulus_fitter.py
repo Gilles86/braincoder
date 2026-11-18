@@ -103,7 +103,7 @@ class StimulusFitter(object):
                     trainable_vars.append(tf_var)
 
         if mask is None:
-            likelihood = self.build_likelihood()
+            likelihood = self.build_likelihood(single_tensor=self.single_bijector)
         else:
             likelihood = self.build_likelihood(use_mask=True, mask_ix=mask_ix)
 
@@ -124,16 +124,18 @@ class StimulusFitter(object):
                     untransformed_pars = [bijector.forward(
                         par) for bijector, par in zip(self.stimulus.bijectors, model_vars)]
 
-                if mask is None:
+                if mask is None and not self.single_bijector:
                     ll = likelihood(*untransformed_pars)[0]
                 else:
                     ll = likelihood(untransformed_pars)[0]
 
                 cost = -ll
+                # A single bijector gives one tensor: never iterate over it, that is one eager op per pixel per trial.
+                pars_list = [untransformed_pars] if self.single_bijector else untransformed_pars
                 if l1_norm is not None:
-                    cost = cost + l1_norm * tf.reduce_sum([tf.reduce_sum(tf.abs(par)) for par in untransformed_pars])
+                    cost = cost + l1_norm * tf.add_n([tf.reduce_sum(tf.abs(par)) for par in pars_list])
                 if l2_norm is not None:
-                    cost += l2_norm * tf.reduce_sum([tf.reduce_sum(par**2) for par in untransformed_pars])
+                    cost += l2_norm * tf.add_n([tf.reduce_sum(par**2) for par in pars_list])
 
             gradients = tape.gradient(cost, trainable_vars)
             opt.apply_gradients(zip(gradients, trainable_vars))
@@ -154,8 +156,8 @@ class StimulusFitter(object):
                             break
 
         if mask is None:
-            fitted_pars_ = np.stack(
-                [par.numpy() for par in untransformed_pars], axis=1)
+            fitted_pars_ = (untransformed_pars.numpy().T if self.single_bijector else
+                            np.stack([par.numpy() for par in untransformed_pars], axis=1))
         else:
             fitted_pars_ = self.stimulus.generate_empty_stimulus(len(self.data))
             fitted_pars_[mask] = untransformed_pars.numpy()
@@ -166,7 +168,7 @@ class StimulusFitter(object):
                                     dtype=np.float32)
         return fitted_pars
 
-    def build_likelihood(self, use_batch_dimension=False, use_mask=False, mask_ix=None):
+    def build_likelihood(self, use_batch_dimension=False, use_mask=False, mask_ix=None, single_tensor=False):
 
         data = self.data.values[tf.newaxis, ...]
         parameters = self.parameters.values[tf.newaxis, ...]
@@ -193,6 +195,17 @@ class StimulusFitter(object):
                         stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
 
                     return tf.reduce_sum(ll, 1)
+
+        elif single_tensor:
+            # pars: one (n_dimensions, n_datapoints) tensor, as produced by a single bijector
+            @tf.function
+            def likelihood(pars):
+
+                stimulus = self.stimulus._generate_stimulus(tf.transpose(pars))[tf.newaxis, ...]
+                ll = self.model._likelihood(
+                    stimulus,  data, parameters, weights, omega_chol, dof=self.dof, logp=True)
+
+                return tf.reduce_sum(ll, 1)
 
         else:
             if use_batch_dimension:

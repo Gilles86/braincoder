@@ -24,6 +24,11 @@ before each voxel's PRF pools it. With all gains at 0 the model is exactly the P
 - Documentation: a gain-field page (`docs/gain_fields.rst`) and a gallery tutorial
   (`examples/02_gain_fields`, lesson 8).
 
+### Fixes
+
+- **`StimulusFitter` on images is about 100 times faster.** The L1/L2 penalties looped over every pixel of every
+  trial in eager mode, and free decoding passed each pixel as a separate tensor. Results are unchanged.
+
 ## 0.8.0 (2026-11-18)
 
 New features; no behaviour changes for existing code (all defaults are unchanged).
