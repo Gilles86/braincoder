@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.0 (2026-11-18)
+
+New features; no behaviour changes for existing code (all defaults are unchanged).
+
+### Stimulus parameterisations: `braincoder.parametric`
+
+Decode a few named stimulus parameters (for example the position, width and orientation of a bar)
+instead of a free pixel image.
+
+- **`ParametricStimulus`** is a stimulus class defined as a map from named parameters to an image;
+  **`BarStimulus`** is a bar with a hard or soft edge, an optional contrast and an optional aperture.
+- **`get_parametric_stimulus_pdf`** gives the exact grid posterior over the parameters (with a blank
+  state and a prior) through `get_stimulus_pdf`; **`marginalize`** sums it over parameters;
+  **`forward_backward`** gives exact HMM marginals over a candidate set for slowly changing stimuli.
+- **`LogWidthPrior`** is a proper prior on a bar's width, bounded away from 0 and from the field.
+  Log width is a logit-scaled variable on `(log min_width, log max_width)` with a normal prior on the
+  unconstrained scale, so the density is smooth (no wall for HMC or NUTS) and `scale` sets how
+  concentrated it is.
+- **`optimize.ParametricStimulusFitter`** finds the MAP over the parameters by gradient descent, per
+  volume, or for a whole BOLD series with a `*WithHRF` model and a random-walk prior. Parameters can be
+  clamped.
+
+### `GeodesicGPPrior`: mean and transform
+
+- **`mean=`** `'zero'` (default, unchanged), `'constant'` (a scalar estimated together with the kernel
+  hyperparameters: type-II ML in `fit_hyperparameters`, type-II MAP in `fit_map(joint_hyperparams=True)`,
+  initialised at the median of the classical estimates) or a fixed number.
+- **`transform=`** `'identity'` (default, unchanged) or `'log'` (the prior is on log theta; the MAP is the
+  mode in log coordinates).
+- With the defaults, fits are unchanged. `BayesianParameterFitter` centres a constant-mean
+  prior on the classical estimates before stage 2 or 3.
+
+### Other
+
+- Documentation: pip-first install instructions; the braincoder skill is shipped in the repository as a
+  Claude Code plugin.
+
 ## 0.7.1 (2026-11-16)
 
 Bug-fix release. Two of the fixes change fitted values: **refit** anything fitted with

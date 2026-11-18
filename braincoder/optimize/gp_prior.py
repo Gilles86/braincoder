@@ -1,7 +1,8 @@
 """Gaussian-Process prior over a pRF parameter, indexed by cortical distance.
 
-Following Daghlian et al. (2025), this places a zero-mean multivariate-normal
-prior on the per-vertex values of a single pRF parameter, with covariance
+Following Daghlian et al. (2025), this places a multivariate-normal prior on
+the per-vertex values of a single pRF parameter (zero mean by default, or a
+constant mean; optionally on the log of the parameter), with covariance
 given by an RBF kernel over a precomputed pairwise distance matrix
 (typically geodesic distance on the cortical surface). The hyperparameters
 (lengthscale, variance, nugget) are estimated by maximum likelihood from
@@ -21,11 +22,38 @@ _LOG_2PI = float(np.log(2.0 * np.pi))
 
 
 class GeodesicGPPrior(object):
-    """Zero-mean GP prior with an RBF kernel over a pairwise distance matrix.
+    """GP prior with an RBF kernel over a pairwise distance matrix.
 
-    Covariance:
+    The prior is on ``z = g(theta)``, where ``theta`` is the per-vertex
+    parameter value as the model uses it (the native, constrained value,
+    e.g. the preferred numerosity of a ``LogGaussianPRF``) and ``g`` is
+    ``transform``:
+
+        z ~ MVN(m * 1, K)
         K(i, j) = variance * exp(-d(i,j)^2 / (2 * lengthscale^2))
                  + nugget * delta(i, j)
+
+    Mean ``m``:
+
+    * ``mean='zero'`` (default): m = 0. This is the original prior. Note that
+      on a parameter whose values are far from 0 (a preferred numerosity of
+      10-40, a log preferred numerosity of 2-4) it pulls every vertex towards
+      0, and the kernel can only represent the offset through a large
+      ``variance`` and a long ``lengthscale``.
+    * ``mean='constant'``: m is a free scalar, estimated together with the
+      kernel hyperparameters (type-II ML in ``fit_hyperparameters``, type-II
+      MAP when ``BayesianParameterFitter.fit_map(joint_hyperparams=True)``).
+      If ``mean_init`` is None it is initialised at the median of the first
+      values the prior sees (``initialize_mean``).
+    * ``mean=<float>``: m is fixed at that value (on the transformed scale),
+      e.g. the median of the classical estimates.
+
+    ``transform``: ``'identity'`` (default, the prior acts on the native
+    value, the original behaviour) or ``'log'`` (the prior acts on
+    ``log(theta)``; use it for positive parameters such as a preferred
+    numerosity or a tuning width). A MAP fit with ``transform='log'`` finds
+    the mode of ``log p(y | theta) + log p(log theta)``, i.e. the mode in the
+    log coordinates (no Jacobian term).
 
     Parameters
     ----------
@@ -47,7 +75,10 @@ class GeodesicGPPrior(object):
                  variance_init=1.0,
                  nugget_init=0.1,
                  jitter=1e-4,
-                 psd_correction='mds'):
+                 psd_correction='mds',
+                 mean='zero',
+                 mean_init=None,
+                 transform='identity'):
         """``psd_correction``: how to handle non-Euclidean input distances.
 
         * ``'mds'`` (default) — classical multi-dimensional scaling embeds
@@ -91,7 +122,74 @@ class GeodesicGPPrior(object):
         self._cached_L = None
         self._cached_log_det = None
 
+        if transform not in ('identity', 'log'):
+            raise ValueError(
+                f"transform must be 'identity' or 'log', got {transform!r}")
+        self.transform = transform
+
+        # Mean function.
+        self._mean = None                 # keras.Variable (constant) or None
+        self._fixed_mean = 0.0
+        if isinstance(mean, str):
+            if mean == 'zero':
+                self.mean_type = 'zero'
+            elif mean == 'constant':
+                self.mean_type = 'constant'
+                self._mean = keras.Variable(
+                    np.float32(0.0 if mean_init is None else mean_init),
+                    dtype='float32', name='gp_mean')
+                self._mean_initialized = mean_init is not None
+            else:
+                raise ValueError(
+                    "mean must be 'zero', 'constant' or a number, "
+                    f"got {mean!r}")
+        else:
+            self.mean_type = 'fixed'
+            self._fixed_mean = float(mean)
+
     # ------------------------------------------------------------------ API
+
+    @property
+    def mean(self):
+        """Current mean on the transformed scale (0 for ``mean='zero'``)."""
+        if self._mean is not None:
+            return float(ops.convert_to_numpy(self._mean))
+        return self._fixed_mean
+
+    @property
+    def needs_mean_init(self):
+        return self.mean_type == 'constant' and not self._mean_initialized
+
+    def transform_values(self, values):
+        """Map native parameter values to the scale the prior acts on."""
+        v = ops.convert_to_tensor(values, dtype='float32')
+        if self.transform == 'log':
+            return ops.log(v)
+        return v
+
+    def initialize_mean(self, values, force=False):
+        """Set a constant mean to the median of ``transform(values)``.
+
+        No-op unless ``mean='constant'`` and the mean has not been set
+        (pass ``force=True`` to reset it).
+        """
+        if self.mean_type != 'constant':
+            return
+        if self._mean_initialized and not force:
+            return
+        z = np.asarray(ops.convert_to_numpy(
+            self.transform_values(np.asarray(values, dtype=np.float32))))
+        self._mean.assign(np.float32(np.median(z)))
+        self._mean_initialized = True
+
+    def centred(self, values):
+        """``transform(values) - mean`` as a flat float32 tensor."""
+        z = ops.reshape(self.transform_values(values), (-1,))
+        if self._mean is not None:
+            return z - self._mean
+        if self._fixed_mean != 0.0:
+            return z - self._fixed_mean
+        return z
 
     @property
     def lengthscale(self):
@@ -109,11 +207,22 @@ class GeodesicGPPrior(object):
     def hyperparameters(self):
         return dict(lengthscale=self.lengthscale,
                     variance=self.variance,
-                    nugget=self.nugget)
+                    nugget=self.nugget,
+                    mean=self.mean,
+                    mean_type=self.mean_type,
+                    transform=self.transform)
+
+    @property
+    def kernel_variables(self):
+        return [self._log_lengthscale, self._log_variance, self._log_nugget]
 
     @property
     def trainable_variables(self):
-        return [self._log_lengthscale, self._log_variance, self._log_nugget]
+        """Kernel hyperparameters, plus the mean if ``mean='constant'``."""
+        out = list(self.kernel_variables)
+        if self._mean is not None:
+            out.append(self._mean)
+        return out
 
     def covariance(self):
         """Return the current covariance matrix K (with nugget + jitter)."""
@@ -150,14 +259,14 @@ class GeodesicGPPrior(object):
         self._cached_log_det = None
 
     def log_prob(self, values):
-        """Log-probability of a length-n_vx vector under the current K.
+        """Log-probability of a length-n_vx vector of native parameter values.
 
-        ``values`` may be a numpy array or any Keras-backed tensor.
-        If ``freeze_cholesky()`` has been called, uses the cached
-        factor instead of recomputing.
+        The vector is transformed and centred (``transform(values) - mean``)
+        and evaluated under MVN(0, K). ``values`` may be a numpy array or
+        any Keras-backed tensor. If ``freeze_cholesky()`` has been called,
+        uses the cached factor instead of recomputing.
         """
-        v = ops.convert_to_tensor(values, dtype='float32')
-        v = ops.reshape(v, (-1,))
+        v = self.centred(values)
         if self._cached_L is not None:
             return self._log_prob_tensor_cached(v)
         return self._log_prob_tensor(v,
@@ -171,16 +280,19 @@ class GeodesicGPPrior(object):
                             tol=1e-4,
                             patience=20,
                             progressbar=True):
-        """Estimate (lengthscale, variance, nugget) by MLE from fixed values.
+        """Estimate (lengthscale, variance, nugget[, mean]) by MLE.
 
         This is stage 2 of the paper's empirical-Bayes recipe: the
         per-vertex parameter estimates from the classical fit are held
         fixed and the GP hyperparameters are optimized to maximize the
-        marginal likelihood log p(values | K(theta)).
+        marginal likelihood log p(values | m, K(theta)). ``values`` are
+        native parameter values; the prior's ``transform`` is applied
+        here. A constant mean is initialised at their (transformed)
+        median if it was not set, then estimated with the kernel.
         """
-        v = ops.convert_to_tensor(np.asarray(values, dtype=np.float32),
-                                  dtype='float32')
-        v = ops.reshape(v, (-1,))
+        values = np.asarray(values, dtype=np.float32).reshape(-1)
+        self.initialize_mean(values)
+        v = ops.convert_to_tensor(values, dtype='float32')
         if int(ops.shape(v)[0]) != self.n_vx:
             raise ValueError(
                 f"values has {int(ops.shape(v)[0])} entries, "
@@ -198,7 +310,7 @@ class GeodesicGPPrior(object):
 
         for step in pbar:
             def loss_fn():
-                return -self._log_prob_tensor(v,
+                return -self._log_prob_tensor(self.centred(v),
                                               self._log_lengthscale,
                                               self._log_variance,
                                               self._log_nugget)
@@ -219,7 +331,8 @@ class GeodesicGPPrior(object):
             if progressbar:
                 pbar.set_description(
                     f'GP nLL {loss_val:.3f} | l={self.lengthscale:.2f} '
-                    f'v={self.variance:.3f} nug={self.nugget:.3f}')
+                    f'v={self.variance:.3f} nug={self.nugget:.3f} '
+                    f'm={self.mean:.3f}')
 
             if stall >= patience:
                 break
@@ -247,6 +360,7 @@ class GeodesicGPPrior(object):
         return K
 
     def _log_prob_tensor(self, values, log_l, log_v, log_n):
+        # ``values`` are already transformed and centred (see ``centred``).
         # Build the covariance and run Cholesky / triangular solves in
         # float64 — RBF kernels on ~hundreds of vertices are inherently
         # ill-conditioned and float32 Cholesky bottoms out at NaN.

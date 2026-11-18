@@ -1,5 +1,18 @@
 # What's new
 
+## 0.8.0 highlights (2026-11-18)
+
+- **`braincoder.parametric`**: write a stimulus class as a map from a few named parameters to an
+  image (`ParametricStimulus`; `BarStimulus` with a hard or soft edge, an optional contrast and an
+  optional aperture). `get_parametric_stimulus_pdf` gives the exact grid posterior over the parameters
+  (with a blank state and a prior) through `get_stimulus_pdf`; `marginalize` sums it;
+  `forward_backward` gives exact HMM marginals over a candidate set for slowly changing stimuli.
+- **`LogWidthPrior`**: a proper, smooth prior on a bar's width, bounded away from 0 and from the field.
+- **`optimize.ParametricStimulusFitter`**: MAP over the parameters by gradient descent, per volume, or
+  for a whole BOLD series with a `*WithHRF` model and a random-walk prior; parameters can be clamped.
+- **`GeodesicGPPrior(mean=..., transform=...)`**: a constant (estimated) or fixed prior mean, and a log
+  transform. Defaults are unchanged.
+
 ## 0.7.1 highlights (2026-11-16)
 
 Bug-fix release. **Refit** if you used either of the first two:
