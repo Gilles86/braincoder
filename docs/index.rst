@@ -58,6 +58,8 @@ More resources
 - :doc:`concepts` — architectural overview and workflow tips.
 - :doc:`noise_models` — calibrated decoding: low-rank Ω with
   cross-validated rank and temperature.
+- :doc:`gain_fields` — PRFs modulated by attention or gain fields around
+  chosen locations (single-trial betas or time courses).
 - :doc:`api_reference` — autodoc for the most used modules.
 - :doc:`tutorial/index` — hands-on lessons that walk through realistic
   encoding/decode pipelines.
@@ -104,6 +106,7 @@ CSS, delayed normalization and connective fields.
    concepts
    fisher_information
    noise_models
+   gain_fields
    api_reference
    tutorial/index
    auto_examples/index

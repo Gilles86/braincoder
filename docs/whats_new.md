@@ -1,5 +1,14 @@
 # What's new
 
+## Unreleased
+
+- **Gain-field PRF models** ({doc}`gain_fields`): `GainFieldPRF2D`, `GainFieldDoGPRF2D` and their
+  `WithHRF` versions multiply the stimulus by fields around chosen locations (attended, salient,
+  target, ...) before the PRF pools it. Any number of locations and named gain types, several
+  fields of different shapes (`GaussianField`, `DoGField`, or your own `FieldShape`), tied and
+  zero-sum parameters, image-scale masks, and `GainFieldMixin` for other PRF kernels. The paradigm
+  helper is `braincoder.stimuli.make_gain_field_paradigm`.
+
 ## 0.7.1 highlights (2026-11-16)
 
 Bug-fix release. **Refit** if you used either of the first two:
