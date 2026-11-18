@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- **Divisive normalization models no longer return NaN when `surround_baseline` is 0.** The denominators are
+  now at least `1e-6`. The NaN predictions could also produce a spurious R² of exactly 1. Predictions for other
+  parameter values are unchanged. Reported and first fixed by Ningkai Wang (#7).
+
 ## 0.9.0 (2026-11-18)
 
 New features; no behaviour changes for existing code.
