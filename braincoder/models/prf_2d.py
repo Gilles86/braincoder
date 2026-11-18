@@ -700,6 +700,11 @@ class DifferenceOfGaussiansPRF2DWithHRF(HRFEncodingModel, DifferenceOfGaussiansP
         else:
             return DifferenceOfGaussiansPRF2D._transform_parameters_backward(self, parameters)
 
+# Smallest denominator of the divisive normalization models: a surround baseline of exactly 0
+# would otherwise give NaN or infinite predictions.
+_DN_MIN_DENOMINATOR = 1e-6
+
+
 class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
     parameter_labels = ['x', 'y', 'sd',
                         'rf_amplitude', 'srf_amplitude', 'srf_size',
@@ -743,10 +748,11 @@ class DivisiveNormalizationGaussianPRF2D(GaussianPRF2D):
         rf_amplitude = parameters[:, :, 3][:, None, :]
         srf_amplitude = parameters[:, :, 4][:, None, :]
         neural_baseline = parameters[:, :, 6][:, None, :]
-        surround_baseline = parameters[:, :, 7][:, None, :]
+        surround_baseline = ops.maximum(parameters[:, :, 7][:, None, :], _DN_MIN_DENOMINATOR)
 
         neural_activation = rf_amplitude * ops.tensordot(paradigm, rf, axes=[[2], [2]])[:, :, 0, :] + neural_baseline
         normalization = (srf_amplitude * ops.abs(rf_amplitude)) * ops.tensordot(paradigm, srf, axes=[[2], [2]])[:, :, 0, :] + surround_baseline
+        normalization = ops.maximum(normalization, _DN_MIN_DENOMINATOR)
 
         normalized_activation = (neural_activation / normalization)
 
@@ -800,7 +806,8 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
     def _predict_no_hrf(self, paradigm, parameters, weights):
         parameters = ops.convert_to_tensor(parameters, dtype='float32')
         pre_convolve = DivisiveNormalizationGaussianPRF2D._predict(self, paradigm, parameters[..., :8], weights)
-        return pre_convolve - parameters[None, :, :, 6] / parameters[None, :, :, 7] + parameters[None, :, :, 8]
+        surround_baseline = ops.maximum(parameters[None, :, :, 7], _DN_MIN_DENOMINATOR)
+        return pre_convolve - parameters[None, :, :, 6] / surround_baseline + parameters[None, :, :, 8]
 
     def _predict(self, paradigm, parameters, weights):
 
@@ -809,7 +816,7 @@ class DivisiveNormalizationGaussianPRF2DWithHRF(HRFEncodingModel, DivisiveNormal
         pre_convolve = DivisiveNormalizationGaussianPRF2D._predict(self, paradigm, pre_convolve_parameters, weights)
 
         neural_baseline = parameters[None, :, :, 6]
-        surround_baseline = parameters[None, :, :, 7]
+        surround_baseline = ops.maximum(parameters[None, :, :, 7], _DN_MIN_DENOMINATOR)
         bold_baseline = parameters[None, :, :, 8]
 
         pre_convolve = pre_convolve - (neural_baseline / surround_baseline)
